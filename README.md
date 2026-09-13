@@ -45,7 +45,7 @@ chmod +x make.sh && chmod +x make-debug.sh
 ## Credits ##
 
 - Das U-Boot Developers
-- Spreadtrum/Unisoc Developer
+- Spreadtrum/Unisoc Develop
 - Veynamer/bsp_bootloader_u-boot15_sharkl5pro
 - mmetem55
 
