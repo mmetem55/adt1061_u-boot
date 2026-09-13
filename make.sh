@@ -38,3 +38,10 @@ else
 	echo "not suppported arch"
 fi
 
+if [ $? -eq 0 ]; then
+	echo "Signing U-Boot binary..."
+	python3 scripts/signer/v2/sign_uboot.py out/u-boot-dtb.bin out/u-boot-sign.bin
+else
+	echo "Build failed. Skipping signing."
+	exit 1
+fi
