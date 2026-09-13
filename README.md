@@ -21,7 +21,7 @@ git clone https://github.com/mmetem55/adt1061_u-boot.git && cd adt1061_u-boot
 
 ### Download and extract the prebuilt toolchain
 ```bash
-git clone https://github.com/sukrut-kelkar/gcc-linaro-4.9.git prebuilts/gcc/linaro-x86/aarch64/gcc-linaro-4.9.4-2017.01-x86_64_aarch64-linux-gnu && git clone https://github.com/sayedather/arm-eabi-4.8-toolchain.git prebuilts/gcc/linux-x86/arm/arm-eabi-4.8
+git clone https://github.com/sukrut-kelkar/gcc-linaro-4.9.git $(pwd)/../prebuilts/gcc/linaro-x86/aarch64/gcc-linaro-4.9.4-2017.01-x86_64_aarch64-linux-gnu && git clone https://github.com/sayedather/arm-eabi-4.8-toolchain.git $(pwd)/../prebuilts/gcc/linux-x86/arm/arm-eabi-4.8
 ```
 
 ### Script permission configuration ###
