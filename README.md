@@ -16,26 +16,26 @@ Use Ubuntu 18.04 LTS for the best result
 
 ### Clone repository
 ```bash
-git clone https://github.com/mmetem55/adt1061_u-boot.git && cd adt1061_u-boot
+git clone https://github.com/mmetem55/adt1061_u-boot.git
 ```
 
 ### Download and extract the prebuilt toolchain
 ```bash
-git clone https://github.com/sukrut-kelkar/gcc-linaro-4.9.git $(pwd)/../prebuilts/gcc/linaro-x86/aarch64/gcc-linaro-4.9.4-2017.01-x86_64_aarch64-linux-gnu && git clone https://github.com/sayedather/arm-eabi-4.8-toolchain.git $(pwd)/../prebuilts/gcc/linux-x86/arm/arm-eabi-4.8
+git clone https://github.com/sukrut-kelkar/gcc-linaro-4.9.git $(pwd)/prebuilts/gcc/linaro-x86/aarch64/gcc-linaro-4.9.4-2017.01-x86_64_aarch64-linux-gnu && git clone https://github.com/sayedather/arm-eabi-4.8-toolchain.git $(pwd)/prebuilts/gcc/linux-x86/arm/arm-eabi-4.8
 ```
 
 ### Script permission configuration ###
 ```bash
-chmod +x make.sh && chmod +x make-debug.sh
+chmod -R +x adt1061_u-boot && cd adt1061_u-boot
 ```
 ### Build the U-Boot ###
 ```bash
-./make.sh
+./make.sh arm64 adt1061 adt1061
 ```
 
 ### Build the U-Boot with Debug ###
 ```bash
-./make-debug.sh
+./make-debug.sh arm64 adt1061 adt1061
 ```
 
 ## Status ##
