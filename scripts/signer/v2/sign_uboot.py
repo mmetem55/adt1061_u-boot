@@ -13,7 +13,7 @@ def load_config(db_path: Path) -> dict:
     if not db_path.is_file():
         raise FileNotFoundError(f"Database file not found: {db_path}")
 
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(str(db_path))
     cursor = conn.cursor()
     cfg = {}
     for key, val_int, val_blob in cursor.execute("SELECT key, val_int, val_blob FROM config"):
