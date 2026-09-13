@@ -225,7 +225,7 @@ dtb-$(CONFIG_ARCH_SPRD) += sp9850s-1h10-native.dtb \
 	sp9863a_3c10_32b.dtb \
 	ums518_haps.dtb \
 	ums518_haps_bkd.dtb \
-	aidata-adt1061-ums512_1h10.dtb \
+	adt1061.dtb \
 	ums512_1h10.dtb \
 	ums512_1h10_go.dtb \
 	ums512_test.dtb \
