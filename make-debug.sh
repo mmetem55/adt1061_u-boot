@@ -26,7 +26,7 @@ if [ "$1" = "arm" ];then
     make V=1 ARCH=arm DEVICE_TREE="$3" -j4
 
 elif [ "$1" = "arm64" ]; then
-    export PATH=$PATH:$(pwd)/../prebuilts/gcc/linaro-x86/aarch64/gcc-linaro-4.8/gcc-linaro-4.8-2015.06-x86_64_aarch64-linux-gnu/bin
+    export PATH=$PATH:$(pwd)/../prebuilts/gcc/linaro-x86/aarch64/gcc-linaro-4.9.4-2017.01-x86_64_aarch64-linux-gnu/bin
     export CROSS_COMPILE=aarch64-linux-gnu-
     make V=1 distclean
     make V=1 ARCH=arm "$2"_defconfig
