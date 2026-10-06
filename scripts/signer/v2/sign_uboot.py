@@ -5,7 +5,6 @@ import struct
 import sys
 from pathlib import Path
 
-# SQLite veritabanından parametreleri ve şablon bloklarını yükle
 DB_PATH = Path(__file__).parent / "adt1061-uboot.db"
 
 
