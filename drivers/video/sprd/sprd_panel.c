@@ -240,6 +240,46 @@ static int of_parse_timing(const void *fdt, int off_set, struct panel_info *info
 	return 0;
 }
 
+uint32_t panel_pwr_gpio[PANEL_PWR_GPIO_MAX];
+int panel_pwr_gpio_valid;
+
+static int of_parse_pair_seq(const void *fdt, int offset, const char *name,
+			     struct reset_sequence *seq)
+{
+	int len = 0;
+	u32 *buf;
+
+	if (!fdt_getprop(fdt, offset, name, &len) || len <= 0 ||
+	    (len % sizeof(struct gpio_timing)))
+		return -1;
+
+	buf = (u32 *)malloc(len);
+	if (!buf)
+		return -1;
+	if (fdtdec_get_int_array(fdt, offset, name, buf, len / sizeof(int))) {
+		free(buf);
+		return -1;
+	}
+	seq->items = len / sizeof(struct gpio_timing);
+	seq->timing = (struct gpio_timing *)buf;
+	return 0;
+}
+
+static void of_parse_pwr_gpios(const void *fdt, int offset)
+{
+	int len = 0;
+
+	panel_pwr_gpio_valid = 0;
+	if (!fdt_getprop(fdt, offset, "sprd,power-gpios", &len) || len <= 0)
+		return;
+	if (len > PANEL_PWR_GPIO_MAX * sizeof(int))
+		len = PANEL_PWR_GPIO_MAX * sizeof(int);
+	memset(panel_pwr_gpio, 0xff, sizeof(panel_pwr_gpio));
+	if (!fdtdec_get_int_array(fdt, offset, "sprd,power-gpios",
+				  panel_pwr_gpio, len / sizeof(int)))
+		panel_pwr_gpio_valid = 1;
+}
+
 static int of_parse_initdata(const void *fdt, int offset, struct panel_info *info)
 {
 	int len = 0;
@@ -425,6 +465,9 @@ static int of_parse_panel(const void *fdt, int offset, struct panel_info *info)
 	} else
 		pr_err("Can't get sprd,reset-off-sequence\n");
 
+	of_parse_pair_seq(fdt, offset, "power-on-sequence", &info->pwr_on_seq);
+	of_parse_pair_seq(fdt, offset, "power-off-sequence", &info->pwr_off_seq);
+
 	/***********READ ID**************/
 	str = fdt_getprop(fdt, offset, "sprd,lcd-id-register", &len);
 	if (str) {
@@ -450,6 +493,10 @@ static int of_parse_panel(const void *fdt, int offset, struct panel_info *info)
 		info->lcm_id.val_seq = (const uint8_t*) str;
 		info->lcm_id.val_items = len;
 	}
+
+	str = fdt_getprop(fdt, offset, "sprd,lcd-id-mask", &len);
+	if (str && len >= info->lcm_id.val_items)
+		info->lcm_id.mask_seq = (const uint8_t*) str;
 
 	ret = fdt_getprop_u32(fdt, offset, "sprd,lcd-id-gpio-value", &val);
 	if (!ret)
@@ -654,6 +701,8 @@ int sprd_panel_probe(void)
 
 	info_addr = (uint8_t*)info + sizeof(struct power_gpio) + sizeof(struct panel_backlight);
 	info_size = sizeof(*info) - sizeof(struct power_gpio) - sizeof(struct panel_backlight);
+
+	of_parse_pwr_gpios(fdt, lcd_panel_offset);
 
 	if (of_parse_panel_power(fdt, lcd_panel_offset, info)) {
 		pr_err("lcd panel power parse error!!!\n");

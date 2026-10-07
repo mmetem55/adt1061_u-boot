@@ -10,8 +10,8 @@
 
 #include "ums512.dtsi"
 #include "sc2730.dtsi"
-#include "lcd/lcd_dummy_mipi.dtsi"
 #include "aidata-lcd.dtsi"
+#include "lcd/lcd_dummy_mipi.dtsi"
 
 / {
 	model = "Spreadtrum ums512_1h10 Board";
@@ -165,6 +165,8 @@
 	lcd-panel {
 		compatible = "sprd,generic-mipi-panel";
 		sprd,lcd-reset-gpio = <50>;
+		/* stock elink_display_init table: idx0 avdd, 1 dvdd, 2 vghl, 3 stby, 4 rst, 8 ts_rst */
+		sprd,power-gpios = <28 87 130 51 50 0xffffffff 0xffffffff 0xffffffff 145>;
 	};
 };
 

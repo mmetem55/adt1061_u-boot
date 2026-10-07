@@ -20,6 +20,13 @@
 		sprd,esd-check-mode = <0>;
 		sprd,esd-check-enable = <0>;
 
+		/* stock read_id: write FF 20, read reg 0x3B, accept 0x3A/0x3B */
+		sprd,lcd-id-command = [FF 20];
+		sprd,lcd-id-register = [3B];
+		sprd,lcd-id-value = [3A];
+		sprd,lcd-id-mask = [FE];
+		sprd,lcd-id-tokernel = <0x24>;
+
 		sprd,width-mm = <135>;
 		sprd,height-mm = <225>;
 

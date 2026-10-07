@@ -172,6 +172,7 @@ struct bias_power {
 struct panel_id {
 	const uint8_t *reg_seq;
 	const uint8_t *val_seq;
+	const uint8_t *mask_seq;	/* optional: per-byte compare mask (default 0xff) */
 	uint8_t reg_items;
 	uint8_t val_items;
 	int*  val_len_array;
@@ -235,7 +236,15 @@ struct panel_info {
 	bool is_oled;
 	bool is_dsi_switch;
 	bool dual_dsi_en;
+	/* regulator/GPIO power sequence: <gpio-table-index delay-ms> pairs */
+	struct reset_sequence pwr_on_seq;
+	struct reset_sequence pwr_off_seq;
 };
+
+/* index -> GPIO table (from /lcd-panel sprd,power-gpios), 0xffffffff = unused */
+#define PANEL_PWR_GPIO_MAX	9
+extern uint32_t panel_pwr_gpio[PANEL_PWR_GPIO_MAX];
+extern int panel_pwr_gpio_valid;
 
 struct panel_ops {
 	int (*init)(void);

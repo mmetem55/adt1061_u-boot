@@ -370,7 +370,8 @@ static int panel_readid(void)
 		pr_info("reg items:%d, cmd:0x%02x, val_en:%d >> ", id->reg_items, id->reg_seq[i], id->val_len_array[i]);
 		for( t = 0; t < id->val_len_array[i]; t++) {
 			printf("R:0x%02x, D:0x%02x; ", read_buf[t], id->val_seq[offset]);
-			if (id->val_seq[offset] != read_buf[t]) {
+			if ((id->val_seq[offset] & (id->mask_seq ? id->mask_seq[offset] : 0xff)) !=
+			    (read_buf[t] & (id->mask_seq ? id->mask_seq[offset] : 0xff))) {
 				printf("\n");
 				pr_err("Error: Read ID register data error: [0]=0x%02x, [1]=0x%02x, [2]=0x%02x, [3]=0x%02x\n", read_buf[0], read_buf[1], read_buf[2], read_buf[3]);
 				return -1;
@@ -435,6 +436,20 @@ static int panel_power(int on)
 	}
 
 	if (on) {
+		if (panel_pwr_gpio_valid && info->pwr_on_seq.items) {
+			/* stock elink_display_init/power behaviour: table index -> GPIO */
+			for (i = 0; i < info->pwr_on_seq.items; i++) {
+				uint32_t idx = info->pwr_on_seq.timing[i].level;
+				uint32_t g = idx < PANEL_PWR_GPIO_MAX ? panel_pwr_gpio[idx] : 0xffffffff;
+
+				if (g != 0xffffffff) {
+					sprd_gpio_request(NULL, g);
+					sprd_gpio_direction_output(NULL, g, 1);
+				}
+				mdelay(info->pwr_on_seq.timing[i].delay);
+			}
+		}
+
 		if (io->gpio_tp3v3en) {
 			sprd_gpio_request(NULL, io->gpio_tp3v3en);
 			sprd_gpio_direction_output(NULL, io->gpio_tp3v3en, 1);
@@ -491,6 +506,17 @@ static int panel_power(int on)
 			timing = &info->power_off_seq.timing[i];
 			sprd_gpio_direction_output(NULL, io->gpio_reset, timing->level);
 			mdelay(timing->delay);
+		}
+
+		if (panel_pwr_gpio_valid) {
+			for (i = 0; i < info->pwr_off_seq.items; i++) {
+				uint32_t idx = info->pwr_off_seq.timing[i].level;
+				uint32_t g = idx < PANEL_PWR_GPIO_MAX ? panel_pwr_gpio[idx] : 0xffffffff;
+
+				if (g != 0xffffffff)
+					sprd_gpio_direction_output(NULL, g, 0);
+				mdelay(info->pwr_off_seq.timing[i].delay);
+			}
 		}
 	}
 #endif
