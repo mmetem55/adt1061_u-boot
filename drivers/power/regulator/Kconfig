@@ -564,6 +564,15 @@ config DM_REGULATOR_MT6357
 	  This driver supports the control of different power rails of device
 	  through regulator interface.
 
+config DM_REGULATOR_SC2730
+	bool "Enable driver for Unisoc (Spreadtrum) SC2730 PMIC regulators"
+	depends on DM_REGULATOR && PMIC_SC2730
+	default y if ARCH_SPRD
+	help
+	  Say y here to enable the DCDC/LDO regulator children of the
+	  SC2730 PMIC (power/pmic/pmic_sc2730.c), used on Unisoc SoCs such
+	  as UMS512 (sharkl5pro).
+
 config DM_REGULATOR_MT6358
 	bool "Enable driver for MediaTek MT6358-family PMIC regulators"
 	depends on DM_REGULATOR && DM_PMIC_MTK_PWRAP

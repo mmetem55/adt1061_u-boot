@@ -28,9 +28,6 @@ static void getvar_has_slot(char *var_parameter, char *response);
 static void getvar_partition_type(char *part_name, char *response);
 static void getvar_partition_size(char *part_name, char *response);
 static void getvar_is_userspace(char *var_parameter, char *response);
-#if CONFIG_IS_ENABLED(FASTBOOT_CMD_FLASHING)
-static void getvar_unlocked(char *var_parameter, char *response);
-#endif
 
 static const struct {
 	const char *variable;
@@ -90,12 +87,6 @@ static const struct {
 		.variable = "partition-size",
 		.dispatch = getvar_partition_size,
 		.list = false
-#endif
-#if CONFIG_IS_ENABLED(FASTBOOT_CMD_FLASHING)
-	}, {
-		.variable = "unlocked",
-		.dispatch = getvar_unlocked,
-		.list = true
 #endif
 	}, {
 		.variable = "is-userspace",
@@ -207,8 +198,26 @@ static void getvar_platform(char *var_parameter, char *response)
 
 static void getvar_current_slot(char *var_parameter, char *response)
 {
-	/* A/B not implemented, for now always return "a" */
-	fastboot_okay("a", response);
+	/*
+	 * Upstream always answered "a" here unconditionally (A/B isn't
+	 * really implemented in mainline U-Boot) - but adt1061 is a
+	 * confirmed non-A/B device (GPT has a plain "boot", not
+	 * "boot_a"/"boot_b", and none of its other partitions are slotted
+	 * either), so claiming slot "a" would be lying to tools that key
+	 * off this getvar. Fail the same way a real non-A/B bootloader
+	 * does, the way "fastboot getvar current-slot" is supposed to
+	 * behave on a device that doesn't have slots at all.
+	 *
+	 * This used to detect that dynamically via getvar_get_part_info()
+	 * looking for "boot_a" - correct in principle, but each failed
+	 * partition-type probe prints its own "Bad device specification"/
+	 * "Couldn't find partition" lines, and a real MMC partition-table
+	 * scan on every single "getvar all" round-trip was slow enough to
+	 * make the host time out before the rest of the variables ever
+	 * got sent. Just answer directly - this board's slot status is
+	 * fixed and known, not something to re-probe on every query.
+	 */
+	fastboot_fail("A/B not supported", response);
 }
 
 static void __maybe_unused getvar_has_slot(char *part_name, char *response)
@@ -281,6 +290,51 @@ static void getvar_is_userspace(char *var_parameter, char *response)
 	fastboot_okay("no", response);
 }
 
+#if CONFIG_IS_ENABLED(FASTBOOT_FLASH_MMC)
+/*
+ * Real-world fastboot clients/users expect "getvar all" to also list
+ * every partition's "partition-type"/"partition-size", the way vendor
+ * bootloaders do - mainline's dispatch table above only answers those
+ * for an explicit "getvar partition-type:<name>"/"partition-size:<name>"
+ * query (list = false), it never walks the partition table on its own.
+ * adt1061 is a plain non-A/B device whose GPT already matches the
+ * vendor's official ums512_1h10.xml BMAConfig layout 1:1 (42 partitions,
+ * none "_a"/"_b" suffixed - see getvar_current_slot() above), so just
+ * walk that same GPT here and report each entry the same way.
+ */
+static int current_all_partition = 1;
+static int current_all_partition_phase; /* 0 = type line, 1 = size line */
+
+static bool getvar_all_next_partition(char *response)
+{
+	struct blk_desc *dev_desc;
+	struct disk_partition info;
+
+	dev_desc = blk_get_dev("mmc", CONFIG_VAL(FASTBOOT_FLASH_MMC_DEV));
+	if (!dev_desc)
+		return false;
+
+	if (part_get_info(dev_desc, current_all_partition, &info))
+		return false; /* no more partitions on the GPT */
+
+	if (current_all_partition_phase == 0) {
+		fastboot_response("INFO", response, "partition-type:%s: raw",
+				  info.name);
+		current_all_partition_phase = 1;
+	} else {
+		size_t size = (size_t)info.size * info.blksz;
+
+		fastboot_response("INFO", response,
+				  "partition-size:%s: 0x%016zx",
+				  info.name, size);
+		current_all_partition_phase = 0;
+		current_all_partition++;
+	}
+
+	return true;
+}
+#endif
+
 static int current_all_dispatch;
 void fastboot_getvar_all(char *response)
 {
@@ -310,6 +364,14 @@ void fastboot_getvar_all(char *response)
 		current_all_dispatch++;
 		return;
 	}
+
+#if CONFIG_IS_ENABLED(FASTBOOT_FLASH_MMC)
+	if (getvar_all_next_partition(response))
+		return;
+
+	current_all_partition = 1;
+	current_all_partition_phase = 0;
+#endif
 
 	fastboot_response("OKAY", response, NULL);
 	current_all_dispatch = 0;
@@ -363,16 +425,3 @@ void fastboot_getvar(char *cmd_parameter, char *response)
 		fastboot_fail("Variable not implemented", response);
 	}
 }
-
-#if CONFIG_IS_ENABLED(FASTBOOT_CMD_FLASHING)
-/* "yes" when the device is unlocked according to the AVB TA, else "no" */
-static void getvar_unlocked(char *var_parameter, char *response)
-{
-	bool unlocked;
-
-	if (fastboot_flashing_is_unlocked(&unlocked, response))
-		return;
-
-	fastboot_okay(unlocked ? "yes" : "no", response);
-}
-#endif

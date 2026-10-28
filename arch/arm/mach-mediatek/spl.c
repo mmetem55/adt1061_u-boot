@@ -33,14 +33,15 @@ void board_init_f(ulong dummy)
 
 u32 spl_boot_device(void)
 {
-	if (CONFIG_IS_ENABLED(SPI))
-		return BOOT_DEVICE_SPI;
-	if (CONFIG_IS_ENABLED(MMC))
-		return BOOT_DEVICE_MMC1;
-	if (CONFIG_IS_ENABLED(NAND_SUPPORT))
-		return BOOT_DEVICE_NAND;
-	if (CONFIG_IS_ENABLED(NOR_SUPPORT))
-		return BOOT_DEVICE_NOR;
-
+#if defined(CONFIG_SPL_SPI)
+	return BOOT_DEVICE_SPI;
+#elif defined(CONFIG_SPL_MMC)
+	return BOOT_DEVICE_MMC1;
+#elif defined(CONFIG_SPL_NAND_SUPPORT)
+	return BOOT_DEVICE_NAND;
+#elif defined(CONFIG_SPL_NOR_SUPPORT)
+	return BOOT_DEVICE_NOR;
+#else
 	return BOOT_DEVICE_NONE;
+#endif
 }

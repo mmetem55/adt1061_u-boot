@@ -815,6 +815,16 @@ config SYS_I2C_SPACEMIT_K1
 	  Support for Spacemit I2C controller. It's based on
 	  Driver Model.
 
+config SYS_I2C_SPRD
+	bool "Unisoc (Spreadtrum) on-chip I2C driver"
+	depends on DM_I2C && ARCH_SPRD
+	default y if ARCH_SPRD
+	help
+	  Support for the Unisoc/Spreadtrum on-chip I2C controller found on
+	  sharkl5pro (UMS512) and similar SoCs, used for peripherals such as
+	  the battery charger and sensors. This is a separate, simpler
+	  on-chip controller from the ADI bus used for PMIC access.
+
 source "drivers/i2c/muxes/Kconfig"
 
 endif

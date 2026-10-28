@@ -208,6 +208,16 @@
 #define MUSB_INDEX		0x0E	/* 8 bit */
 #define MUSB_TESTMODE		0x0F	/* 8 bit */
 
+/*
+ * Spreadtrum/Unisoc-specific "link list end" interrupt status/enable
+ * registers, used by the vendor's custom DMA engine (CONFIG_USB_SPRD_DMA,
+ * drivers/usb/musb-new/sprd_musbhsdma.c) to signal completion of a
+ * descriptor-list DMA transfer alongside the normal TX/RX interrupts.
+ * Confirmed from the vendor's own sprd_musb2_def.h / musb_core.c.
+ */
+#define MUSB_LISTEND_INT_STS	0x34c
+#define MUSB_LISTEND_INT_EN	0x34e
+
 /* Get offset for a given FIFO from musb->mregs */
 #if defined(CONFIG_USB_MUSB_TUSB6010) ||	\
 	defined(CONFIG_USB_MUSB_TUSB6010_MODULE)

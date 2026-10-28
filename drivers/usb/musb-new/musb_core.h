@@ -365,6 +365,9 @@ struct musb {
 	u8			int_usb;
 	u16			int_rx;
 	u16			int_tx;
+#ifdef CONFIG_USB_SPRD_DMA
+	u16			int_listend;
+#endif
 
 	struct usb_phy		*xceiv;
 

@@ -796,6 +796,15 @@ config PIC32_SERIAL
 	help
 	  Support for the UART found on Microchip PIC32 SoC's.
 
+config SPRD_SERIAL
+	bool "Support for Unisoc (Spreadtrum) on-chip UART"
+	depends on DM_SERIAL && ARCH_SPRD
+	default y
+	help
+	  If you have a Unisoc/Spreadtrum SoC (sc9836/sc9860/ums512/sharkl
+	  family) based board and want to use the on-chip serial port,
+	  say Y to this option. If unsure, say N.
+
 config SYS_NS16550_SERIAL
 	bool "NS16550 UART or compatible legacy driver"
 	depends on !DM_SERIAL
@@ -822,13 +831,6 @@ config SYS_NS16550
 	  CFG_SYS_NS16550_CLK defined in a legacy board header file will
 	  be used. It can be a constant or a function to get clock, eg,
 	  get_serial_clock().
-
-config NS16550_CLK_ENABLE
-	bool "Enable NS16550 clocks during probe"
-	depends on SYS_NS16550 && DM_SERIAL && CLK
-	help
-	  Enable all UART clocks before register access.
-	  Select this when firmware does not enable the UART clock gates.
 
 config NS16550_DYNAMIC
 	bool "Allow NS16550 to be configured at runtime"

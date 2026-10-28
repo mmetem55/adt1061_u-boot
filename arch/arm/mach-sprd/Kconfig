@@ -1,0 +1,37 @@
+if ARCH_SPRD
+
+config SYS_SOC
+	default "sprd"
+
+config SYS_VENDOR
+	default "spreadtrum"
+
+config SYS_BOARD
+	default "ums512_1h10"
+
+config SYS_CONFIG_NAME
+	default "ums512_1h10"
+
+choice
+	prompt "Unisoc/Spreadtrum SoC select"
+
+config TARGET_UMS512_1H10
+	bool "Unisoc UMS512 (sharkl5pro) boards"
+	help
+	  Unisoc UMS512 (sharkl5pro) based boards, including the Unisoc
+	  UMS512-1H10 reference board and the Aidata ADT1061 tablet built
+	  on the same SoC/board code. The actual device is selected via
+	  CONFIG_DEFAULT_DEVICE_TREE (e.g. "ums512-1h10" or "adt1061").
+
+endchoice
+
+config TEXT_BASE
+	default 0x9f000000
+
+config SYS_LOAD_ADDR
+	default 0x90000000
+
+config COUNTER_FREQUENCY
+	default 26000000
+
+endif

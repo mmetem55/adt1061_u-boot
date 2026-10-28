@@ -21,6 +21,47 @@ config USB_MUSB_GADGET
 	help
 	  Enables the MUSB USB dual-role controller in gadget mode.
 
+config USB_MUSB_SPRD
+	bool "Enable Unisoc/Spreadtrum sharkl5pro MUSB controller"
+	depends on ARCH_SPRD
+	select USB_MUSB_GADGET
+	select USB_SPRD_DMA
+	default y if ARCH_SPRD
+	help
+	  Say y here to enable the MUSB (Mentor Graphics INVENTRA) USB2.0
+	  OTG/gadget controller found on Unisoc/Spreadtrum sharkl5pro
+	  (UMS512) SoCs, such as on the ADT1061 board. This is a new,
+	  standards-conformant gadget-only platform glue (board_usb_init()
+	  + musb_platform_ops), not a port of the vendor tree's
+	  sprd_musb2_driver.c, which implements an unrelated proprietary
+	  FDL/diagnostic-download USB protocol instead of a normal USB
+	  gadget driver and cannot be used with the generic gadget stack
+	  (Fastboot, mass storage, etc).
+
+config USB_SPRD_DMA
+	bool "Enable Unisoc/Spreadtrum MUSB hardware DMA engine"
+	depends on USB_MUSB_SPRD
+	help
+	  Say y here to enable the vendor-specific descriptor-linklist DMA
+	  engine for the Unisoc/Spreadtrum MUSB controller
+	  (sprd_musbhsdma.c, ported from the vendor adt1061_u-boot tree).
+	  Confirmed required on real ADT1061 (UMS512/sharkl5pro) hardware:
+	  the controller's bulk endpoints have the MUSB_xXCSR_DMAMODE
+	  control bit permanently hardwired, so PIO reads of the RX FIFO
+	  data port silently return zero bytes even though RXCOUNT
+	  correctly reports a pending packet length - real USB gadget
+	  transfers (Fastboot, mass storage) only work through this DMA
+	  engine, not CONFIG_USB_MUSB_PIO_ONLY.
+
+config USB_SPRD_DMA_V0
+	bool "Use the older (V0) Unisoc/Spreadtrum DMA linklist layout"
+	depends on USB_SPRD_DMA
+	help
+	  Say y only for the older sp7731e-family DMA hardware revision,
+	  whose descriptor linklist entries are 4 bytes shorter (no
+	  trailing reserved word). UMS512/sharkl5pro (ADT1061) does not
+	  need this - leave it unset.
+
 if USB_MUSB_HOST || USB_MUSB_GADGET
 config USB_MUSB_SC5XX
 	bool "Analog Devices MUSB support"

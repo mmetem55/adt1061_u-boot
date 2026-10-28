@@ -50,7 +50,6 @@
 		mmc9 = "/mmc9";
 		mmc10 = "/mmc10";
 		mmc11 = "/mmc11";
-		mmc12 = "/mmc12";
 		pci0 = &pci0;
 		pci1 = &pci1;
 		pci2 = &pci2;
@@ -1399,13 +1398,6 @@
 		filename = "mmc11.img";
 	};
 
-	/* This is used for Android AVB tests */
-	mmc12 {
-		status = "disabled";
-		compatible = "sandbox,mmc";
-		filename = "mmc12.img";
-	};
-
 	pch {
 		compatible = "sandbox,pch";
 	};
@@ -1662,7 +1654,7 @@
 		#size-cells = <0>;
 		reg = <0 1>;
 		compatible = "sandbox,spi";
-		cs-gpios = <0>, <0>, <&gpio_a 0>, <0>;
+		cs-gpios = <0>, <0>, <&gpio_a 0>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&pinmux_spi0_pins>;
 
@@ -1696,20 +1688,6 @@
 			spi-cpol;
 			spi-cpha;
 		};
-		eeprom@3 {
-			reg = <3>;
-			compatible = "microchip,at25160bn", "atmel,at25";
-			spi-max-frequency = <1000000>;
-			size = <2048>;
-			pagesize = <32>;
-			address-width = <16>;
-			sandbox,emul = <&spi_eeprom_emul>;
-		};
-	};
-
-	spi_eeprom_emul: spi-eeprom-emul {
-		compatible = "sandbox,spi-eeprom";
-		sandbox,size = <2048>;
 	};
 
 	syscon0: syscon@0 {

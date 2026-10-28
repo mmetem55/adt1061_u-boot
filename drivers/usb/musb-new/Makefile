@@ -15,6 +15,8 @@ obj-$(CONFIG_USB_MUSB_SUNXI) += sunxi.o
 obj-$(CONFIG_USB_MUSB_TI) += ti-musb.o
 obj-$(CONFIG_USB_MUSB_UX500) += ux500.o
 obj-$(CONFIG_USB_MUSB_SC5XX) += sc5xx.o
+obj-$(CONFIG_USB_MUSB_SPRD) += sprd_sharkl5pro.o
+obj-$(CONFIG_USB_SPRD_DMA) += sprd_musbhsdma.o
 
 ccflags-y := $(call cc-option,-Wno-unused-variable) \
 		$(call cc-option,-Wno-unused-but-set-variable) \

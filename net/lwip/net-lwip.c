@@ -30,6 +30,7 @@
 void (*push_packet)(void *, int len) = 0;
 #endif
 int net_try_count;
+static int net_restarted;
 int net_restart_wrap;
 static struct {
 	struct udevice *dev;
@@ -752,10 +753,11 @@ int net_start_again(void)
 		return -ETIMEDOUT;
 	}
 
+	net_try_count++;
+
 	eth_halt();
 #if !defined(CONFIG_NET_DO_NOT_TRY_ANOTHER)
-	eth_try_another(net_try_count == 1);
+	eth_try_another(!net_restarted);
 #endif
-	net_try_count++;
 	return eth_init();
 }

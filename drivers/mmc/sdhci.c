@@ -106,7 +106,11 @@ static void sdhci_prepare_dma(struct sdhci_host *host, struct mmc_data *data,
 
 	if (host->flags & USE_SDMA) {
 		dma_addr = dev_phys_to_bus(mmc_to_dev(host->mmc), host->start_addr);
-		sdhci_writel(host, dma_addr, SDHCI_DMA_ADDRESS);
+		/* See the SDHCI_V4_DMA_ADDRESS comment in include/sdhci.h. */
+		if (host->quirks & SDHCI_QUIRK_V4_DMA_ADDRESS)
+			sdhci_writel(host, dma_addr, SDHCI_V4_DMA_ADDRESS);
+		else
+			sdhci_writel(host, dma_addr, SDHCI_DMA_ADDRESS);
 	}
 #if CONFIG_IS_ENABLED(MMC_SDHCI_ADMA)
 	else if (host->flags & (USE_ADMA | USE_ADMA64)) {
@@ -165,7 +169,12 @@ static int sdhci_transfer_data(struct sdhci_host *host, struct mmc_data *data)
 				start_addr += SDHCI_DEFAULT_BOUNDARY_SIZE;
 				start_addr = dev_phys_to_bus(mmc_to_dev(host->mmc),
 							     start_addr);
-				sdhci_writel(host, start_addr, SDHCI_DMA_ADDRESS);
+				if (host->quirks & SDHCI_QUIRK_V4_DMA_ADDRESS)
+					sdhci_writel(host, start_addr,
+						     SDHCI_V4_DMA_ADDRESS);
+				else
+					sdhci_writel(host, start_addr,
+						     SDHCI_DMA_ADDRESS);
 			}
 		}
 		if (timeout-- > 0)
@@ -271,6 +280,17 @@ static int sdhci_send_command(struct mmc *mmc, struct mmc_cmd *cmd,
 	    cmd->cmdidx == MMC_CMD_SEND_TUNING_BLOCK_HS200)
 		flags |= SDHCI_CMD_DATA;
 
+	/*
+	 * SDHCI_QUIRK_SPRD_CMD_TIMEOUT_RESET: this controller needs the
+	 * combined TIMEOUT_CONTROL/SOFTWARE_RESET 16-bit write done before
+	 * *every* command, not just data/busy ones - see the quirk comment
+	 * in include/sdhci.h. Done unconditionally, ahead of the normal
+	 * per-branch SDHCI_TIMEOUT_CONTROL writes below (which still run
+	 * and are harmless/redundant for data and busy commands).
+	 */
+	if (host->quirks & SDHCI_QUIRK_SPRD_CMD_TIMEOUT_RESET)
+		sdhci_writew(host, 0x080e, SDHCI_TIMEOUT_CONTROL);
+
 	/* Set Transfer mode regarding to data flag */
 	if (data) {
 		sdhci_writeb(host, 0xe, SDHCI_TIMEOUT_CONTROL);
@@ -292,7 +312,25 @@ static int sdhci_send_command(struct mmc *mmc, struct mmc_cmd *cmd,
 		sdhci_writew(host, SDHCI_MAKE_BLKSZ(SDHCI_DEFAULT_BOUNDARY_ARG,
 				data->blocksize),
 				SDHCI_BLOCK_SIZE);
-		sdhci_writew(host, data->blocks, SDHCI_BLOCK_COUNT);
+		/*
+		 * SDHCI_QUIRK_USE_32BIT_BLK_CNT: on a controller stuck in
+		 * SD Host Controller spec v4.10 "V4 Mode", the legacy 16-bit
+		 * SDHCI_BLOCK_COUNT register (0x06) is no longer the one the
+		 * hardware's state machine actually uses - writing block
+		 * count there silently does nothing useful, the controller
+		 * keeps whatever stale count was left in the real 32-bit
+		 * register at SDHCI_32BIT_BLK_CNT (0x00) by a previous boot
+		 * stage. That mismatch between the programmed block size and
+		 * the block count the controller thinks it's transferring
+		 * produces a DATA_CRC/transfer error on every single real
+		 * data-phase command, while data-less commands (which never
+		 * touch block count at all) are unaffected. See the
+		 * SDHCI_32BIT_BLK_CNT comment in include/sdhci.h.
+		 */
+		if (host->quirks & SDHCI_QUIRK_USE_32BIT_BLK_CNT)
+			sdhci_writel(host, data->blocks, SDHCI_32BIT_BLK_CNT);
+		else
+			sdhci_writew(host, data->blocks, SDHCI_BLOCK_COUNT);
 		sdhci_writew(host, mode, SDHCI_TRANSFER_MODE);
 	} else if (cmd->resp_type & MMC_RSP_BUSY) {
 		sdhci_writeb(host, 0xe, SDHCI_TIMEOUT_CONTROL);
@@ -314,18 +352,6 @@ static int sdhci_send_command(struct mmc *mmc, struct mmc_cmd *cmd,
 			if (!(state & SDHCI_DAT_ACTIVE))
 				return 0;
 		}
-
-		/*
-		 * Check completion before the timeout: the status read itself
-		 * may have taken longer than SDHCI_READ_STATUS_TIMEOUT (for
-		 * example when an emulated controller performs a long DMA
-		 * transfer while holding the guest's MMIO path), and a command
-		 * that has completed must not be reported as timed out. The
-		 * BROKEN_R1B quirk above keeps precedence and returns as soon
-		 * as the DAT line is idle, as it did before.
-		 */
-		if ((stat & mask) == mask)
-			break;
 
 		if (get_timer(start) >= SDHCI_READ_STATUS_TIMEOUT) {
 			log_warning("Timeout for status update: %08x %08x\n",

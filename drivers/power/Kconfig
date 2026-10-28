@@ -525,4 +525,40 @@ config POWER_FSL_MC34704
 
 endchoice
 
+config BQ2560X_CHARGER
+	bool "TI BQ2560x battery charger"
+	depends on DM_I2C && MISC
+	default y if ARCH_SPRD
+	help
+	  Minimal driver for the TI BQ2560x battery charger IC, bound as an
+	  I2C-client child device. On probe it soft-resets the chip and
+	  enables charging with a configurable charge current and input
+	  current limit. Used on some Unisoc/Spreadtrum boards (such as the
+	  Aidata ADT1061) where the charger must be kept enabled for the
+	  battery to charge while in the bootloader.
+
+config SPRD_FGU
+	bool "Unisoc/Spreadtrum SC2730 fuel gauge (battery voltage readout)"
+	depends on PMIC_SC2730
+	default y if ARCH_SPRD
+	help
+	  Minimal driver for the SC2730 PMIC's fuel gauge unit (FGU),
+	  providing a chip-calibrated instantaneous battery voltage
+	  reading. Does not implement the full state-of-charge/coulomb-
+	  counter functionality the same hardware block also supports -
+	  just enough for a board to gate booting on real battery voltage
+	  (e.g. holding off until the charger has brought a low battery
+	  back up past a safe threshold).
+
+config SPRD_VIBRATOR
+	bool "Unisoc/Spreadtrum SC2730 vibrator (on/off haptic feedback)"
+	depends on PMIC_SC2730
+	default y if ARCH_SPRD
+	help
+	  Minimal on/off control for the SC2730 PMIC's vibrator motor LDO.
+	  Does not implement the vendor's PWM-driven intensity/waveform
+	  vibrator framework - just enough for a board to buzz a short,
+	  fixed pulse as haptic feedback when nothing may be watching the
+	  UART or the screen (e.g. signalling a low-battery boot gate).
+
 endif

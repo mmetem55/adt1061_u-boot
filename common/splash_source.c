@@ -15,7 +15,6 @@
 #include <log.h>
 #include <nand.h>
 #include <sata.h>
-#include <scsi.h>
 #include <spi.h>
 #include <spi_flash.h>
 #include <splash.h>
@@ -27,7 +26,7 @@ DECLARE_GLOBAL_DATA_PTR;
 
 #ifdef CONFIG_SPI_FLASH
 static struct spi_flash *sf;
-static int splash_sf_read_raw(ulong bmp_load_addr, u32 offset, size_t read_size)
+static int splash_sf_read_raw(ulong bmp_load_addr, int offset, size_t read_size)
 {
 	if (!sf) {
 		sf = spi_flash_probe(CONFIG_SF_DEFAULT_BUS,
@@ -41,7 +40,7 @@ static int splash_sf_read_raw(ulong bmp_load_addr, u32 offset, size_t read_size)
 	return spi_flash_read(sf, offset, read_size, (void *)(uintptr_t)bmp_load_addr);
 }
 #else
-static int splash_sf_read_raw(ulong bmp_load_addr, u32 offset, size_t read_size)
+static int splash_sf_read_raw(ulong bmp_load_addr, int offset, size_t read_size)
 {
 	debug("%s: sf support not available\n", __func__);
 	return -ENOSYS;
@@ -49,7 +48,7 @@ static int splash_sf_read_raw(ulong bmp_load_addr, u32 offset, size_t read_size)
 #endif
 
 #ifdef CONFIG_CMD_NAND
-static int splash_nand_read_raw(ulong bmp_load_addr, u32 offset, size_t read_size)
+static int splash_nand_read_raw(ulong bmp_load_addr, int offset, size_t read_size)
 {
 	struct mtd_info *mtd = get_nand_dev_by_index(nand_curr_device);
 	return nand_read_skip_bad(mtd, offset,
@@ -58,7 +57,7 @@ static int splash_nand_read_raw(ulong bmp_load_addr, u32 offset, size_t read_siz
 				  (u_char *)bmp_load_addr);
 }
 #else
-static int splash_nand_read_raw(ulong bmp_load_addr, u32 offset, size_t read_size)
+static int splash_nand_read_raw(ulong bmp_load_addr, int offset, size_t read_size)
 {
 	debug("%s: nand support not available\n", __func__);
 	return -ENOSYS;
@@ -153,9 +152,6 @@ static int splash_select_fs_dev(struct splash_location *location)
 	case SPLASH_STORAGE_SATA:
 		res = fs_set_blk_dev("sata", location->devpart, FS_TYPE_ANY);
 		break;
-	case SPLASH_STORAGE_SCSI:
-		res = fs_set_blk_dev("scsi", location->devpart, FS_TYPE_ANY);
-		break;
 	case SPLASH_STORAGE_NAND:
 		if (location->ubivol != NULL)
 			res = fs_set_blk_dev("ubi", NULL, FS_TYPE_UBIFS);
@@ -208,16 +204,6 @@ static inline int splash_init_sata(void)
 	return -ENOSYS;
 }
 #endif
-
-static int splash_init_scsi(void)
-{
-	if (!IS_ENABLED(CONFIG_SCSI)) {
-		printf("Cannot load splash image: no SCSI support\n");
-		return -ENOSYS;
-	} else {
-		return scsi_scan(false);
-	}
-}
 
 static int splash_init_virtio(void)
 {
@@ -282,9 +268,6 @@ static int splash_load_fs(struct splash_location *location, ulong bmp_load_addr)
 
 	if (location->storage == SPLASH_STORAGE_SATA)
 		res = splash_init_sata();
-
-	if (location->storage == SPLASH_STORAGE_SCSI)
-		res = splash_init_scsi();
 
 	if (location->storage == SPLASH_STORAGE_VIRTIO)
 		res = splash_init_virtio();
@@ -457,7 +440,6 @@ int splash_source_load(struct splash_location *locations, uint size)
 	struct splash_location *splash_location;
 	char *env_splashimage_value;
 	char *devpart;
-	char *env_splashoffset_value;
 	ulong bmp_load_addr;
 
 	env_splashimage_value = env_get("splashimage");
@@ -477,10 +459,6 @@ int splash_source_load(struct splash_location *locations, uint size)
 	devpart = env_get("splashdevpart");
 	if (devpart)
 		splash_location->devpart = devpart;
-
-	env_splashoffset_value = env_get("splashoffset");
-	if (env_splashoffset_value)
-		splash_location->offset = hextoul(env_splashoffset_value, NULL);
 
 	if (splash_location->flags == SPLASH_STORAGE_RAW)
 		return splash_load_raw(splash_location, bmp_load_addr);

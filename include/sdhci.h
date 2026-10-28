@@ -21,6 +21,27 @@
  */
 
 #define SDHCI_DMA_ADDRESS	0x00
+/*
+ * SD Host Controller spec v4.10 "Host Version 4" / "V4 Mode" register
+ * layout repurposes this same offset as a 32-bit Block Count register,
+ * superseding the legacy 16-bit SDHCI_BLOCK_COUNT below. Some SDHCI
+ * implementations hard-wire V4 Mode on and never let it be switched
+ * back off (confirmed on the Unisoc/SPRD UMS512 controller used by
+ * drivers/mmc/sprd_sdhci.c - SDHCI_CTRL_V4_MODE below reads back as
+ * stuck-at-1 no matter what is written to SDHCI_HOST_CONTROL2), so a
+ * glue driver for such hardware sets SDHCI_QUIRK_USE_32BIT_BLK_CNT and
+ * this register is used instead of SDHCI_BLOCK_COUNT.
+ */
+#define SDHCI_32BIT_BLK_CNT	0x00
+/*
+ * Same V4 Mode register reshuffle also moves the legacy SDMA System
+ * Address register from offset 0x00 to 0x58 (shared with the ADMA
+ * System Address register - V4 mode unifies them). A controller that
+ * sets SDHCI_QUIRK_USE_32BIT_BLK_CNT needs its SDMA address written
+ * here instead of the legacy SDHCI_DMA_ADDRESS offset, via
+ * SDHCI_QUIRK_V4_DMA_ADDRESS.
+ */
+#define SDHCI_V4_DMA_ADDRESS	0x58
 
 #define SDHCI_BLOCK_SIZE	0x04
 #define  SDHCI_MAKE_BLKSZ(dma, blksz) (((dma & 0x7) << 12) | (blksz & 0xFFF))
@@ -256,6 +277,33 @@
 #define SDHCI_QUIRK_SUPPORT_SINGLE	(1 << 10)
 /* Capability register bit-63 indicates HS400 support */
 #define SDHCI_QUIRK_CAPS_BIT63_FOR_HS400	BIT(11)
+/*
+ * Controller is permanently in SD Host Controller spec v4.10 "V4 Mode"
+ * (SDHCI_CTRL_V4_MODE cannot be cleared) and uses the 32-bit
+ * SDHCI_32BIT_BLK_CNT register instead of the legacy 16-bit
+ * SDHCI_BLOCK_COUNT. See the SDHCI_32BIT_BLK_CNT comment above.
+ */
+#define SDHCI_QUIRK_USE_32BIT_BLK_CNT	BIT(12)
+/*
+ * Controller needs its SDMA address written to SDHCI_V4_DMA_ADDRESS
+ * (0x58) instead of the legacy SDHCI_DMA_ADDRESS (0x00) - see the
+ * SDHCI_V4_DMA_ADDRESS comment above. Goes together with
+ * SDHCI_QUIRK_USE_32BIT_BLK_CNT on a V4 Mode controller.
+ */
+#define SDHCI_QUIRK_V4_DMA_ADDRESS	BIT(13)
+/*
+ * Controller expects a combined 16-bit write to SDHCI_TIMEOUT_CONTROL
+ * (0x2E) before every single command, not just data/busy ones: the
+ * high byte of that 16-bit write lands on the adjacent SDHCI_SOFTWARE_RESET
+ * register (0x2F) and sets its vendor-private bit 3 (0x08), which this
+ * controller apparently needs re-armed before each command or it
+ * mishandles the command-complete/timeout state machine (confirmed:
+ * CMD13 right after a CMD6 reliably times out with CMD_COMPLETE and
+ * Command Timeout Error both set in SDHCI_INT_STATUS, while CMD6 itself,
+ * which does write SDHCI_TIMEOUT_CONTROL via the data/busy path, does
+ * not). The low byte keeps the normal data timeout value (0xe).
+ */
+#define SDHCI_QUIRK_SPRD_CMD_TIMEOUT_RESET	BIT(14)
 
 /* to make gcc happy */
 struct sdhci_host;

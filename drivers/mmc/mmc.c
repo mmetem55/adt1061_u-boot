@@ -1008,8 +1008,7 @@ static int mmc_set_card_speed(struct mmc *mmc, enum bus_mode mode,
 		return err;
 
 #if CONFIG_IS_ENABLED(MMC_HS200_SUPPORT) || \
-	CONFIG_IS_ENABLED(MMC_HS400_SUPPORT) || \
-	CONFIG_IS_ENABLED(MMC_HS400_ES_SUPPORT)
+    CONFIG_IS_ENABLED(MMC_HS400_SUPPORT)
 	/*
 	 * In case the eMMC is in HS200/HS400 mode and we are downgrading
 	 * to HS mode, the card clock are still running much faster than
@@ -2911,7 +2910,7 @@ static int mmc_power_on(struct mmc *mmc)
 
 static int mmc_power_off(struct mmc *mmc)
 {
-	unsigned int delay_us = mmc->cfg->power_off_delay_us;
+	__maybe_unused u32 delay_us = 0;
 
 	mmc_set_clock(mmc, 0, MMC_CLK_DISABLE);
 #if CONFIG_IS_ENABLED(DM_MMC) && CONFIG_IS_ENABLED(DM_REGULATOR)
@@ -2934,10 +2933,13 @@ static int mmc_power_off(struct mmc *mmc)
 			return ret;
 		}
 	}
-#endif
+
+	if (mmc->dev)
+		dev_read_u32(mmc->dev, "power-off-delay-us", &delay_us);
+
 	if (delay_us)
 		udelay(delay_us);
-
+#endif
 	return 0;
 }
 

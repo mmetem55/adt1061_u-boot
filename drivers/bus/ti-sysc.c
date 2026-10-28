@@ -24,10 +24,8 @@ struct ti_sysc_priv {
 
 static const struct udevice_id ti_sysc_ids[] = {
 	{.compatible = "ti,sysc-omap2"},
-	{.compatible = "ti,sysc-omap2-timer"},
 	{.compatible = "ti,sysc-omap4"},
 	{.compatible = "ti,sysc-omap4-simple"},
-	{.compatible = "ti,sysc-omap4-timer"},
 	{.compatible = "ti,sysc-omap3430-sr"},
 	{.compatible = "ti,sysc-omap3630-sr"},
 	{.compatible = "ti,sysc-omap4-sr"},
@@ -55,9 +53,9 @@ static int ti_sysc_get_one_clock(struct udevice *dev, enum ti_sysc_clocks index)
 
 	name = clock_names[index];
 
-	err = clk_get_by_name_optional(dev, name, &priv->clocks[index]);
+	err = clk_get_by_name(dev, name, &priv->clocks[index]);
 	if (err) {
-		if (err == -ENOSYS)
+		if (err == -ENODATA)
 			return 0;
 
 		dev_err(dev, "failed to get %s clock\n", name);
@@ -73,12 +71,10 @@ static int ti_sysc_put_clocks(struct udevice *dev)
 	int err;
 
 	err = clk_release_all(priv->clocks, priv->clocks_count);
-	if (err && err != -ENOSYS) {
+	if (err)
 		dev_err(dev, "failed to release all clocks\n");
-		return err;
-	}
 
-	return 0;
+	return err;
 }
 
 static int ti_sysc_get_clocks(struct udevice *dev)
@@ -88,10 +84,10 @@ static int ti_sysc_get_clocks(struct udevice *dev)
 
 	for (i = 0; i < TI_SYSC_MAX_CLOCKS; i++) {
 		err = ti_sysc_get_one_clock(dev, i);
-		if (err)
+		if (!err)
+			priv->clocks_count++;
+		else if (err != -ENOENT)
 			return err;
-
-		priv->clocks_count++;
 	}
 
 	return 0;

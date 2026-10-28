@@ -614,12 +614,6 @@ config DISPLAY_BOARDINFO_LATE
 	  the relocation phase. The board function checkboard() is called to do
 	  this.
 
-config DISPLAY_DRAM_CONFIG_VERBOSE
-	bool "Display additional information about DRAM layout"
-	help
-	  Display additional information about the board DRAM layout, including
-	  each bank start address, end address and size.
-
 menu "Start-up hooks"
 
 config CYCLIC
@@ -891,13 +885,8 @@ config AVB_VERIFY
 	  This option enables compilation of bootloader-dependent operations,
 	  used by Android Verified Boot 2.0 library (libavb). Includes:
 	  * Helpers to process strings in order to build OS bootargs.
-	  * Helpers to access block devices, similar to
-	    drivers/fastboot/fb_mmc.c.
+	  * Helpers to access MMC, similar to drivers/fastboot/fb_mmc.c.
 	  * Helpers to alloc/init/free avb ops.
-
-	  Only mmc is initialised by AVB itself. Any other interface must
-	  already be enumerated when AVB runs, either by the board code or by
-	  a command such as "usb start".
 
 if AVB_VERIFY
 

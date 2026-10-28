@@ -53,22 +53,8 @@ enum {
 	FASTBOOT_COMMAND_OEM_BOARD,
 	FASTBOOT_COMMAND_ACMD,
 	FASTBOOT_COMMAND_UCMD,
-	FASTBOOT_COMMAND_FLASHING_LOCK,
-	FASTBOOT_COMMAND_FLASHING_UNLOCK,
-	FASTBOOT_COMMAND_FLASHING_GET_UNLOCK_ABILITY,
 	FASTBOOT_COMMAND_COUNT
 };
-
-/**
- * fastboot_flashing_is_unlocked() - read the AVB device lock state
- *
- * Available with CONFIG_FASTBOOT_CMD_FLASHING.
- *
- * @unlocked: set to the state on success
- * @response: fastboot response buffer, filled on failure
- * Return: 0 on success, -1 otherwise
- */
-int fastboot_flashing_is_unlocked(bool *unlocked, char *response);
 
 /**
  * Reboot reasons
@@ -118,6 +104,19 @@ void fastboot_okay(const char *reason, char *response);
  * requires in order to re-enter the bootloader.
  */
 int fastboot_set_reboot_flag(enum fastboot_reboot_reason reason);
+
+/**
+ * board_fastboot_setup() - board-specific hook run on entering fastboot
+ *
+ * Called once from fastboot_init(), for every transport (USB/UDP/TCP) and
+ * every way fastboot was entered (an explicit "fastboot usb 0" at the
+ * prompt, or a board's own bootcmd falling back to it). The default
+ * implementation does nothing; a board can override this to give some
+ * visible feedback that it is now in fastboot mode - e.g. drawing text on
+ * its own display, the way most stock Android bootloaders show a
+ * "fastboot mode" banner on the panel.
+ */
+void board_fastboot_setup(void);
 
 /**
  * fastboot_set_progress_callback() - set progress callback

@@ -396,6 +396,17 @@ config DM_PMIC_TPS80031
 	  Clock (RTC) with Timer and Alarm Wake-Up, Two Digital PWM Outputs and more
 	  with I2C Compatible Interface. PMIC occupies 4 I2C addresses.
 
+config PMIC_SC2730
+	bool "Enable support for Unisoc (Spreadtrum) SC2730 PMIC"
+	depends on DM_PMIC && DM_SPI
+	default y if ARCH_SPRD
+	help
+	  The SC2730 PMIC is used on Unisoc/Spreadtrum SoCs such as UMS512
+	  (sharkl5pro). It is reached over the ADI bus (modeled as a SPI
+	  controller - see drivers/spi/sprd_adi.c) rather than I2C. This
+	  driver implements basic register read/write and binds the DCDC/
+	  LDO regulator children (see DM_REGULATOR_SC2730).
+
 config PMIC_STPMIC1
 	bool "Enable support for STMicroelectronics STPMIC1 PMIC"
 	depends on DM_I2C

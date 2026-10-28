@@ -731,6 +731,16 @@ config MMC_SDHCI_ROCKCHIP
 	help
 	  Support for Arasan SDHCI host controller on Rockchip ARM SoCs platform
 
+config MMC_SDHCI_SPRD
+	bool "Unisoc (Spreadtrum) SDHCI controller support"
+	depends on ARCH_SPRD
+	depends on MMC_SDHCI
+	default y
+	help
+	  Thin DM glue driver for the "sprd,sdhci-r11" eMMC/SD controller
+	  found on Unisoc/Spreadtrum SoCs such as UMS512 (sharkl5pro),
+	  built on top of the generic SDHCI core.
+
 config MMC_SDHCI_S5P
 	bool "SDHCI support on Samsung S5P SoC"
 	depends on MMC_SDHCI && S5P

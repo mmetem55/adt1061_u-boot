@@ -23,27 +23,3 @@
 		};
 	};
 };
-
-&umac0 {
-	bootph-all;
-};
-
-&mdio0 {
-	bootph-all;
-};
-
-&phy0 {
-	bootph-all;
-};
-
-&umac1 {
-	bootph-all;
-};
-
-&mdio1 {
-	bootph-all;
-};
-
-&phy1 {
-	bootph-all;
-};

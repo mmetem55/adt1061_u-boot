@@ -1,0 +1,476 @@
+// SPDX-License-Identifier: (GPL-2.0 OR MIT)
+/*
+ * Aidata ADT1061 tablet (Unisoc UMS512 / sharkl5pro) - U-Boot device tree.
+ *
+ * NOTE (porting status): the exact ADT1061 schematic (pin straps, PMIC
+ * regulator wiring, panel/touch/eMMC specifics) is not available, so
+ * this file is derived from the generic Unisoc UMS512-1H10 reference
+ * board DT (dts/upstream/src/arm64/sprd/ums512-1h10.dts, synced from
+ * the Linux kernel) with the same debug UART and memory layout used by
+ * the vendor's 2015.07-based adt1061_u-boot source
+ * (arch/arm/dts/adt1061.dts there). It should be refined with the real
+ * ADT1061-specific pin/board data as that becomes available.
+ */
+
+/dts-v1/;
+
+#include "ums512.dtsi"
+#include "sc2730.dtsi"
+/*
+ * Real panel candidate list for this board, ported from the vendor's
+ * own adt1061.dts (which also includes this before the dummy fallback
+ * panel, in the same order) - see aidata-lcd.dtsi's own header comment.
+ * Devicetree node merging means its "lcds" entries land ahead of the
+ * lcd_dummy_mipi_hd node defined further down in this file, so the
+ * real panels (tried via MIPI ID read or force-attach) are probed
+ * before that last-resort dummy fallback.
+ */
+#include "aidata-lcd.dtsi"
+
+/*
+ * Confirmed on real hardware: this board's panel has no ID pin wired
+ * at all (neither the dedicated MIPI ID register this entry reads, nor
+ * the separate GPIO ID straps gpio_getid() uses - see the "/lcd-panel"
+ * node's "sprd,no-id-gpio" below). nt36xxx_sy101wumlh2_boe's real
+ * MIPI-register ID read (command FF/20, register 0x3B, masked compare
+ * against 0x3A/0x3B) came back a false positive on this board's actual
+ * panel - not an nt36xxx, but close enough on that one loosely-masked
+ * byte to pass - so sprd_panel_probe() matched the wrong panel and
+ * initialized it with the wrong command table. The real, user-confirmed
+ * panel is tv101wum_ll2_wuxga further down aidata-lcd.dtsi, which has
+ * no ID register at all and always force-attaches once probing falls
+ * through to it (see panel_ops_mipi.c's "force-attach" path) - delete
+ * this false-positive-prone entry so probing actually reaches it.
+ */
+/delete-node/ &lcd_nt36xxx_sy101wumlh2_boe;
+
+/ {
+	model = "Aidata ADT1061 tablet";
+	compatible = "aidata,adt1061", "sprd,ums512-1h10", "sprd,ums512";
+
+	aliases {
+		serial0 = &uart0;
+		serial1 = &uart1;
+	};
+
+	/*
+	 * 3 GiB. Real hardware raw-bus probe (MMU off, pre-relocation)
+	 * confirmed the full 3 GiB is genuinely present and correctly
+	 * addressable - CS1 responds fine; "ddr auto detect cs1 unvalid"
+	 * from stock SPL does not mean CS1 is physically broken.
+	 *
+	 * Two independent U-Boot-side (not SPL) bugs had to be fixed for
+	 * this to actually boot - see arch/arm/mach-sprd/cpu.c for both:
+	 *
+	 * 1. mem_map.c's static MMU table hardcoded the DRAM block to
+	 *    2 GiB. With 3 GiB declared, U-Boot relocates near the real
+	 *    top of RAM (now past 2 GiB), then enable_caches() turned the
+	 *    MMU on with a table that didn't cover its own relocated
+	 *    code/stack - instant silent hang, no exception even
+	 *    possible to print. Fixed by filling the DRAM MMU entry
+	 *    dynamically from gd->dram[] before the MMU is enabled.
+	 *
+	 * 2. Once (1) was fixed, boot progressed far enough to reach the
+	 *    eMMC - and failed there ("mmc_init: -22", EXT_CSD read
+	 *    failure): this board's SDHCI driver only ever programs a
+	 *    32-bit DMA address register, but U-Boot's own relocated
+	 *    stack/malloc pool (used for mmc_startup()'s on-stack EXT_CSD
+	 *    buffer) now sat above the 4 GiB mark. Fixed via
+	 *    board_get_usable_ram_top(), which keeps U-Boot's own working
+	 *    set within the first 4 GiB while leaving gd->ram_size (and
+	 *    this /memory node) at the full, real 3 GiB for Linux.
+	 */
+	memory@80000000 {
+		device_type = "memory";
+		reg = <0x0 0x80000000 0x0 0xc0000000>;
+	};
+
+	chosen {
+		stdout-path = "serial1:115200n8";
+	};
+};
+
+&uart0 {
+	status = "okay";
+};
+
+&uart1 {
+	status = "okay";
+};
+
+/*
+ * Clock controllers: ported from the vendor Unisoc/Aidata 2015.07
+ * U-Boot tree's drivers/clk/sprd/sharkl5pro-clk.c, which predates the
+ * current Linux-kernel-synced ums512.dtsi/sprd,ums512-clk.h binding
+ * (different compatible strings, and a different numbering of clock
+ * IDs - see include/dt-bindings/clock/sprd,sharkl5pro-clk.h, which
+ * this ported driver actually implements). The nodes/reg addresses
+ * below are unchanged from ums512.dtsi (same physical hardware); only
+ * "compatible" is overridden so our ported driver binds instead of
+ * (a nonexistent) "sprd,ums512-*" one.
+ *
+ * Any clock consumer added to this board file must use the
+ * sprd,sharkl5pro-clk.h macros, not sprd,ums512-clk.h, when pointing
+ * at these clock providers.
+ */
+&apahb_gate {
+	compatible = "sprd,sharkl5pro-apahb-gate";
+};
+
+&ap_clk {
+	compatible = "sprd,sharkl5pro-ap-clk";
+};
+
+&aon_clk {
+	compatible = "sprd,sharkl5pro-aonapb-clk";
+};
+
+&aonapb_gate {
+	compatible = "sprd,sharkl5pro-aon-gate";
+};
+
+&pmu_gate {
+	compatible = "sprd,sharkl5pro-pmu-gate";
+};
+
+&dpll0 {
+	compatible = "sprd,sharkl5pro-g0-pll";
+};
+
+&mpll1 {
+	compatible = "sprd,sharkl5pro-g2-pll";
+};
+
+&pll1 {
+	compatible = "sprd,sharkl5pro-g3-pll";
+};
+
+&pll2 {
+	compatible = "sprd,sharkl5pro-gc-pll";
+};
+
+&audcpapb_gate {
+	compatible = "sprd,sharkl5pro-audcpapb-gate";
+};
+
+&audcpahb_gate {
+	compatible = "sprd,sharkl5pro-audcpahb-gate";
+};
+
+&gpu_clk {
+	compatible = "sprd,sharkl5pro-gpu-clk";
+};
+
+&mm_clk {
+	compatible = "sprd,sharkl5pro-mm-clk";
+};
+
+&mm_gate {
+	compatible = "sprd,sharkl5pro-mm-gate-clk";
+};
+
+&apapb_gate {
+	compatible = "sprd,sharkl5pro-apapb-gate";
+};
+
+/*
+ * These feed the sprd clk framework's internal by-name parent lookup
+ * (see uclass_find_clk_by_name() in drivers/clk/sprd/common.c), which
+ * needs our ported fixed-rate.c driver, not the generic upstream
+ * "fixed-clock" one - see the comment in drivers/clk/sprd/fixed-rate.c.
+ */
+&ext_26m {
+	compatible = "sprd,sharkl5pro-fixed-clock";
+};
+
+&ext_32k {
+	compatible = "sprd,sharkl5pro-fixed-clock";
+};
+
+&ext_4m {
+	compatible = "sprd,sharkl5pro-fixed-clock";
+};
+
+&rco_100m {
+	compatible = "sprd,sharkl5pro-fixed-clock";
+};
+
+/*
+ * eMMC (sdio3 in ums512.dtsi, reg 0x71400000 - matches the vendor's
+ * SPRD_EMMC_PHYS in arch-sharkl5pro/chip_sharkl5pro/hardware.h).
+ *
+ * "sprd,sdhci-r11" is bound by our thin DM glue driver
+ * (drivers/mmc/sprd_sdhci.c) on top of the generic SDHCI core; see
+ * that file for why no device-specific quirks are needed (the vendor
+ * source itself initializes this controller with quirks = 0).
+ *
+ * The clock phandle *numbers* below must NOT come from ums512.dtsi's
+ * own CLK_EMMC_2X/CLK_EMMC_EB macros (sprd,ums512-clk.h) - as with the
+ * clock-controller nodes above, the ported sharkl5pro-clk.c driver
+ * numbers its clocks differently. From the vendor's
+ * include/dt-bindings/clock/sprd,sharkl5pro-clk.h:
+ *   CLK_EMMC_2X = 21  (ap_clk domain - mux clock, "emmc_2x_clk")
+ *   CLK_EMMC_EB = 25  (apapb_gate domain - gate clock, "emmc_eb")
+ * Written as raw numbers here (instead of #include-ing that vendor
+ * header into this .dts, which would redefine ums512.dtsi's
+ * same-named-but-different-valued macros and silently pick whichever
+ * one the preprocessor saw last).
+ */
+/*
+ * ADI bus (AP <-> PMIC analog-die register access). Reg 0x32100000
+ * matches the vendor's arch/arm/dts/sharkl5Pro.dtsi adi_bus node
+ * exactly. Bound by our ported drivers/spi/sprd_adi.c
+ * ("sprd,sharkl5pro-adi"); the single sprd,hw-channels pair below is
+ * copied verbatim from that same vendor node.
+ */
+&adi_bus {
+	compatible = "sprd,sharkl5pro-adi";
+	sprd,hw-channels = <21 0x1864>;
+};
+
+/*
+ * On-chip I2C controllers (i2c0..i2c4, reg 0x70300000..0x70700000).
+ * ums512.dtsi (kernel-synced) has no I2C nodes at all, so these are
+ * added fresh rather than DT-overridden, using the reg addresses and
+ * clock wiring from the vendor's arch/arm/dts/sharkl5Pro.dtsi, bound
+ * by our ported drivers/i2c/sprd_i2c.c ("sprd,sharkl5pro-i2c").
+ *
+ * As with the clock-controller and eMMC nodes above, the clock phandle
+ * numbers are raw values from the vendor's
+ * include/dt-bindings/clock/sprd,sharkl5pro-clk.h (NOT
+ * sprd,ums512-clk.h, which numbers these differently):
+ *   CLK_AP_I2C0=5  CLK_AP_I2C1=6  CLK_AP_I2C2=7  CLK_AP_I2C3=8  CLK_AP_I2C4=9   (ap_clk domain)
+ *   CLK_I2C0_EB=9  CLK_I2C1_EB=10 CLK_I2C2_EB=11 CLK_I2C3_EB=12 CLK_I2C4_EB=13  (apapb_gate domain)
+ *
+ * i2c4 is the bus the board's bq2560x charger sits on (vendor's own
+ * adt1061.dts: sprd,bq2560x-i2c-bus = <4>), so it is enabled; the
+ * others are included for completeness but left disabled since no
+ * peripherals on them are known yet.
+ */
+/*
+ * AP GPIO controller (reg 0x32070000, matches the vendor's
+ * arch/arm/dts/sharkl5Pro.dtsi ap_gpio node exactly). Bound by our
+ * ported drivers/gpio/sprd_gpio.c ("sprd,pike2-gpio"). Needed by the
+ * ported SPRD MIPI panel driver for panel reset/power-sequencing
+ * GPIOs (see the lcd-panel node below).
+ *
+ * "clocks" is CLK_GPIO_EB = 17, which - despite living in the same
+ * shared sprd,sharkl5pro-clk.h numbering space as the apapb_gate i2c
+ * indices above - is actually registered under the SEPARATE "aon-gate"
+ * clock provider (drivers/clk/sprd/sharkl5pro-clk.c's
+ * sharkl5pro_aon_gate_desc, bound to the "aonapb_gate" devicetree
+ * label - matches the vendor's own sharkl5Pro.dtsi, where aon_i2c0
+ * pulls its own "enable" clock from this exact same "aonapb_gate"
+ * provider, not apapb_gate). An earlier version of this fix pointed at
+ * "&apapb_gate 17" instead - clk_get_by_name()+clk_enable() on that
+ * returned success (it resolved to *some* unrelated clock at that
+ * index in apapb_gate's own array) but enabled the wrong hardware gate
+ * entirely, so the crash below did not actually go away - confirmed on
+ * real hardware. "aonapb_gate" is the right provider.
+ */
+/ {
+	ap_gpio: gpio@32070000 {
+		compatible = "sprd,sharkl5pro-gpio", "sprd,pike2-gpio";
+		reg = <0 0x32070000 0 0x10000>;
+		clocks = <&aonapb_gate 17>;
+		clock-names = "enable";
+		gpio-controller;
+		gpio-bank-name = "ap_gpio";
+		#gpio-cells = <2>;
+	};
+
+	/*
+	 * DM_VIDEO entry point for the ported SPRD display stack
+	 * (drivers/video/sprd/sprd_video.c). The actual DPU/DSI/D-PHY
+	 * register addresses are hardcoded in
+	 * drivers/video/sprd/sprd_glb.h (same technique as the PMIC
+	 * stage's sc2730_reg_glb.h) rather than read from "reg" here,
+	 * so this node exists only to give the driver something to
+	 * bind to.
+	 */
+	dpu: dpu@20300000 {
+		compatible = "sprd,sharkl5pro-dpu";
+		status = "okay";
+		/*
+		 * Must bind during board_init_f (pre-relocation), so that
+		 * common/board_f.c's reserve_video() -> video_reserve()
+		 * actually sees this device and carves out its framebuffer
+		 * below gd->relocaddr. Without this, the node is only bound
+		 * post-relocation in initr_dm(), reserve_video() never ran
+		 * for it, and video_post_bind() fails with "cannot allocate
+		 * frame buffer memory" since gd->video_top/video_bottom
+		 * were never set up for it - confirmed on real ADT1061
+		 * hardware.
+		 */
+		bootph-all;
+	};
+
+	/*
+	 * Board-level panel description, consumed by the ported
+	 * drivers/video/sprd/sprd_panel.c via raw libfdt (gd->fdt_blob)
+	 * rather than the normal DM device-tree walk - matching the
+	 * vendor's own adt1061.dts "lcd-panel" node (reset/power GPIO
+	 * numbers taken verbatim from it).
+	 */
+	lcd-panel {
+		sprd,lcd-reset-gpio = <50>;
+		sprd,power-gpios = <28 87 130 51 50 0xffffffff 0xffffffff 0xffffffff 145>;
+		/*
+		 * Confirmed on real hardware: the three dedicated hardware
+		 * LCD-version-ID GPIOs panel_ops_mipi.c's gpio_getid() reads
+		 * (numbers 16/15/115, vendor hardware-strap detection for
+		 * boards with several panel revisions sharing one ID
+		 * scheme) are not wired on this board at all - touching
+		 * them is a synchronous external abort straight from the
+		 * GPIO controller's bus, not just a meaningless floating
+		 * read. See sprd_panel.c's sprd_panel_probe() /
+		 * panel_ops_mipi.c's panel_readid().
+		 */
+		sprd,no-id-gpio;
+	};
+
+	/*
+	 * Last-resort fallback panel entry (from the vendor's
+	 * arch/arm/dts/lcd/lcd_dummy_mipi.dtsi) - 720x1280, 4-lane MIPI
+	 * DSI video-burst mode, no MIPI-readable ID register
+	 * (lcd-id-tokernel = 0xffff, matched via panel_ops_mipi.c's
+	 * "Bringup force-attach" / dummy-LCD special case). The real panel
+	 * candidates are in aidata-lcd.dtsi, #include-d above this node so
+	 * their "lcds" entries merge in ahead of this one - sprd_panel.c
+	 * tries this dummy only if none of them matched.
+	 */
+	lcds {
+		lcd_dummy_mipi_hd {
+			sprd,lcd-id-tokernel = <0xffff>;
+			sprd,panel-if-type = <2>; /* SPRD_PANEL_TYPE_MIPI */
+			sprd,dsi-work-mode = <1>; /* video burst */
+			sprd,dsi-lane-number = <4>;
+			sprd,dsi-color-format = "rgb888";
+			sprd,phy-bit-clock = <500000>;
+
+			sprd,sleep-in-command = [05 00 00 01 10];
+			sprd,sleep-out-command = [05 00 00 01 11];
+
+			display-timings {
+				timing0 {
+					clock-frequency = <76800000>;
+					hactive = <720>;
+					vactive = <1280>;
+					hback-porch = <40>;
+					hfront-porch = <40>;
+					hsync-len = <20>;
+					vback-porch = <20>;
+					vfront-porch = <20>;
+					vsync-len = <4>;
+				};
+			};
+		};
+	};
+};
+
+/ {
+	i2c0: i2c@70300000 {
+		compatible = "sprd,sharkl5pro-i2c";
+		reg = <0 0x70300000 0 0x1000>;
+		clocks = <&apapb_gate 9>, <&ap_clk 5>, <&ext_26m>;
+		clock-names = "enable", "i2c", "source";
+		clock-frequency = <400000>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "disabled";
+	};
+
+	i2c1: i2c@70400000 {
+		compatible = "sprd,sharkl5pro-i2c";
+		reg = <0 0x70400000 0 0x1000>;
+		clocks = <&apapb_gate 10>, <&ap_clk 6>, <&ext_26m>;
+		clock-names = "enable", "i2c", "source";
+		clock-frequency = <400000>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "disabled";
+	};
+
+	i2c2: i2c@70500000 {
+		compatible = "sprd,sharkl5pro-i2c";
+		reg = <0 0x70500000 0 0x1000>;
+		clocks = <&apapb_gate 11>, <&ap_clk 7>, <&ext_26m>;
+		clock-names = "enable", "i2c", "source";
+		clock-frequency = <400000>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "disabled";
+	};
+
+	i2c3: i2c@70600000 {
+		compatible = "sprd,sharkl5pro-i2c";
+		reg = <0 0x70600000 0 0x1000>;
+		clocks = <&ap_clk 8>, <&ext_26m>, <&apapb_gate 12>;
+		clock-names = "i2c", "source", "enable";
+		clock-frequency = <400000>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "disabled";
+	};
+
+	i2c4: i2c@70700000 {
+		compatible = "sprd,sharkl5pro-i2c";
+		reg = <0 0x70700000 0 0x1000>;
+		clocks = <&apapb_gate 13>, <&ap_clk 9>, <&ext_26m>;
+		clock-names = "enable", "i2c", "source";
+		clock-frequency = <400000>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "okay";
+
+		/*
+		 * TI BQ2560x battery charger, ported in
+		 * drivers/power/bq2560x_charger.c. The vendor's own
+		 * adt1061.dts just has a top-level "bq2560x-charger"
+		 * node with a "sprd,bq2560x-i2c-bus = <4>" property
+		 * (its own non-DM-child i2c lookup scheme); here it's
+		 * a normal I2C-client child of i2c4 instead, at the
+		 * chip's fixed slave address 0x6b, matching how
+		 * upstream's DM_I2C uclass expects I2C clients to be
+		 * described.
+		 */
+		bq2560x_charger: charger@6b {
+			compatible = "sprd,bq2560x-charger", "ti,bq2560x";
+			reg = <0x6b>;
+		};
+	};
+};
+
+&sdio3 {
+	clocks = <&ap_clk 21>, <&apapb_gate 25>;
+	clock-names = "sdio", "enable";
+	assigned-clocks = <&ap_clk 21>;
+	assigned-clock-parents = <&pll1 CLK_RPLL>;
+	bus-width = <8>;
+	non-removable;
+	/*
+	 * Without vmmc-supply/vqmmc-supply, mmc_power_init() finds no
+	 * regulator (mmc->vmmc_supply stays NULL) and mmc_power_on() never
+	 * calls regulator_set_enable_if_allowed() on anything - the eMMC's
+	 * own core voltage LDO is left in whatever its PMIC-reset default
+	 * state is, instead of being explicitly turned on by U-Boot.
+	 * Confirmed on real ADT1061 hardware: CMD0/CMD1 (no data phase)
+	 * succeeded fine, but the first real DATA transfer (CMD8/
+	 * SEND_EXT_CSD) failed with a genuine DATA_CRC error every time -
+	 * consistent with marginal/insufficient core supply voltage.
+	 *
+	 * Confirmed from the vendor's REAL board config for this exact
+	 * SoC/board family (board/spreadtrum/ums512_1h10/sdio_cfg.c's
+	 * sdio_ctrl_info[] table, EMMC entry): ldo_core = "vddemmccore"
+	 * (-> vmmc-supply, core/VCC rail) and ldo_io = "vddgen0" (->
+	 * vqmmc-supply, IO/VCCQ rail). "vddsdio" is NOT the eMMC's IO
+	 * rail - it belongs to the separate SD/SDIO0 peripheral's own
+	 * table entry - using it here was wrong (verified on real
+	 * hardware: changing it alone did not fix the EXT_CSD DATA_CRC
+	 * failure, consistent with it never having been the eMMC's real
+	 * supply in the first place).
+	 */
+	vmmc-supply = <&vddemmccore>;
+	vqmmc-supply = <&vddgen0>;
+	status = "okay";
+};

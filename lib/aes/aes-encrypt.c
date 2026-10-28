@@ -86,7 +86,7 @@ int image_aes_add_cipher_data(struct image_cipher_info *info, void *keydest,
 
 	if (!keydest && !info->ivname) {
 		/* At least, store the IV in the FIT image */
-		ret = fdt_setprop(fit, node_noffset, FIT_IV_PROP,
+		ret = fdt_setprop(fit, node_noffset, "iv",
 				  info->iv, info->cipher->iv_len);
 		goto done;
 	}
@@ -137,11 +137,11 @@ int image_aes_add_cipher_data(struct image_cipher_info *info, void *keydest,
 
 	if (info->ivname)
 		/* Store the IV in the u-boot device tree */
-		ret = fdt_setprop(keydest, node, FIT_IV_PROP,
+		ret = fdt_setprop(keydest, node, "iv",
 				  info->iv, info->cipher->iv_len);
 	else
 		/* Store the IV in the FIT image */
-		ret = fdt_setprop(fit, node_noffset, FIT_IV_PROP,
+		ret = fdt_setprop(fit, node_noffset, "iv",
 				  info->iv, info->cipher->iv_len);
 
 	if (!ret)

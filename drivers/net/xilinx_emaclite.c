@@ -473,11 +473,11 @@ try_again:
 			debug("Data not found in rx_ping buffer\n");
 			/* Pong buffer is not available - return immediately */
 			if (!emaclite->rxpp)
-				return -EAGAIN;
+				return -1;
 
 			/* Try pong buffer if this is first attempt */
 			if (attempt++)
-				return -EAGAIN;
+				return -1;
 			emaclite->use_rx_pong_buffer_next =
 					!emaclite->use_rx_pong_buffer_next;
 			goto try_again;
@@ -493,7 +493,7 @@ try_again:
 			debug("Data not found in rx_pong buffer\n");
 			/* Try ping buffer if this is first attempt */
 			if (attempt++)
-				return -EAGAIN;
+				return -1;
 			emaclite->use_rx_pong_buffer_next =
 					!emaclite->use_rx_pong_buffer_next;
 			goto try_again;

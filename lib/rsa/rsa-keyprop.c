@@ -12,7 +12,6 @@
 #include <image.h>
 #include <malloc.h>
 #include <crypto/internal/rsa.h>
-#include <linux/kernel.h>
 #include <u-boot/rsa-mod-exp.h>
 #include <asm/unaligned.h>
 
@@ -681,10 +680,6 @@ int rsa_gen_key_prop(const void *key, uint32_t keylen, struct key_prop **prop)
 	for (i = 0; i < rsa_key.n_sz && !rsa_key.n[i]; i++)
 		;
 	(*prop)->num_bits = (rsa_key.n_sz - i) * 8;
-	if (!(*prop)->num_bits) {
-		ret = -EINVAL;
-		goto out;
-	}
 	(*prop)->modulus = malloc(rsa_key.n_sz - i);
 	if (!(*prop)->modulus) {
 		ret = -ENOMEM;
@@ -692,9 +687,8 @@ int rsa_gen_key_prop(const void *key, uint32_t keylen, struct key_prop **prop)
 	}
 	memcpy((void *)(*prop)->modulus, &rsa_key.n[i], rsa_key.n_sz - i);
 
-	n = calloc(sizeof(uint32_t), 1 + DIV_ROUND_UP((*prop)->num_bits, 32));
-	rr = calloc(sizeof(uint32_t),
-		    1 + DIV_ROUND_UP((*prop)->num_bits * 2, 32));
+	n = calloc(sizeof(uint32_t), 1 + ((*prop)->num_bits >> 5));
+	rr = calloc(sizeof(uint32_t), 1 + (((*prop)->num_bits * 2) >> 5));
 	rrtmp = calloc(sizeof(uint32_t), 2 + (((*prop)->num_bits * 2) >> 5));
 	if (!n || !rr || !rrtmp) {
 		ret = -ENOMEM;

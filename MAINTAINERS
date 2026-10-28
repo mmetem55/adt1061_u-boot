@@ -377,8 +377,6 @@ F:	arch/arm/mach-hpe/
 F:	board/hpe/
 F:	configs/gxp_defconfig
 F:	doc/device-tree-bindings/spi/hpe,gxp-spi.yaml
-F:	drivers/net/gxp_umac.c
-F:	drivers/net/gxp_umac.h
 F:	drivers/misc/gxp_eeprom.c
 F:	drivers/sysinfo/gxp.c
 F:	drivers/timer/gxp-timer.c
@@ -1451,8 +1449,7 @@ F:	drivers/power/
 F:	include/power/
 
 POWERPC
-M:	Bradley Morgan <brads@mainlining.org>
-S:	Maintained
+S:	Orphan (Since 2022-10-21)
 F:	arch/powerpc/
 
 POWERPC MPC8XX
@@ -1531,7 +1528,6 @@ M:	Yixun Lan <dlan@kernel.org>
 S:	Maintained
 T:	git https://git.u-boot-project.org/u-boot/custodians/u-boot-spacemit.git
 F:	arch/riscv/dts/k1-*-u-boot.dtsi
-F:	drivers/phy/spacemit/phy-k1-usb2.c
 N:	spacemit
 K:	spacemit
 
@@ -1647,15 +1643,6 @@ T:	git https://git.u-boot-project.org/u-boot/custodians/u-boot-spi.git
 F:	drivers/spi/
 F:	include/spi*
 
-SPI EEPROM
-M:	João Loureiro <joaofl@gmail.com>
-S:	Maintained
-F:	drivers/misc/spi_eeprom.c
-F:	drivers/misc/spi_eeprom_emul.c
-F:	drivers/misc/spi_eeprom_priv.h
-F:	include/spi_eeprom.h
-F:	test/dm/spi_eeprom.c
-
 SPI NAND
 M:	Dario Binacchi <dario.binacchi@amarulasolutions.com>
 M:	Michael Trimarchi <michael@amarulasolutions.com>
@@ -1697,12 +1684,11 @@ F:	common/stackprot.c
 F:	cmd/stackprot_test.c
 F:	test/py/tests/test_stackprotector.py
 
-STARTEK PANELS
-M:	David Lechner <dlechner@baylibre.com>
+STARTEK KD070FHFID015 PANEL
 M:	Julien Stephan <jstephan@baylibre.com>
 R:	GSS_MTK_Uboot_upstream <GSS_MTK_Uboot_upstream@mediatek.com>
 S:	Maintained
-F:	drivers/video/panel-startek-*
+F:	drivers/video/panel-startek-kd070fhfid015.c
 
 TARGET_BCMNS3
 M:	Rayagonda Kokatanur <rayagonda.kokatanur@broadcom.com>

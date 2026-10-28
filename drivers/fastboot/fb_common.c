@@ -262,4 +262,15 @@ void fastboot_init(void *buf_addr, u32 buf_size)
 	fastboot_buf_size = buf_size ? buf_size : CONFIG_FASTBOOT_BUF_SIZE;
 	fastboot_set_progress_callback(NULL);
 
+	board_fastboot_setup();
+}
+
+/*
+ * Default (no-op) board_fastboot_setup() - see the declaration in
+ * include/fastboot.h. A board overrides this, same as it would
+ * fastboot_set_reboot_flag() just above, by defining its own
+ * non-weak board_fastboot_setup().
+ */
+__weak void board_fastboot_setup(void)
+{
 }

@@ -531,8 +531,7 @@ int fit_image_write_cipher(void *fit, int image_noffset, int noffset,
 	}
 
 	/* add non ciphered data size */
-	ret = fdt_setprop_u32(fit, image_noffset,
-			      FIT_DATA_SIZE_UNCIPHERED_PROP, size);
+	ret = fdt_setprop_u32(fit, image_noffset, "data-size-unciphered", size);
 	if (ret == -FDT_ERR_NOSPACE) {
 		ret = -ENOSPC;
 		goto out;
@@ -626,8 +625,7 @@ int fit_image_cipher_data(const char *keydir, void *keydest,
 	 * image is already encrypted. This is important as 'mkimage -F' can be
 	 * run multiple times on a FIT image.
 	 */
-	if (fdt_getprop(fit, image_noffset,
-			FIT_DATA_SIZE_UNCIPHERED_PROP, &len))
+	if (fdt_getprop(fit, image_noffset, "data-size-unciphered", &len))
 		return 0;
 	if (len != -FDT_ERR_NOTFOUND) {
 		fprintf(stderr, "Failure testing for data-size-unciphered\n");

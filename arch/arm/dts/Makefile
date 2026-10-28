@@ -438,6 +438,9 @@ dtb-$(CONFIG_ARCH_SOCFPGA) +=				\
 	socfpga_cyclone5_ac501soc.dtb			\
 	socfpga_cyclone5_ac550soc.dtb
 
+dtb-$(CONFIG_ARCH_SPRD) +=				\
+	adt1061.dtb
+
 dtb-$(CONFIG_TARGET_DRA7XX_EVM) += dra72-evm.dtb dra7-evm.dtb	\
 	dra72-evm-revc.dtb dra71-evm.dtb dra76-evm.dtb
 dtb-$(CONFIG_TARGET_AM57XX_EVM) += am57xx-beagle-x15.dtb \
@@ -1046,16 +1049,8 @@ dtb-$(CONFIG_SOC_K3_AM62D2) += k3-am62d2-r5-evm.dtb
 dtb-$(CONFIG_SOC_K3_AM62P5) += k3-am62p5-r5-sk.dtb \
 			       k3-am62p5-verdin-r5.dtb
 
-mt8371-genio-520-evk-edp-dtbs := mt8371-genio-520-evk.dtb mt8371-genio-common-edp.dtbo
 mt8371-genio-520-evk-ufs-dtbs := mt8371-genio-520-evk.dtb mt8371-genio-common-ufs.dtbo
-mt8371-genio-520-evk-ufs-edp-dtbs := mt8371-genio-520-evk.dtb \
-				     mt8371-genio-common-ufs.dtbo \
-				     mt8371-genio-common-edp.dtbo
-mt8391-genio-720-evk-edp-dtbs := mt8391-genio-720-evk.dtb mt8371-genio-common-edp.dtbo
 mt8391-genio-720-evk-ufs-dtbs := mt8391-genio-720-evk.dtb mt8371-genio-common-ufs.dtbo
-mt8391-genio-720-evk-ufs-edp-dtbs := mt8391-genio-720-evk.dtb \
-				     mt8371-genio-common-ufs.dtbo \
-				     mt8371-genio-common-edp.dtbo
 
 dtb-$(CONFIG_ARCH_MEDIATEK) += \
 	mt7622-rfb.dtb \
@@ -1076,15 +1071,10 @@ dtb-$(CONFIG_ARCH_MEDIATEK) += \
 	mt7988-rfb.dtb \
 	mt7988-sd-rfb.dtb \
 	mt8183-pumpkin.dtb \
-	mt8366-genio-360-evk.dtb \
 	mt8371-genio-520-evk.dtb \
-	mt8371-genio-520-evk-edp.dtb \
 	mt8371-genio-520-evk-ufs.dtb \
-	mt8371-genio-520-evk-ufs-edp.dtb \
 	mt8391-genio-720-evk.dtb \
-	mt8391-genio-720-evk-edp.dtb \
 	mt8391-genio-720-evk-ufs.dtb \
-	mt8391-genio-720-evk-ufs-edp.dtb \
 	mt8512-bm1-emmc.dtb \
 	mt8516-pumpkin.dtb \
 	mt8518-ap1-emmc.dtb

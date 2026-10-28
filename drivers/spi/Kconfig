@@ -717,4 +717,14 @@ config SYNQUACER_SPI
 	  be used to access the SPI interface and SPI NOR flash on platforms
 	  embedding this HS-SPI IP core.
 
+config SPRD_ADI_SPI
+	bool "Unisoc (Spreadtrum) ADI bus driver"
+	depends on ARCH_SPRD
+	default y
+	help
+	  Enable the Unisoc/Spreadtrum ADI ("Anolog Die Interface") bus
+	  driver, modeled as a SPI controller. This is the 2-wire bus used
+	  by the AP to reach the PMIC and other analog-die peripheral
+	  register space on SoCs such as UMS512 (sharkl5pro).
+
 endif # menu "SPI Support"

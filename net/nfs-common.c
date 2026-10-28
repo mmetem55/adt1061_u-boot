@@ -503,8 +503,6 @@ static int rpc_lookup_reply(int prog, uchar *pkt, unsigned int len)
 {
 	struct rpc_t rpc_pkt;
 
-	if (len > sizeof(rpc_pkt.u.data))
-		return -NFS_RPC_DROP;
 	memcpy(&rpc_pkt.u.data[0], pkt, len);
 
 	if (ntohl(rpc_pkt.u.reply.id) > rpc_id)
@@ -534,8 +532,6 @@ static int nfs_mount_reply(uchar *pkt, unsigned int len)
 	struct rpc_t rpc_pkt;
 	int ret;
 
-	if (len > sizeof(rpc_pkt.u.data))
-		return -NFS_RPC_DROP;
 	memcpy(&rpc_pkt.u.data[0], pkt, len);
 
 	if (ntohl(rpc_pkt.u.reply.id) > rpc_id)
@@ -565,8 +561,6 @@ static int nfs_umountall_reply(uchar *pkt, unsigned int len)
 {
 	struct rpc_t rpc_pkt;
 
-	if (len > sizeof(rpc_pkt.u.data))
-		return -NFS_RPC_DROP;
 	memcpy(&rpc_pkt.u.data[0], pkt, len);
 
 	if (ntohl(rpc_pkt.u.reply.id) > rpc_id)
@@ -590,8 +584,6 @@ static int nfs_lookup_reply(uchar *pkt, unsigned int len)
 	struct rpc_t rpc_pkt;
 	int ret;
 
-	if (len > sizeof(rpc_pkt.u.data))
-		return -NFS_RPC_DROP;
 	memcpy(&rpc_pkt.u.data[0], pkt, len);
 
 	if (ntohl(rpc_pkt.u.reply.id) > rpc_id)
@@ -654,8 +646,6 @@ static int nfs_readlink_reply(uchar *pkt, unsigned int len)
 	size_t data_offset;
 	int nfsv3_data_offset = 0;
 
-	if (len > sizeof(rpc_pkt))
-		return -NFS_RPC_DROP;
 	memcpy((unsigned char *)&rpc_pkt, pkt, len);
 
 	if (ntohl(rpc_pkt.u.reply.id) > rpc_id)

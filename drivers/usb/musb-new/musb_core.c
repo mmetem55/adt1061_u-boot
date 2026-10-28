@@ -1984,12 +1984,28 @@ musb_init_controller(struct musb_hdrc_platform_data *plat, struct device *dev,
 	pm_runtime_get_sync(musb->controller);
 
 #ifndef CONFIG_USB_MUSB_PIO_ONLY
-	if (use_dma && dev->dma_mask) {
+	/*
+	 * Not "use_dma && dev->dma_mask": on at least one board using this
+	 * macro (CONFIG_USB_SPRD_DMA, drivers/usb/musb-new/
+	 * sprd_sharkl5pro.c), "dev" is NULL - board_usb_init() calls
+	 * musb_register() with bdata=NULL, same as every other board on
+	 * this driver (they just never exercise this code path, since they
+	 * all select CONFIG_USB_MUSB_PIO_ONLY). dev->dma_mask would be a
+	 * NULL-pointer dereference here, and struct device (drivers/usb/
+	 * musb-new's "linux-compat.h" one, not a real DM udevice) has no
+	 * such field to check anyway. The vendor adt1061_u-boot tree's own
+	 * fork of this function drops the dma_mask check entirely, for the
+	 * same reason - mirror that. Likewise, dma_controller->start is an
+	 * optional callback (see its comment in musb_dma.h); calling it
+	 * unconditionally crashes on a controller (like sprd's) that
+	 * doesn't set one.
+	 */
+	if (use_dma) {
 		struct dma_controller	*c;
 
 		c = dma_controller_create(musb, musb->mregs);
 		musb->dma_controller = c;
-		if (c)
+		if (c && c->start)
 			(void) c->start(c);
 	}
 #endif

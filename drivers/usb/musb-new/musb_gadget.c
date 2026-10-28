@@ -25,6 +25,7 @@
 #include <dm.h>
 #include <dm/device_compat.h>
 #include <linux/bug.h>
+#include <linux/dma-mapping.h>
 #include <linux/printk.h>
 #include <linux/usb/ch9.h>
 #include "linux-compat.h"
@@ -104,23 +105,26 @@ static inline void map_dma_buffer(struct musb_request *request,
 	if (!compatible)
 		return;
 
+	/*
+	 * U-Boot's own <linux/dma-mapping.h> dma_map_single()/
+	 * dma_unmap_single() (just below) take (vaddr, len, dir) - no
+	 * struct device* first argument, and there is no
+	 * dma_sync_single_for_device()/_for_cpu() equivalent at all, unlike
+	 * the Linux versions this file was ported from. Matches the vendor
+	 * adt1061_u-boot tree's own fix for this same build error: use the
+	 * real U-Boot signature, and drop the "already DMA-mapped, just
+	 * sync it" PRE_MAPPED branch, which no gadget driver relevant here
+	 * (Fastboot, mass storage) exercises in practice (they always queue
+	 * fresh buffers with request.dma == DMA_ADDR_INVALID).
+	 */
 	if (request->request.dma == DMA_ADDR_INVALID) {
 		request->request.dma = dma_map_single(
-				musb->controller,
 				request->request.buf,
 				request->request.length,
 				request->tx
 					? DMA_TO_DEVICE
 					: DMA_FROM_DEVICE);
 		request->map_state = MUSB_MAPPED;
-	} else {
-		dma_sync_single_for_device(musb->controller,
-			request->request.dma,
-			request->request.length,
-			request->tx
-				? DMA_TO_DEVICE
-				: DMA_FROM_DEVICE);
-		request->map_state = PRE_MAPPED;
 	}
 }
 
@@ -137,20 +141,13 @@ static inline void unmap_dma_buffer(struct musb_request *request,
 		return;
 	}
 	if (request->map_state == MUSB_MAPPED) {
-		dma_unmap_single(musb->controller,
+		dma_unmap_single(
 			request->request.dma,
 			request->request.length,
 			request->tx
 				? DMA_TO_DEVICE
 				: DMA_FROM_DEVICE);
 		request->request.dma = DMA_ADDR_INVALID;
-	} else { /* PRE_MAPPED */
-		dma_sync_single_for_cpu(musb->controller,
-			request->request.dma,
-			request->request.length,
-			request->tx
-				? DMA_TO_DEVICE
-				: DMA_FROM_DEVICE);
 	}
 	request->map_state = UN_MAPPED;
 }
@@ -454,6 +451,18 @@ static void txstate(struct musb *musb, struct musb_request *req)
 				request->zero,
 				request->dma + request->actual,
 				request_size);
+#elif defined(CONFIG_USB_SPRD_DMA)
+		/*
+		 * The Spreadtrum/Unisoc descriptor-linklist DMA engine owns
+		 * TXCSR's DMAMODE/DMAENAB/AUTOSET bits permanently from the
+		 * moment the endpoint was enabled (sprd_dma_channel_allocate()
+		 * in sprd_musbhsdma.c) - nothing further to write to TXCSR
+		 * here, just hand the controller the buffer and arm it.
+		 */
+		use_dma = use_dma && c->channel_program(
+				musb_ep->dma, musb_ep->packet_sz,
+				0,
+				request->dma + request->actual, request_size);
 #endif
 	}
 #endif
@@ -667,6 +676,36 @@ static void rxstate(struct musb *musb, struct musb_request *req)
 		return;
 	}
 
+#ifdef CONFIG_USB_SPRD_DMA
+	/*
+	 * Confirmed on real hardware (a periodic register dump showed
+	 * RXCSR/RXCOUNT holding a fully-received packet - RXPKTRDY set,
+	 * FIFOFULL set, the real byte count - indefinitely, while INTRRX
+	 * (musb->int_rx) never once left 0): this controller's DMA engine
+	 * pulls the FIFO straight into memory on its own and raises its
+	 * own completion interrupt (sprd_dma_interrupt(), via the
+	 * MUSB_LISTEND_INT_STS / MUSB_DMA_INTR_MASK_STATUS registers) -
+	 * it never raises the ordinary per-endpoint RXPKTRDY interrupt
+	 * while RXCSR.DMAENAB is set, so rxstate() never gets re-entered
+	 * to notice a pending packet and arm the transfer "just in time"
+	 * the way the Inventra/UX500 branches below do. The DMA channel
+	 * has to be armed here, on this very first (priming) call, before
+	 * any data has arrived - not gated behind "csr & RXPKTRDY".
+	 */
+	if (is_buffer_mapped(req) && request->actual < request->length) {
+		struct dma_controller	*c = musb->dma_controller;
+		struct dma_channel	*channel = musb_ep->dma;
+		int transfer_size = min_t(unsigned int,
+				request->length - request->actual,
+				channel->max_len);
+
+		c->channel_program(channel, musb_ep->packet_sz, 0,
+				    request->dma + request->actual,
+				    transfer_size);
+		return;
+	}
+#endif
+
 	if (csr & MUSB_RXCSR_P_SENDSTALL) {
 		dev_dbg(musb->controller, "%s stalling, RXCSR %04x\n",
 		    musb_ep->end_point.name, csr);
@@ -841,6 +880,14 @@ static void rxstate(struct musb *musb, struct musb_request *req)
 					return;
 			}
 #endif	/* Mentor's DMA */
+			/*
+			 * CONFIG_USB_SPRD_DMA has no branch here: its DMA
+			 * channel is always armed earlier, up at the top of
+			 * this function (see the comment there) - this
+			 * RXPKTRDY-triggered call never actually happens for
+			 * it, since this hardware's RXCSR.DMAENAB suppresses
+			 * the ordinary RXPKTRDY interrupt entirely.
+			 */
 
 			fifo_count = request->length - request->actual;
 			dev_dbg(musb->controller, "%s OUT/RX pio fifo %d/%d, maxpacket %d\n",

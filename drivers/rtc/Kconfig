@@ -208,6 +208,15 @@ config RTC_RV8803
 	  The Micro Crystal RV8803 is a high accuracy, ultra-low power I2C
 	  Real Time Clock (RTC) with temperature compensation.
 
+config RTC_SC27XX
+	bool "Enable Unisoc/Spreadtrum SC27xx PMIC RTC driver"
+	depends on DM_RTC && DM_PMIC
+	help
+	  Support for the RTC block built into the Unisoc/Spreadtrum
+	  SC27xx-family PMICs (e.g. SC2730), accessed as a child device
+	  of the PMIC over its own register bus (ADI/SPI) rather than a
+	  separate I2C/SPI chip select.
+
 	  This driver supports reading and writing the RTC/calendar and
 	  detects total power failures.
 

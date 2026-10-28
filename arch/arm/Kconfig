@@ -1237,6 +1237,19 @@ config ARCH_SOCFPGA
 	imply SPL_SPI
 	imply L2X0_CACHE
 
+config ARCH_SPRD
+	bool "Unisoc (Spreadtrum) SoCs"
+	select ARM64
+	select DM
+	select DM_SERIAL
+	select OF_CONTROL
+	help
+	  Support for Unisoc (formerly Spreadtrum) mobile SoCs, such as the
+	  UMS512 (sharkl5pro) found in the Aidata ADT1061 tablet. U-Boot is
+	  loaded directly into DRAM by the Unisoc FDL1/FDL2 preloader, which
+	  also performs DRAM training, so no SPL/DRAM-init code is required
+	  here.
+
 config ARCH_SUNXI
 	bool "Support sunxi (Allwinner) SoCs"
 	select BINMAN
@@ -2427,6 +2440,8 @@ source "arch/arm/mach-sc5xx/Kconfig"
 source "arch/arm/mach-snapdragon/Kconfig"
 
 source "arch/arm/mach-socfpga/Kconfig"
+
+source "arch/arm/mach-sprd/Kconfig"
 
 source "arch/arm/mach-sti/Kconfig"
 

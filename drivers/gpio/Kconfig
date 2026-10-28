@@ -772,4 +772,13 @@ config MPFS_GPIO
 	help
 	  Enable to support the GPIO driver on Polarfire SoC
 
+config SPRD_GPIO
+	bool "Unisoc/Spreadtrum GPIO driver"
+	depends on DM_GPIO && ARCH_SPRD
+	default y if ARCH_SPRD
+	help
+	  Support for the on-chip GPIO controller found on Unisoc/
+	  Spreadtrum SoCs (sharkl5pro and similar), compatible
+	  "sprd,pike2-gpio".
+
 endif

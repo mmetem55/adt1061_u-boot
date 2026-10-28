@@ -79,6 +79,15 @@ config DESIGNWARE_WATCHDOG
 	  Enable this to support Designware Watchdog Timer IP, present e.g.
 	  on Altera SoCFPGA SoCs.
 
+config WDT_SC27XX
+	bool "Unisoc/Spreadtrum SC27xx PMIC watchdog driver"
+	depends on WDT && DM_PMIC
+	help
+	  Support for the watchdog block built into the Unisoc/Spreadtrum
+	  SC27xx-family PMICs (e.g. SC2730), accessed as a child device
+	  of the PMIC over its own register bus (ADI/SPI) rather than a
+	  separate AP-side watchdog IP.
+
 config WDT
 	bool "Enable driver model for watchdog timer drivers"
 	depends on DM
