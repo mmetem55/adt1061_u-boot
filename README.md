@@ -62,7 +62,7 @@ make
 veya otomatik script ile
 
 ```sh
-./make.sh            # -jN ile paralel iş sayısı verilebilir
+./make.sh
 ```
 
 `configs/adt1061_defconfig` üzerinde yapılan her değişiklik sonrası
