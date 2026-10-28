@@ -160,7 +160,6 @@ struct fb_con2fbmap {
 #define VESA_HSYNC_SUSPEND	2
 #define VESA_POWERDOWN		3
 
-
 enum {
 	/* screen: unblanked, hsync: on,  vsync: on */
 	FB_BLANK_UNBLANK       = VESA_NO_BLANKING,
@@ -388,14 +387,14 @@ struct fb_cursor_user {
 #define FB_EVENT_GET_CONSOLE_MAP	0x07
 /*	CONSOLE-SPECIFIC: set console to framebuffer mapping */
 #define FB_EVENT_SET_CONSOLE_MAP	0x08
-/*	A hardware display blank change occured */
+/*	A hardware display blank change occurred */
 #define FB_EVENT_BLANK			0x09
 /*	Private modelist is to be replaced */
 #define FB_EVENT_NEW_MODELIST		0x0A
 /*	The resolution of the passed in fb_info about to change and
 	all vc's should be changed	   */
 #define FB_EVENT_MODE_CHANGE_ALL	0x0B
-/*	A software display blank change occured */
+/*	A software display blank change occurred */
 #define FB_EVENT_CONBLANK		0x0C
 /*	Get drawing requirements	*/
 #define FB_EVENT_GET_REQ		0x0D
@@ -537,7 +536,7 @@ struct fb_info {
 #define fb_writeq sbus_writeq
 #define fb_memset sbus_memset_io
 
-#elif defined(__i386__) || defined(__alpha__) || defined(__x86_64__) || defined(__hppa__) || defined(__sh__) || defined(__powerpc__) || defined(__avr32__) || defined(__bfin__)
+#elif defined(__i386__) || defined(__alpha__) || defined(__x86_64__) || defined(__hppa__) || defined(__sh__) || defined(__powerpc__) || defined(__bfin__)
 
 #define fb_readb __raw_readb
 #define fb_readw __raw_readw
@@ -582,7 +581,6 @@ struct fb_info {
 #define FB_MODE_IS_CALCULATED	8
 #define FB_MODE_IS_FIRST	16
 #define FB_MODE_IS_FROM_VAR	32
-
 
 /* drivers/video/fbcmap.c */
 

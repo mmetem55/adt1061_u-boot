@@ -4,39 +4,72 @@ menu "M68000 architecture"
 config SYS_ARCH
 	default "m68k"
 
+config STATIC_RELA
+	default y
+
 # processor family
 config MCF520x
+	select OF_CONTROL
+	select DM
+	select DM_SERIAL
+	select ARCH_COLDFIRE
 	bool
 
 config MCF52x2
+	select OF_CONTROL
+	select DM
+	select DM_SERIAL
+	select ARCH_COLDFIRE
 	bool
 
 config MCF523x
+	select OF_CONTROL
+	select DM
+	select DM_SERIAL
+	select ARCH_COLDFIRE
 	bool
 
 config MCF530x
+	select OF_CONTROL
+	select DM
+	select DM_SERIAL
+	select ARCH_COLDFIRE
 	bool
 
 config MCF5301x
+	select OF_CONTROL
+	select DM
+	select DM_SERIAL
+	select ARCH_COLDFIRE
 	bool
 
 config MCF532x
+	select OF_CONTROL
+	select DM
+	select DM_SERIAL
+	select ARCH_COLDFIRE
 	bool
 
 config MCF537x
+	select OF_CONTROL
+	select DM
+	select DM_SERIAL
+	select ARCH_COLDFIRE
 	bool
 
 config MCF5441x
+	select OF_CONTROL
+	select DM
+	select DM_SERIAL
+	select ARCH_COLDFIRE
+	select CREATE_ARCH_SYMLINK
 	bool
 
-config MCF5445x
+config M680x0
 	bool
-
-config MCF5227x
-	bool
-
-config MCF547x_8x
-	bool
+	help
+	  This enables support for the classic Motorola 68000 family of
+	  processors.
 
 # processor type
 config M5208
@@ -92,33 +125,17 @@ config M54418
 	bool
 	select MCF5441x
 
-config M54451
+config M68040
 	bool
-	select MCF5445x
+	select M680x0
 
-config M54455
+# peripherals
+config CF_DSPI
 	bool
-	select MCF5445x
-
-config M52277
-	bool
-	select MCF5227x
-
-config M547x
-	bool
-	select MCF547x_8x
-
-config M548x
-	bool
-	select MCF547x_8x
 
 choice
 	prompt "Target select"
 	optional
-
-config TARGET_M52277EVB
-	bool "Support M52277EVB"
-	select M52277
 
 config TARGET_M5235EVB
 	bool "Support M5235EVB"
@@ -131,6 +148,7 @@ config TARGET_COBRA5272
 config TARGET_EB_CPU5282
 	bool "Support eb_cpu5282"
 	select M5282
+	select HW_WATCHDOG
 
 config TARGET_M5208EVBE
 	bool "Support M5208EVBE"
@@ -142,10 +160,6 @@ config TARGET_M5249EVB
 
 config TARGET_M5253DEMO
 	bool "Support M5253DEMO"
-	select M5253
-
-config TARGET_M5253EVBE
-	bool "Support M5253EVBE"
 	select M5253
 
 config TARGET_M5272C3
@@ -160,10 +174,6 @@ config TARGET_M5282EVB
 	bool "Support M5282EVB"
 	select M5282
 
-config TARGET_ASTRO_MCF5373L
-	bool "Support astro_mcf5373l"
-	select M5373
-
 config TARGET_M53017EVB
 	bool "Support M53017EVB"
 	select M53015
@@ -176,52 +186,65 @@ config TARGET_M5373EVB
 	bool "Support M5373EVB"
 	select M5373
 
-config TARGET_M54418TWR
-	bool "Support M54418TWR"
-	select M54418
-
-config TARGET_M54451EVB
-	bool "Support M54451EVB"
-	select M54451
-
-config TARGET_M54455EVB
-	bool "Support M54455EVB"
-	select M54455
-
-config TARGET_M5475EVB
-	bool "Support M5475EVB"
-	select M547x
-
-config TARGET_M5485EVB
-	bool "Support M5485EVB"
-	select M548x
-
 config TARGET_AMCORE
 	bool "Support AMCORE"
 	select M5307
 
+config TARGET_STMARK2
+	bool "Support stmark2"
+	select CF_DSPI
+	select M54418
+
+config TARGET_QEMU_M68K
+	bool "Support QEMU m68k virt"
+	select M68040
+	select BOARD_EARLY_INIT_R
+	select VIRTIO_MMIO
+	imply CMD_DM
+	help
+	  This target supports the QEMU m68k virtual machine (-M virt).
+	  It simulates a Motorola 68040 CPU with Goldfish peripherals.
+
 endchoice
 
+config SYS_CPU
+	string
+	default "mcf52x2" if MCF52x2
+	default "mcf523x" if MCF523x
+	default "mcf530x" if MCF530x
+	default "mcf532x" if MCF532x
+	default "mcf5445x" if MCF5445x
+	default "m680x0" if M680x0
+
+config ARCH_COLDFIRE
+	bool
+
 source "board/BuS/eb_cpu5282/Kconfig"
-source "board/astro/mcf5373l/Kconfig"
 source "board/cobra5272/Kconfig"
-source "board/freescale/m5208evbe/Kconfig"
-source "board/freescale/m52277evb/Kconfig"
-source "board/freescale/m5235evb/Kconfig"
-source "board/freescale/m5249evb/Kconfig"
-source "board/freescale/m5253demo/Kconfig"
-source "board/freescale/m5253evbe/Kconfig"
-source "board/freescale/m5272c3/Kconfig"
-source "board/freescale/m5275evb/Kconfig"
-source "board/freescale/m5282evb/Kconfig"
-source "board/freescale/m53017evb/Kconfig"
-source "board/freescale/m5329evb/Kconfig"
-source "board/freescale/m5373evb/Kconfig"
-source "board/freescale/m54418twr/Kconfig"
-source "board/freescale/m54451evb/Kconfig"
-source "board/freescale/m54455evb/Kconfig"
-source "board/freescale/m547xevb/Kconfig"
-source "board/freescale/m548xevb/Kconfig"
+source "board/nxp/m5208evbe/Kconfig"
+source "board/nxp/m5235evb/Kconfig"
+source "board/nxp/m5249evb/Kconfig"
+source "board/nxp/m5253demo/Kconfig"
+source "board/nxp/m5272c3/Kconfig"
+source "board/nxp/m5275evb/Kconfig"
+source "board/nxp/m5282evb/Kconfig"
+source "board/nxp/m53017evb/Kconfig"
+source "board/nxp/m5329evb/Kconfig"
+source "board/nxp/m5373evb/Kconfig"
 source "board/sysam/amcore/Kconfig"
+source "board/sysam/stmark2/Kconfig"
+source "board/emulation/qemu-m68k/Kconfig"
+
+config M68K_QEMU
+	bool "Build with workarounds for incomplete QEMU emulation"
+	help
+	  QEMU 8.x currently does not implement RAMBAR accesses and
+	  DMA timers. Enable this option for U-Boot CI purposes only
+	  to skip the RAMBAR accesses.
+
+config MCFTMR
+	bool "Use DMA timer"
+	default y if !M68K_QEMU
+	default n if M68K_QEMU
 
 endmenu

@@ -1,7 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * This file is part of GNU CC.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 typedef unsigned int UWtype;
@@ -16,7 +15,6 @@ typedef long long DItype;
 typedef unsigned long long DSItype;
 
 #include "longlong.h"
-
 
 typedef int word_type;
 typedef long Wtype;
@@ -46,7 +44,6 @@ const UQItype __clz_tab[256] =
   8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,
   8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8
 };
-
 
 DWtype
 __ashldi3 (DWtype u, word_type b)
@@ -389,7 +386,6 @@ __negdi2 (DWtype u)
   return w.ll;
 }
 
-
 DWtype
 __muldi3 (DWtype u, DWtype v)
 {
@@ -440,7 +436,6 @@ __ucmpdi2 (DWtype a, DWtype b)
     return 2;
   return 1;
 }
-
 
 UDWtype
 __udivdi3 (UDWtype n, UDWtype d)
@@ -508,13 +503,11 @@ __divsi3 (SItype a, SItype b)
   return res;
 }
 
-
 SItype
 __udivsi3 (SItype a, SItype b)
 {
   return udivmodsi4 (a, b, 0);
 }
-
 
 SItype
 __modsi3 (SItype a, SItype b)

@@ -1,25 +1,32 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Driver for Marvell NETA network card for Armada XP and Armada 370 SoCs.
  *
  * U-Boot version:
- * Copyright (C) 2014 Stefan Roese <sr@denx.de>
+ * Copyright (C) 2014-2015 Stefan Roese <sr@denx.de>
  *
  * Based on the Linux version which is:
  * Copyright (C) 2012 Marvell
  *
  * Rami Rosen <rosenr@marvell.com>
  * Thomas Petazzoni <thomas.petazzoni@free-electrons.com>
- *
- * SPDX-License-Identifier:	GPL-2.0
  */
 
-#include <common.h>
+#include <cpu_func.h>
+#include <dm.h>
+#include <log.h>
 #include <net.h>
 #include <netdev.h>
 #include <config.h>
 #include <malloc.h>
+#include <asm/cache.h>
 #include <asm/io.h>
-#include <asm/errno.h>
+#include <dm/device_compat.h>
+#include <dm/devres.h>
+#include <linux/bitops.h>
+#include <linux/bug.h>
+#include <linux/delay.h>
+#include <linux/errno.h>
 #include <phy.h>
 #include <miiphy.h>
 #include <watchdog.h>
@@ -27,21 +34,9 @@
 #include <asm/arch/soc.h>
 #include <linux/compat.h>
 #include <linux/mbus.h>
+#include <asm-generic/gpio.h>
 
-#if !defined(CONFIG_PHYLIB)
-# error Marvell mvneta requires PHYLIB
-#endif
-
-/* Some linux -> U-Boot compatibility stuff */
-#define netdev_err(dev, fmt, args...)		\
-	printf(fmt, ##args)
-#define netdev_warn(dev, fmt, args...)		\
-	printf(fmt, ##args)
-#define netdev_info(dev, fmt, args...)		\
-	printf(fmt, ##args)
-
-#define CONFIG_NR_CPUS		1
-#define BIT(nr)			(1UL << (nr))
+#define MVNETA_NR_CPUS		1
 #define ETH_HLEN		14	/* Total octets in header */
 
 /* 2(HW hdr) 14(MAC hdr) 4(CRC) 32(extra for cache prefetch) */
@@ -89,7 +84,13 @@
 #define MVNETA_WIN_BASE(w)                      (0x2200 + ((w) << 3))
 #define MVNETA_WIN_SIZE(w)                      (0x2204 + ((w) << 3))
 #define MVNETA_WIN_REMAP(w)                     (0x2280 + ((w) << 2))
+#define MVNETA_WIN_SIZE_MASK			(0xffff0000)
 #define MVNETA_BASE_ADDR_ENABLE                 0x2290
+#define      MVNETA_BASE_ADDR_ENABLE_BIT	0x1
+#define      MVNETA_AC5_CNM_DDR_TARGET		0x2
+#define      MVNETA_AC5_CNM_DDR_ATTR		0xb
+#define MVNETA_PORT_ACCESS_PROTECT              0x2294
+#define      MVNETA_PORT_ACCESS_PROTECT_WIN0_RW	0x3
 #define MVNETA_PORT_CONFIG                      0x2400
 #define      MVNETA_UNI_PROMISC_MODE            BIT(0)
 #define      MVNETA_DEF_RXQ(q)                  ((q) << 1)
@@ -185,11 +186,15 @@
 #define MVNETA_GMAC_AUTONEG_CONFIG               0x2c0c
 #define      MVNETA_GMAC_FORCE_LINK_DOWN         BIT(0)
 #define      MVNETA_GMAC_FORCE_LINK_PASS         BIT(1)
+#define      MVNETA_GMAC_IB_BYPASS_AN_EN         BIT(3)
 #define      MVNETA_GMAC_CONFIG_MII_SPEED        BIT(5)
 #define      MVNETA_GMAC_CONFIG_GMII_SPEED       BIT(6)
 #define      MVNETA_GMAC_AN_SPEED_EN             BIT(7)
+#define      MVNETA_GMAC_SET_FC_EN               BIT(8)
+#define      MVNETA_GMAC_ADVERT_FC_EN            BIT(9)
 #define      MVNETA_GMAC_CONFIG_FULL_DUPLEX      BIT(12)
 #define      MVNETA_GMAC_AN_DUPLEX_EN            BIT(13)
+#define      MVNETA_GMAC_SAMPLE_TX_CFG_EN        BIT(15)
 #define MVNETA_MIB_COUNTERS_BASE                 0x3080
 #define      MVNETA_MIB_LATE_COLLISION           0x7c
 #define MVNETA_DA_FILT_SPEC_MCAST                0x3400
@@ -270,9 +275,13 @@ struct mvneta_port {
 	unsigned int speed;
 
 	int init;
-	int phyaddr;
 	struct phy_device *phydev;
-	struct mii_dev *bus;
+#if CONFIG_IS_ENABLED(DM_GPIO)
+	struct gpio_desc phy_reset_gpio;
+	struct gpio_desc sfp_tx_disable_gpio;
+#endif
+
+	uintptr_t dma_base;     /* base address for DMA address decoding */
 };
 
 /* The mvneta_tx_desc and mvneta_rx_desc structures describe the
@@ -520,7 +529,7 @@ static void mvneta_txq_pend_desc_add(struct mvneta_port *pp,
 	u32 val;
 
 	/* Only 255 descriptors can be added at once ; Assume caller
-	 * process TX desriptors in quanta less than 256
+	 * process TX descriptors in quanta less than 256
 	 */
 	val = pend_desc;
 	mvreg_write(pp, MVNETA_TXQ_UPDATE_REG(txq->id), val);
@@ -595,9 +604,9 @@ static void mvneta_port_down(struct mvneta_port *pp)
 	count = 0;
 	do {
 		if (count++ >= MVNETA_RX_DISABLE_TIMEOUT_MSEC) {
-			netdev_warn(pp->dev,
-				    "TIMEOUT for RX stopped ! rx_queue_cmd: 0x08%x\n",
-				    val);
+			dev_warn(pp->phydev->dev,
+				 "TIMEOUT for RX stopped ! rx_queue_cmd: 0x08%x\n",
+				 val);
 			break;
 		}
 		mdelay(1);
@@ -618,9 +627,9 @@ static void mvneta_port_down(struct mvneta_port *pp)
 	count = 0;
 	do {
 		if (count++ >= MVNETA_TX_DISABLE_TIMEOUT_MSEC) {
-			netdev_warn(pp->dev,
-				    "TIMEOUT for TX stopped status=0x%08x\n",
-				    val);
+			dev_warn(pp->phydev->dev,
+				 "TIMEOUT for TX stopped status=0x%08x\n",
+				 val);
 			break;
 		}
 		mdelay(1);
@@ -634,9 +643,9 @@ static void mvneta_port_down(struct mvneta_port *pp)
 	count = 0;
 	do {
 		if (count++ >= MVNETA_TX_FIFO_EMPTY_TIMEOUT) {
-			netdev_warn(pp->dev,
-				    "TX FIFO empty timeout status=0x08%x\n",
-				    val);
+			dev_warn(pp->phydev->dev,
+				 "TX FIFO empty timeout status=0x08%x\n",
+				 val);
 			break;
 		}
 		mdelay(1);
@@ -759,7 +768,7 @@ static void mvneta_defaults_set(struct mvneta_port *pp)
 	/* Set CPU queue access map - all CPUs have access to all RX
 	 * queues and to all TX queues
 	 */
-	for (cpu = 0; cpu < CONFIG_NR_CPUS; cpu++)
+	for (cpu = 0; cpu < MVNETA_NR_CPUS; cpu++)
 		mvreg_write(pp, MVNETA_CPU_MAP(cpu),
 			    (MVNETA_CPU_RXQ_ACCESS_ALL_MASK |
 			     MVNETA_CPU_TXQ_ACCESS_ALL_MASK));
@@ -801,10 +810,15 @@ static void mvneta_defaults_set(struct mvneta_port *pp)
 	/* Assign port SDMA configuration */
 	mvreg_write(pp, MVNETA_SDMA_CONFIG, val);
 
-	/* Enable PHY polling in hardware for U-Boot */
-	val = mvreg_read(pp, MVNETA_UNIT_CONTROL);
-	val |= MVNETA_PHY_POLLING_ENABLE;
-	mvreg_write(pp, MVNETA_UNIT_CONTROL, val);
+	/* Enable PHY polling in hardware if not in fixed-link mode */
+	if (!IS_ENABLED(CONFIG_PHY_FIXED) ||
+	    pp->phydev->phy_id != PHY_FIXED_ID) {
+		mvreg_write(pp, MVNETA_PHY_ADDR, pp->phydev->addr);
+
+		val = mvreg_read(pp, MVNETA_UNIT_CONTROL);
+		val |= MVNETA_PHY_POLLING_ENABLE;
+		mvreg_write(pp, MVNETA_UNIT_CONTROL, val);
+	}
 
 	mvneta_set_ucast_table(pp, -1);
 	mvneta_set_special_mcast_table(pp, -1);
@@ -861,6 +875,15 @@ static void mvneta_mac_addr_set(struct mvneta_port *pp, unsigned char *addr,
 	mvneta_set_ucast_addr(pp, addr[5], queue);
 }
 
+static int mvneta_write_hwaddr(struct udevice *dev)
+{
+	mvneta_mac_addr_set(dev_get_priv(dev),
+		((struct eth_pdata *)dev_get_plat(dev))->enetaddr,
+		rxq_def);
+
+	return 0;
+}
+
 /* Handle rx descriptor fill by setting buf_cookie and buf_phys_addr */
 static void mvneta_rx_desc_fill(struct mvneta_rx_desc *rx_desc,
 				u32 phys_addr, u32 cookie)
@@ -908,28 +931,32 @@ static void mvneta_rx_error(struct mvneta_port *pp,
 	u32 status = rx_desc->status;
 
 	if (!mvneta_rxq_desc_is_first_last(status)) {
-		netdev_err(pp->dev,
-			   "bad rx status %08x (buffer oversize), size=%d\n",
-			   status, rx_desc->data_size);
+		dev_err(pp->phydev->dev,
+			"bad rx status %08x (buffer oversize), size=%d\n",
+			status, rx_desc->data_size);
 		return;
 	}
 
 	switch (status & MVNETA_RXD_ERR_CODE_MASK) {
 	case MVNETA_RXD_ERR_CRC:
-		netdev_err(pp->dev, "bad rx status %08x (crc error), size=%d\n",
-			   status, rx_desc->data_size);
+		dev_err(pp->phydev->dev,
+			"bad rx status %08x (crc error), size=%d\n", status,
+			rx_desc->data_size);
 		break;
 	case MVNETA_RXD_ERR_OVERRUN:
-		netdev_err(pp->dev, "bad rx status %08x (overrun error), size=%d\n",
-			   status, rx_desc->data_size);
+		dev_err(pp->phydev->dev,
+			"bad rx status %08x (overrun error), size=%d\n", status,
+			rx_desc->data_size);
 		break;
 	case MVNETA_RXD_ERR_LEN:
-		netdev_err(pp->dev, "bad rx status %08x (max frame length error), size=%d\n",
-			   status, rx_desc->data_size);
+		dev_err(pp->phydev->dev,
+			"bad rx status %08x (max frame length error), size=%d\n",
+			status, rx_desc->data_size);
 		break;
 	case MVNETA_RXD_ERR_RESOURCE:
-		netdev_err(pp->dev, "bad rx status %08x (resource error), size=%d\n",
-			   status, rx_desc->data_size);
+		dev_err(pp->phydev->dev,
+			"bad rx status %08x (resource error), size=%d\n",
+			status, rx_desc->data_size);
 		break;
 	}
 }
@@ -939,7 +966,6 @@ static struct mvneta_rx_queue *mvneta_rxq_handle_get(struct mvneta_port *pp,
 {
 	return &pp->rxqs[rxq];
 }
-
 
 /* Drop packets received by the RXQ and free buffers */
 static void mvneta_rxq_drop_pkts(struct mvneta_port *pp,
@@ -988,6 +1014,8 @@ static int mvneta_rxq_init(struct mvneta_port *pp,
 	if (rxq->descs == NULL)
 		return -ENOMEM;
 
+	WARN_ON(rxq->descs != PTR_ALIGN(rxq->descs, ARCH_DMA_MINALIGN));
+
 	rxq->last_desc = rxq->size - 1;
 
 	/* Set Rx descriptors queue starting address */
@@ -1020,9 +1048,11 @@ static int mvneta_txq_init(struct mvneta_port *pp,
 	txq->size = pp->tx_ring_size;
 
 	/* Allocate memory for TX descriptors */
-	txq->descs_phys = (u32)txq->descs;
+	txq->descs_phys = (dma_addr_t)txq->descs;
 	if (txq->descs == NULL)
 		return -ENOMEM;
+
+	WARN_ON(txq->descs != PTR_ALIGN(txq->descs, ARCH_DMA_MINALIGN));
 
 	txq->last_desc = txq->size - 1;
 
@@ -1073,7 +1103,6 @@ static void mvneta_cleanup_rxqs(struct mvneta_port *pp)
 		mvneta_rxq_deinit(pp, &pp->rxqs[queue]);
 }
 
-
 /* Init all Rx queues */
 static int mvneta_setup_rxqs(struct mvneta_port *pp)
 {
@@ -1082,8 +1111,8 @@ static int mvneta_setup_rxqs(struct mvneta_port *pp)
 	for (queue = 0; queue < rxq_number; queue++) {
 		int err = mvneta_rxq_init(pp, &pp->rxqs[queue]);
 		if (err) {
-			netdev_err(pp->dev, "%s: can't create rxq=%d\n",
-				   __func__, queue);
+			dev_err(pp->phydev->dev, "%s: can't create rxq=%d\n",
+				__func__, queue);
 			mvneta_cleanup_rxqs(pp);
 			return err;
 		}
@@ -1100,8 +1129,8 @@ static int mvneta_setup_txqs(struct mvneta_port *pp)
 	for (queue = 0; queue < txq_number; queue++) {
 		int err = mvneta_txq_init(pp, &pp->txqs[queue]);
 		if (err) {
-			netdev_err(pp->dev, "%s: can't create txq=%d\n",
-				   __func__, queue);
+			dev_err(pp->phydev->dev, "%s: can't create txq=%d\n",
+				__func__, queue);
 			mvneta_cleanup_txqs(pp);
 			return err;
 		}
@@ -1116,37 +1145,50 @@ static void mvneta_start_dev(struct mvneta_port *pp)
 	mvneta_port_enable(pp);
 }
 
-static void mvneta_adjust_link(struct eth_device *dev)
+static void mvneta_adjust_link(struct udevice *dev)
 {
-	struct mvneta_port *pp = dev->priv;
+	struct mvneta_port *pp = dev_get_priv(dev);
 	struct phy_device *phydev = pp->phydev;
-	int status_change = 0;
+	bool status_change = false;
 
-	if (phydev->link) {
-		if ((pp->speed != phydev->speed) ||
-		    (pp->duplex != phydev->duplex)) {
-			u32 val;
+	if (phydev->link &&
+	    (pp->speed != phydev->speed || pp->duplex != phydev->duplex)) {
+		u32 val;
 
-			val = mvreg_read(pp, MVNETA_GMAC_AUTONEG_CONFIG);
-			val &= ~(MVNETA_GMAC_CONFIG_MII_SPEED |
-				 MVNETA_GMAC_CONFIG_GMII_SPEED |
-				 MVNETA_GMAC_CONFIG_FULL_DUPLEX |
-				 MVNETA_GMAC_AN_SPEED_EN |
-				 MVNETA_GMAC_AN_DUPLEX_EN);
+		val = mvreg_read(pp, MVNETA_GMAC_AUTONEG_CONFIG);
+		val &= ~(MVNETA_GMAC_CONFIG_MII_SPEED |
+			 MVNETA_GMAC_CONFIG_GMII_SPEED |
+			 MVNETA_GMAC_CONFIG_FULL_DUPLEX |
+			 MVNETA_GMAC_AN_SPEED_EN |
+			 MVNETA_GMAC_AN_DUPLEX_EN);
 
-			if (phydev->duplex)
-				val |= MVNETA_GMAC_CONFIG_FULL_DUPLEX;
+		/* FIXME: For fixed-link case, these were the initial settings
+		 * used before the code was converted to use PHY_FIXED. Some of
+		 * these may look nonsensical (for example BYPASS_AN makes sense
+		 * for 1000base-x and 2500base-x modes, AFAIK), and in fact this
+		 * may be changed in the future (when support for inband AN will
+		 * be added). Also, why is ADVERT_FC enabled if we don't enable
+		 * inband AN at all?
+		 */
+		if (IS_ENABLED(CONFIG_PHY_FIXED) &&
+		    pp->phydev->phy_id == PHY_FIXED_ID)
+			val = MVNETA_GMAC_IB_BYPASS_AN_EN |
+			      MVNETA_GMAC_SET_FC_EN |
+			      MVNETA_GMAC_ADVERT_FC_EN |
+			      MVNETA_GMAC_SAMPLE_TX_CFG_EN;
 
-			if (phydev->speed == SPEED_1000)
-				val |= MVNETA_GMAC_CONFIG_GMII_SPEED;
-			else
-				val |= MVNETA_GMAC_CONFIG_MII_SPEED;
+		if (phydev->duplex)
+			val |= MVNETA_GMAC_CONFIG_FULL_DUPLEX;
 
-			mvreg_write(pp, MVNETA_GMAC_AUTONEG_CONFIG, val);
+		if (phydev->speed == SPEED_1000)
+			val |= MVNETA_GMAC_CONFIG_GMII_SPEED;
+		else if (pp->speed == SPEED_100)
+			val |= MVNETA_GMAC_CONFIG_MII_SPEED;
 
-			pp->duplex = phydev->duplex;
-			pp->speed  = phydev->speed;
-		}
+		mvreg_write(pp, MVNETA_GMAC_AUTONEG_CONFIG, val);
+
+		pp->duplex = phydev->duplex;
+		pp->speed = phydev->speed;
 	}
 
 	if (phydev->link != pp->link) {
@@ -1156,7 +1198,7 @@ static void mvneta_adjust_link(struct eth_device *dev)
 		}
 
 		pp->link = phydev->link;
-		status_change = 1;
+		status_change = true;
 	}
 
 	if (status_change) {
@@ -1172,9 +1214,9 @@ static void mvneta_adjust_link(struct eth_device *dev)
 	}
 }
 
-static int mvneta_open(struct eth_device *dev)
+static int mvneta_open(struct udevice *dev)
 {
-	struct mvneta_port *pp = dev->priv;
+	struct mvneta_port *pp = dev_get_priv(dev);
 	int ret;
 
 	ret = mvneta_setup_rxqs(pp);
@@ -1193,7 +1235,7 @@ static int mvneta_open(struct eth_device *dev)
 }
 
 /* Initialize hw */
-static int mvneta_init(struct mvneta_port *pp)
+static int mvneta_init2(struct mvneta_port *pp)
 {
 	int queue;
 
@@ -1239,6 +1281,32 @@ static int mvneta_init(struct mvneta_port *pp)
 }
 
 /* platform glue : initialize decoding windows */
+
+/*
+ * Not like A380, in Armada3700, there are two layers of decode windows for GBE:
+ * First layer is:  GbE Address window that resides inside the GBE unit,
+ * Second layer is: Fabric address window which is located in the NIC400
+ *                  (South Fabric).
+ * To simplify the address decode configuration for Armada3700, we bypass the
+ * first layer of GBE decode window by setting the first window to 4GB.
+ */
+static void mvneta_bypass_mbus_windows(struct mvneta_port *pp)
+{
+	/*
+	 * Set window size to 4GB, to bypass GBE address decode, leave the
+	 * work to MBUS decode window
+	 */
+	mvreg_write(pp, MVNETA_WIN_SIZE(0), MVNETA_WIN_SIZE_MASK);
+
+	/* Enable GBE address decode window 0 by set bit 0 to 0 */
+	clrbits_le32(pp->base + MVNETA_BASE_ADDR_ENABLE,
+		     MVNETA_BASE_ADDR_ENABLE_BIT);
+
+	/* Set GBE address decode window 0 to full Access (read or write) */
+	setbits_le32(pp->base + MVNETA_PORT_ACCESS_PROTECT,
+		     MVNETA_PORT_ACCESS_PROTECT_WIN0_RW);
+}
+
 static void mvneta_conf_mbus_windows(struct mvneta_port *pp)
 {
 	const struct mbus_dram_target_info *dram;
@@ -1271,6 +1339,29 @@ static void mvneta_conf_mbus_windows(struct mvneta_port *pp)
 	}
 
 	mvreg_write(pp, MVNETA_BASE_ADDR_ENABLE, win_enable);
+}
+
+static void mvneta_conf_ac5_cnm_xbar_windows(struct mvneta_port *pp)
+{
+	int i;
+
+	/* Clear all windows */
+	for (i = 0; i < 6; i++) {
+		mvreg_write(pp, MVNETA_WIN_BASE(i), 0);
+		mvreg_write(pp, MVNETA_WIN_SIZE(i), 0);
+
+		if (i < 4)
+			mvreg_write(pp, MVNETA_WIN_REMAP(i), 0);
+	}
+
+	/*
+	 * Setup window #0 base 0x0 to target XBAR port 2 (AMB2), attribute 0xb, size 4GB
+	 * AMB2 address decoder remaps 0x0 to DDR 64 bit base address
+	 */
+	mvreg_write(pp, MVNETA_WIN_BASE(0),
+		    (MVNETA_AC5_CNM_DDR_ATTR << 8) | MVNETA_AC5_CNM_DDR_TARGET);
+	mvreg_write(pp, MVNETA_WIN_SIZE(0), 0xffff0000);
+	mvreg_write(pp, MVNETA_BASE_ADDR_ENABLE, 0x3e);
 }
 
 /* Power up the port */
@@ -1315,27 +1406,26 @@ static int mvneta_port_power_up(struct mvneta_port *pp, int phy_mode)
 }
 
 /* Device initialization routine */
-static int mvneta_probe(struct eth_device *dev)
+static int mvneta_init(struct udevice *dev)
 {
-	struct mvneta_port *pp = dev->priv;
+	struct eth_pdata *pdata = dev_get_plat(dev);
+	struct mvneta_port *pp = dev_get_priv(dev);
 	int err;
 
 	pp->tx_ring_size = MVNETA_MAX_TXD;
 	pp->rx_ring_size = MVNETA_MAX_RXD;
 
-	err = mvneta_init(pp);
+	err = mvneta_init2(pp);
 	if (err < 0) {
-		dev_err(&pdev->dev, "can't init eth hal\n");
+		dev_err(dev, "can't init eth hal\n");
 		return err;
 	}
 
-	mvneta_conf_mbus_windows(pp);
-
-	mvneta_mac_addr_set(pp, dev->enetaddr, rxq_def);
+	mvneta_mac_addr_set(pp, pdata->enetaddr, rxq_def);
 
 	err = mvneta_port_power_up(pp, pp->phy_interface);
 	if (err < 0) {
-		dev_err(&pdev->dev, "can't power up port\n");
+		dev_err(dev, "can't power up port\n");
 		return err;
 	}
 
@@ -1347,133 +1437,19 @@ static int mvneta_probe(struct eth_device *dev)
 
 /* U-Boot only functions follow here */
 
-/* SMI / MDIO functions */
-
-static int smi_wait_ready(struct mvneta_port *pp)
+static int mvneta_start(struct udevice *dev)
 {
-	u32 timeout = MVNETA_SMI_TIMEOUT;
-	u32 smi_reg;
-
-	/* wait till the SMI is not busy */
-	do {
-		/* read smi register */
-		smi_reg = mvreg_read(pp, MVNETA_SMI);
-		if (timeout-- == 0) {
-			printf("Error: SMI busy timeout\n");
-			return -EFAULT;
-		}
-	} while (smi_reg & MVNETA_SMI_BUSY);
-
-	return 0;
-}
-
-/*
- * smi_reg_read - miiphy_read callback function.
- *
- * Returns 16bit phy register value, or 0xffff on error
- */
-static int smi_reg_read(const char *devname, u8 phy_adr, u8 reg_ofs, u16 *data)
-{
-	struct eth_device *dev = eth_get_dev_by_name(devname);
-	struct mvneta_port *pp = dev->priv;
-	u32 smi_reg;
-	u32 timeout;
-
-	/* check parameters */
-	if (phy_adr > MVNETA_PHY_ADDR_MASK) {
-		printf("Error: Invalid PHY address %d\n", phy_adr);
-		return -EFAULT;
-	}
-
-	if (reg_ofs > MVNETA_PHY_REG_MASK) {
-		printf("Err: Invalid register offset %d\n", reg_ofs);
-		return -EFAULT;
-	}
-
-	/* wait till the SMI is not busy */
-	if (smi_wait_ready(pp) < 0)
-		return -EFAULT;
-
-	/* fill the phy address and regiser offset and read opcode */
-	smi_reg = (phy_adr << MVNETA_SMI_DEV_ADDR_OFFS)
-		| (reg_ofs << MVNETA_SMI_REG_ADDR_OFFS)
-		| MVNETA_SMI_OPCODE_READ;
-
-	/* write the smi register */
-	mvreg_write(pp, MVNETA_SMI, smi_reg);
-
-	/*wait till read value is ready */
-	timeout = MVNETA_SMI_TIMEOUT;
-
-	do {
-		/* read smi register */
-		smi_reg = mvreg_read(pp, MVNETA_SMI);
-		if (timeout-- == 0) {
-			printf("Err: SMI read ready timeout\n");
-			return -EFAULT;
-		}
-	} while (!(smi_reg & MVNETA_SMI_READ_VALID));
-
-	/* Wait for the data to update in the SMI register */
-	for (timeout = 0; timeout < MVNETA_SMI_TIMEOUT; timeout++)
-		;
-
-	*data = (u16)(mvreg_read(pp, MVNETA_SMI) & MVNETA_SMI_DATA_MASK);
-
-	return 0;
-}
-
-/*
- * smi_reg_write - imiiphy_write callback function.
- *
- * Returns 0 if write succeed, -EINVAL on bad parameters
- * -ETIME on timeout
- */
-static int smi_reg_write(const char *devname, u8 phy_adr, u8 reg_ofs, u16 data)
-{
-	struct eth_device *dev = eth_get_dev_by_name(devname);
-	struct mvneta_port *pp = dev->priv;
-	u32 smi_reg;
-
-	/* check parameters */
-	if (phy_adr > MVNETA_PHY_ADDR_MASK) {
-		printf("Error: Invalid PHY address %d\n", phy_adr);
-		return -EFAULT;
-	}
-
-	if (reg_ofs > MVNETA_PHY_REG_MASK) {
-		printf("Err: Invalid register offset %d\n", reg_ofs);
-		return -EFAULT;
-	}
-
-	/* wait till the SMI is not busy */
-	if (smi_wait_ready(pp) < 0)
-		return -EFAULT;
-
-	/* fill the phy addr and reg offset and write opcode and data */
-	smi_reg = (data << MVNETA_SMI_DATA_OFFS);
-	smi_reg |= (phy_adr << MVNETA_SMI_DEV_ADDR_OFFS)
-		| (reg_ofs << MVNETA_SMI_REG_ADDR_OFFS);
-	smi_reg &= ~MVNETA_SMI_OPCODE_READ;
-
-	/* write the smi register */
-	mvreg_write(pp, MVNETA_SMI, smi_reg);
-
-	return 0;
-}
-
-static int mvneta_init_u_boot(struct eth_device *dev, bd_t *bis)
-{
-	struct mvneta_port *pp = dev->priv;
+	struct mvneta_port *pp = dev_get_priv(dev);
 	struct phy_device *phydev;
 
 	mvneta_port_power_up(pp, pp->phy_interface);
 
 	if (!pp->init || pp->link == 0) {
-		/* Set phy address of the port */
-		mvreg_write(pp, MVNETA_PHY_ADDR, pp->phyaddr);
-		phydev = phy_connect(pp->bus, pp->phyaddr, dev,
-				     pp->phy_interface);
+		phydev = dm_eth_phy_connect(dev);
+		if (!phydev) {
+			printf("dm_eth_phy_connect failed\n");
+			return -ENODEV;
+		}
 
 		pp->phydev = phydev;
 		phy_config(phydev);
@@ -1484,7 +1460,7 @@ static int mvneta_init_u_boot(struct eth_device *dev, bd_t *bis)
 		}
 
 		/* Full init on first call */
-		mvneta_probe(dev);
+		mvneta_init(dev);
 		pp->init = 1;
 	} else {
 		/* Upon all following calls, this is enough */
@@ -1495,9 +1471,9 @@ static int mvneta_init_u_boot(struct eth_device *dev, bd_t *bis)
 	return 0;
 }
 
-static int mvneta_send(struct eth_device *dev, void *ptr, int len)
+static int mvneta_send(struct udevice *dev, void *packet, int length)
 {
-	struct mvneta_port *pp = dev->priv;
+	struct mvneta_port *pp = dev_get_priv(dev);
 	struct mvneta_tx_queue *txq = &pp->txqs[0];
 	struct mvneta_tx_desc *tx_desc;
 	int sent_desc;
@@ -1506,9 +1482,10 @@ static int mvneta_send(struct eth_device *dev, void *ptr, int len)
 	/* Get a descriptor for the first part of the packet */
 	tx_desc = mvneta_txq_next_desc_get(txq);
 
-	tx_desc->buf_phys_addr = (u32)ptr;
-	tx_desc->data_size = len;
-	flush_dcache_range((u32)ptr, (u32)ptr + len);
+	tx_desc->buf_phys_addr = (u32)(uintptr_t)packet;
+	tx_desc->data_size = length;
+	flush_dcache_range((ulong)packet,
+			   (ulong)packet + ALIGN(length, PKTALIGN));
 
 	/* First and Last descriptor */
 	tx_desc->command = MVNETA_TX_L4_CSUM_NOT | MVNETA_TXD_FLZ_DESC;
@@ -1526,28 +1503,25 @@ static int mvneta_send(struct eth_device *dev, void *ptr, int len)
 
 	/* txDone has increased - hw sent packet */
 	mvneta_txq_sent_desc_dec(pp, txq, sent_desc);
-	return 0;
 
 	return 0;
 }
 
-static int mvneta_recv(struct eth_device *dev)
+static int mvneta_recv(struct udevice *dev, int flags, uchar **packetp)
 {
-	struct mvneta_port *pp = dev->priv;
+	struct mvneta_port *pp = dev_get_priv(dev);
 	int rx_done;
-	int packets_done;
 	struct mvneta_rx_queue *rxq;
+	int rx_bytes = 0;
 
 	/* get rx queue */
 	rxq = mvneta_rxq_handle_get(pp, rxq_def);
 	rx_done = mvneta_rxq_busy_desc_num_get(pp, rxq);
-	packets_done = rx_done;
 
-	while (packets_done--) {
+	if (rx_done) {
 		struct mvneta_rx_desc *rx_desc;
 		unsigned char *data;
 		u32 rx_status;
-		int rx_bytes;
 
 		/*
 		 * No cache invalidation needed here, since the desc's are
@@ -1559,95 +1533,143 @@ static int mvneta_recv(struct eth_device *dev)
 		if (!mvneta_rxq_desc_is_first_last(rx_status) ||
 		    (rx_status & MVNETA_RXD_ERR_SUMMARY)) {
 			mvneta_rx_error(pp, rx_desc);
-			/* leave the descriptor untouched */
-			continue;
+			/*
+			 * Only mark one descriptor as free since only one
+			 * was processed, same as the success path below
+			 */
+			mvneta_rxq_desc_num_update(pp, rxq, 1, 1);
+			return -EIO;
 		}
 
 		/* 2 bytes for marvell header. 4 bytes for crc */
 		rx_bytes = rx_desc->data_size - 6;
 
 		/* give packet to stack - skip on first 2 bytes */
-		data = (u8 *)rx_desc->buf_cookie + 2;
+		data = (u8 *)(uintptr_t)rx_desc->buf_cookie + 2;
 		/*
 		 * No cache invalidation needed here, since the rx_buffer's are
 		 * located in a uncached memory region
 		 */
-		net_process_received_packet(data, rx_bytes);
+		*packetp = data + pp->dma_base;
+
+		/*
+		 * Only mark one descriptor as free
+		 * since only one was processed
+		 */
+		mvneta_rxq_desc_num_update(pp, rxq, 1, 1);
 	}
 
-	/* Update rxq management counters */
-	if (rx_done)
-		mvneta_rxq_desc_num_update(pp, rxq, rx_done, rx_done);
+	return rx_bytes;
+}
+
+static int mvneta_probe(struct udevice *dev)
+{
+	struct mvneta_port *pp = dev_get_priv(dev);
+#if CONFIG_IS_ENABLED(DM_GPIO)
+	struct ofnode_phandle_args sfp_args;
+#endif
+	void *bd_space;
+	phys_addr_t cpu;
+	dma_addr_t bus;
+	u64 size;
+	int ret;
+
+	/*
+	 * Allocate buffer area for descs and rx_buffers. This is only
+	 * done once for all interfaces. As only one interface can
+	 * be active. Make this area DMA safe by disabling the D-cache
+	 */
+	if (!buffer_loc.tx_descs) {
+		u32 size;
+
+		/* Align buffer area for descs and rx_buffers to 1MiB */
+		bd_space = memalign(1 << MMU_SECTION_SHIFT, BD_SPACE);
+		flush_dcache_range((ulong)bd_space, (ulong)bd_space + BD_SPACE);
+		mmu_set_region_dcache_behaviour((phys_addr_t)bd_space, BD_SPACE,
+						DCACHE_OFF);
+		buffer_loc.tx_descs = (struct mvneta_tx_desc *)bd_space;
+		size = roundup(MVNETA_MAX_TXD * sizeof(struct mvneta_tx_desc),
+				ARCH_DMA_MINALIGN);
+		memset(buffer_loc.tx_descs, 0, size);
+		buffer_loc.rx_descs = (struct mvneta_rx_desc *)
+			((phys_addr_t)bd_space + size);
+		size += roundup(MVNETA_MAX_RXD * sizeof(struct mvneta_rx_desc),
+				ARCH_DMA_MINALIGN);
+		buffer_loc.rx_buffers = (phys_addr_t)(bd_space + size);
+	}
+
+	pp->base = dev_read_addr_ptr(dev);
+	pp->phy_interface = dev_read_phy_mode(dev);
+	if (pp->phy_interface == PHY_INTERFACE_MODE_NA)
+		return -EINVAL;
+
+	/* Configure MBUS address windows */
+	if (device_is_compatible(dev, "marvell,armada-3700-neta"))
+		mvneta_bypass_mbus_windows(pp);
+	else if (device_is_compatible(dev, "marvell,armada-ac5-neta"))
+		mvneta_conf_ac5_cnm_xbar_windows(pp);
+	else
+		mvneta_conf_mbus_windows(pp);
+
+	/* fetch dma ranges property */
+	ret = dev_get_dma_range(dev, &cpu, &bus, &size);
+	if (!ret)
+		pp->dma_base = cpu;
+	else
+		pp->dma_base = 0;
+
+#if CONFIG_IS_ENABLED(DM_GPIO)
+	if (!dev_read_phandle_with_args(dev, "sfp", NULL, 0, 0, &sfp_args) &&
+	    ofnode_is_enabled(sfp_args.node))
+		gpio_request_by_name_nodev(sfp_args.node, "tx-disable-gpio", 0,
+					   &pp->sfp_tx_disable_gpio, GPIOD_IS_OUT);
+
+	gpio_request_by_name(dev, "phy-reset-gpios", 0,
+			     &pp->phy_reset_gpio, GPIOD_IS_OUT);
+
+	if (dm_gpio_is_valid(&pp->phy_reset_gpio)) {
+		dm_gpio_set_value(&pp->phy_reset_gpio, 1);
+		mdelay(10);
+		dm_gpio_set_value(&pp->phy_reset_gpio, 0);
+	}
+
+	if (dm_gpio_is_valid(&pp->sfp_tx_disable_gpio))
+		dm_gpio_set_value(&pp->sfp_tx_disable_gpio, 0);
+#endif
 
 	return 0;
 }
 
-static void mvneta_halt(struct eth_device *dev)
+static void mvneta_stop(struct udevice *dev)
 {
-	struct mvneta_port *pp = dev->priv;
+	struct mvneta_port *pp = dev_get_priv(dev);
 
 	mvneta_port_down(pp);
 	mvneta_port_disable(pp);
 }
 
-int mvneta_initialize(bd_t *bis, int base_addr, int devnum, int phy_addr)
-{
-	struct eth_device *dev;
-	struct mvneta_port *pp;
-	void *bd_space;
+static const struct eth_ops mvneta_ops = {
+	.start		= mvneta_start,
+	.send		= mvneta_send,
+	.recv		= mvneta_recv,
+	.stop		= mvneta_stop,
+	.write_hwaddr	= mvneta_write_hwaddr,
+};
 
-	dev = calloc(1, sizeof(*dev));
-	if (dev == NULL)
-		return -ENOMEM;
+static const struct udevice_id mvneta_ids[] = {
+	{ .compatible = "marvell,armada-370-neta" },
+	{ .compatible = "marvell,armada-ac5-neta" },
+	{ .compatible = "marvell,armada-xp-neta" },
+	{ .compatible = "marvell,armada-3700-neta" },
+	{ }
+};
 
-	pp = calloc(1, sizeof(*pp));
-	if (pp == NULL)
-		return -ENOMEM;
-
-	dev->priv = pp;
-
-	/*
-	 * Allocate buffer area for descs and rx_buffers. This is only
-	 * done once for all interfaces. As only one interface can
-	 * be active. Make this area DMA save by disabling the D-cache
-	 */
-	if (!buffer_loc.tx_descs) {
-		/* Align buffer area for descs and rx_buffers to 1MiB */
-		bd_space = memalign(1 << MMU_SECTION_SHIFT, BD_SPACE);
-		mmu_set_region_dcache_behaviour((u32)bd_space, BD_SPACE,
-						DCACHE_OFF);
-		buffer_loc.tx_descs = (struct mvneta_tx_desc *)bd_space;
-		buffer_loc.rx_descs = (struct mvneta_rx_desc *)
-			((u32)bd_space +
-			 MVNETA_MAX_TXD * sizeof(struct mvneta_tx_desc));
-		buffer_loc.rx_buffers = (u32)
-			(bd_space +
-			 MVNETA_MAX_TXD * sizeof(struct mvneta_tx_desc) +
-			 MVNETA_MAX_RXD * sizeof(struct mvneta_rx_desc));
-	}
-
-	sprintf(dev->name, "neta%d", devnum);
-
-	pp->base = (void __iomem *)base_addr;
-	dev->iobase = base_addr;
-	dev->init = mvneta_init_u_boot;
-	dev->halt = mvneta_halt;
-	dev->send = mvneta_send;
-	dev->recv = mvneta_recv;
-	dev->write_hwaddr = NULL;
-
-	/*
-	 * The PHY interface type is configured via the
-	 * board specific CONFIG_SYS_NETA_INTERFACE_TYPE
-	 * define.
-	 */
-	pp->phy_interface = CONFIG_SYS_NETA_INTERFACE_TYPE;
-
-	eth_register(dev);
-
-	pp->phyaddr = phy_addr;
-	miiphy_register(dev->name, smi_reg_read, smi_reg_write);
-	pp->bus = miiphy_get_dev_by_name(dev->name);
-
-	return 1;
-}
+U_BOOT_DRIVER(mvneta) = {
+	.name	= "mvneta",
+	.id	= UCLASS_ETH,
+	.of_match = mvneta_ids,
+	.probe	= mvneta_probe,
+	.ops	= &mvneta_ops,
+	.priv_auto	= sizeof(struct mvneta_port),
+	.plat_auto	= sizeof(struct eth_pdata),
+};

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * (C) Copyright 2011
  * Stefano Babic, DENX Software Engineering, sbabic@denx.de
@@ -5,13 +6,12 @@
  * Based on Linux IPU driver for MX51 (ipu.h):
  *
  * (C) Copyright 2005-2010 Freescale Semiconductor, Inc.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #ifndef __IPU_PIXFMT_H__
 #define __IPU_PIXFMT_H__
 
+#include <dm/device.h>
 #include <linux/list.h>
 #include <linux/fb.h>
 
@@ -63,6 +63,6 @@
 int ipuv3_fb_init(struct fb_videomode const *mode,
 		  uint8_t disp,
 		  uint32_t pixfmt);
-void ipuv3_fb_shutdown(void);
+void ipuv3_fb_shutdown(struct udevice *dev);
 
 #endif

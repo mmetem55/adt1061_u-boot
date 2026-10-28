@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * [origin: Linux kernel include/asm-arm/arch-at91/at91sam9260.h]
  *
@@ -6,22 +7,15 @@
  * Reinhard Meyer, EMK Elektronik, reinhard.meyer@emk-elektronik.de
  *
  * Definitions for the SoCs:
- * AT91SAM9260, AT91SAM9G20, AT91SAM9XE
+ * AT91SAM9260, AT91SAM9G20
  *
  * Note that those SoCs are mostly software and pin compatible,
  * therefore this file applies to all of them. Differences between
  * those SoCs are concentrated at the end of this file.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #ifndef AT91SAM9260_H
 #define AT91SAM9260_H
-
-/*
- * defines to be used in other places
- */
-#define CONFIG_AT91FAMILY	/* it's a member of AT91 */
 
 /*
  * Peripheral identifiers/interrupts.
@@ -134,12 +128,12 @@
 #define ATMEL_BASE_CS7		0x80000000
 
 /* Timer */
-#define CONFIG_SYS_TIMER_COUNTER	0xfffffd3c
+#define CFG_SYS_TIMER_COUNTER	0xfffffd3c
 
 /*
  * Other misc defines
  */
-#ifndef CONFIG_DM_GPIO
+#if !CONFIG_IS_ENABLED(DM_GPIO)
 #define ATMEL_PIO_PORTS		3		/* these SoCs have 3 PIO */
 #define ATMEL_BASE_PIO		ATMEL_BASE_PIOA
 #endif
@@ -148,15 +142,7 @@
 /*
  * SoC specific defines
  */
-#if defined(CONFIG_AT91SAM9XE)
-# define ATMEL_CPU_NAME		"AT91SAM9XE"
-# define ATMEL_ID_TWI1		25	/* TWI 1 */
-# define ATMEL_BASE_FLASH	0x00200000	/* Internal FLASH */
-# define ATMEL_BASE_SRAM	0x00300000	/* Internal SRAM */
-# define ATMEL_BASE_TWI1	0xfffd8000
-# define ATMEL_BASE_EEFC	0xfffffa00
-# define ATMEL_BASE_GPBR	0xfffffd60
-#elif defined(CONFIG_AT91SAM9260)
+#if defined(CONFIG_AT91SAM9260)
 # define ATMEL_CPU_NAME		"AT91SAM9260"
 # define ATMEL_ID_USART5	25	/* USART 5 */
 # define ATMEL_BASE_SRAM0	0x00200000	/* Internal SRAM 0 */

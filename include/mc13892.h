@@ -1,12 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * (C) Copyright 2010
  * Stefano Babic, DENX Software Engineering, sbabic@denx.de.
  *
  * (C) Copyright 2009 Freescale Semiconductor, Inc.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
-
 
 #ifndef __MC13892_H__
 #define __MC13892_H__
@@ -163,7 +161,7 @@
 /* SWx Output Volts */
 #define SWX_OUT_MASK	0x1F
 #define SWX_OUT_1_25	0x1A
-#define SWX_OUT_1_30    0X1C
+#define SWX_OUT_1_30    0x1C
 
 /* Buck Switchers (SW1,2,3,4) Output Voltage */
 /*

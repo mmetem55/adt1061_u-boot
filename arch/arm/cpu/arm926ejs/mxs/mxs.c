@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Freescale i.MX23/i.MX28 common code
  *
@@ -6,29 +7,34 @@
  *
  * Based on code from LTIB:
  * Copyright (C) 2010 Freescale Semiconductor, Inc.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
-#include <common.h>
-#include <asm/errno.h>
+#include <command.h>
+#include <cpu_func.h>
+#include <hang.h>
+#include <init.h>
+#include <net.h>
+#include <asm/global_data.h>
+#include <linux/delay.h>
+#include <linux/errno.h>
 #include <asm/io.h>
 #include <asm/arch/clock.h>
-#include <asm/imx-common/dma.h>
+#include <asm/mach-imx/dma.h>
 #include <asm/arch/gpio.h>
 #include <asm/arch/iomux.h>
 #include <asm/arch/imx-regs.h>
 #include <asm/arch/sys_proto.h>
+#include <asm/sections.h>
 #include <linux/compiler.h>
 
 DECLARE_GLOBAL_DATA_PTR;
 
 /* Lowlevel init isn't used on i.MX28, so just have a dummy here */
-inline void lowlevel_init(void) {}
+__weak void lowlevel_init(void) {}
 
-void reset_cpu(ulong ignored) __attribute__((noreturn));
+void reset_cpu(void) __attribute__((noreturn));
 
-void reset_cpu(ulong ignored)
+void reset_cpu(void)
 {
 	struct mxs_rtc_regs *rtc_regs =
 		(struct mxs_rtc_regs *)MXS_RTC_BASE;
@@ -50,16 +56,6 @@ void reset_cpu(ulong ignored)
 		;
 }
 
-void enable_caches(void)
-{
-#ifndef CONFIG_SYS_ICACHE_OFF
-	icache_enable();
-#endif
-#ifndef CONFIG_SYS_DCACHE_OFF
-	dcache_enable();
-#endif
-}
-
 /*
  * This function will craft a jumptable at 0x0 which will redirect interrupt
  * vectoring to proper location of U-Boot in RAM.
@@ -74,6 +70,7 @@ void enable_caches(void)
  * actually 0x20, this the associated <destination address>. Loading the PC
  * register with an address performs a jump to that address.
  */
+noinline __attribute__((target("arm")))
 void mx28_fixup_vt(uint32_t start_addr)
 {
 	/* ldr pc, [pc, #0x18] */
@@ -88,6 +85,9 @@ void mx28_fixup_vt(uint32_t start_addr)
 		/* cppcheck-suppress nullPointer */
 		vt[i + 8] = start_addr + (4 * i);
 	}
+
+	/* Make sure ARM core points to low vectors */
+	set_cr(get_cr() & ~CR_V);
 }
 
 #ifdef	CONFIG_ARCH_MISC_INIT
@@ -102,20 +102,22 @@ int arch_cpu_init(void)
 {
 	struct mxs_clkctrl_regs *clkctrl_regs =
 		(struct mxs_clkctrl_regs *)MXS_CLKCTRL_BASE;
-	extern uint32_t _start;
 
-	mx28_fixup_vt((uint32_t)&_start);
+	mx28_fixup_vt((uint32_t)_start);
 
 	/*
 	 * Enable NAND clock
 	 */
-	/* Clear bypass bit */
+	/* Set bypass bit */
 	writel(CLKCTRL_CLKSEQ_BYPASS_GPMI,
 		&clkctrl_regs->hw_clkctrl_clkseq_set);
 
-	/* Set GPMI clock to ref_gpmi / 12 */
+	/* Set GPMI clock to ref_xtal / 1 */
+	clrbits_le32(&clkctrl_regs->hw_clkctrl_gpmi, CLKCTRL_GPMI_CLKGATE);
+	while (readl(&clkctrl_regs->hw_clkctrl_gpmi) & CLKCTRL_GPMI_CLKGATE)
+		;
 	clrsetbits_le32(&clkctrl_regs->hw_clkctrl_gpmi,
-		CLKCTRL_GPMI_CLKGATE | CLKCTRL_GPMI_DIV_MASK, 1);
+		CLKCTRL_GPMI_DIV_MASK, 1);
 
 	udelay(1000);
 
@@ -132,23 +134,7 @@ int arch_cpu_init(void)
 	return 0;
 }
 
-#if defined(CONFIG_DISPLAY_CPUINFO)
-static const char *get_cpu_type(void)
-{
-	struct mxs_digctl_regs *digctl_regs =
-		(struct mxs_digctl_regs *)MXS_DIGCTL_BASE;
-
-	switch (readl(&digctl_regs->hw_digctl_chipid) & HW_DIGCTL_CHIPID_MASK) {
-	case HW_DIGCTL_CHIPID_MX23:
-		return "23";
-	case HW_DIGCTL_CHIPID_MX28:
-		return "28";
-	default:
-		return "??";
-	}
-}
-
-static const char *get_cpu_rev(void)
+u32 get_cpu_rev(void)
 {
 	struct mxs_digctl_regs *digctl_regs =
 		(struct mxs_digctl_regs *)MXS_DIGCTL_BASE;
@@ -158,25 +144,34 @@ static const char *get_cpu_rev(void)
 	case HW_DIGCTL_CHIPID_MX23:
 		switch (rev) {
 		case 0x0:
-			return "1.0";
 		case 0x1:
-			return "1.1";
 		case 0x2:
-			return "1.2";
 		case 0x3:
-			return "1.3";
 		case 0x4:
-			return "1.4";
+			return (MXC_CPU_MX23 << 12) | (rev + 0x10);
 		default:
-			return "??";
+			return 0;
 		}
 	case HW_DIGCTL_CHIPID_MX28:
 		switch (rev) {
 		case 0x1:
-			return "1.2";
+			return (MXC_CPU_MX28 << 12) | 0x12;
 		default:
-			return "??";
+			return 0;
 		}
+	default:
+		return 0;
+	}
+}
+
+#if defined(CONFIG_DISPLAY_CPUINFO)
+const char *get_imx_type(u32 imxtype)
+{
+	switch (imxtype) {
+	case MXC_CPU_MX23:
+		return "23";
+	case MXC_CPU_MX28:
+		return "28";
 	default:
 		return "??";
 	}
@@ -184,19 +179,22 @@ static const char *get_cpu_rev(void)
 
 int print_cpuinfo(void)
 {
-	struct mxs_spl_data *data = (struct mxs_spl_data *)
-		((CONFIG_SYS_TEXT_BASE - sizeof(struct mxs_spl_data)) & ~0xf);
+	u32 cpurev;
+	struct mxs_spl_data *data = MXS_SPL_DATA;
 
-	printf("CPU:   Freescale i.MX%s rev%s at %d MHz\n",
-		get_cpu_type(),
-		get_cpu_rev(),
+	cpurev = get_cpu_rev();
+	printf("CPU:   Freescale i.MX%s rev%d.%d at %d MHz\n",
+		get_imx_type((cpurev & 0xFF000) >> 12),
+		(cpurev & 0x000F0) >> 4,
+		(cpurev & 0x0000F) >> 0,
 		mxc_get_clock(MXC_ARM_CLK) / 1000000);
 	printf("BOOT:  %s\n", mxs_boot_modes[data->boot_mode_idx].mode);
 	return 0;
 }
 #endif
 
-int do_mx28_showclocks(cmd_tbl_t *cmdtp, int flag, int argc, char *const argv[])
+int do_mx28_showclocks(struct cmd_tbl *cmdtp, int flag, int argc,
+		       char *const argv[])
 {
 	printf("CPU:   %3d MHz\n", mxc_get_clock(MXC_ARM_CLK) / 1000000);
 	printf("BUS:   %3d MHz\n", mxc_get_clock(MXC_AHB_CLK) / 1000000);
@@ -209,7 +207,7 @@ int do_mx28_showclocks(cmd_tbl_t *cmdtp, int flag, int argc, char *const argv[])
  * Initializes on-chip ethernet controllers.
  */
 #if defined(CONFIG_MX28) && defined(CONFIG_CMD_NET)
-int cpu_eth_init(bd_t *bis)
+int cpu_eth_init(struct bd_info *bis)
 {
 	struct mxs_clkctrl_regs *clkctrl_regs =
 		(struct mxs_clkctrl_regs *)MXS_CLKCTRL_BASE;
@@ -281,8 +279,7 @@ void imx_get_mac_from_fuse(int dev_id, unsigned char *mac)
 
 int mxs_dram_init(void)
 {
-	struct mxs_spl_data *data = (struct mxs_spl_data *)
-		((CONFIG_SYS_TEXT_BASE - sizeof(struct mxs_spl_data)) & ~0xf);
+	struct mxs_spl_data *data = MXS_SPL_DATA;
 
 	if (data->mem_dram_size == 0) {
 		printf("MXS:\n"

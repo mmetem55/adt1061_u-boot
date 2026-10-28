@@ -1,22 +1,24 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * (C) Copyright 2001
  * Denis Peter, MPL AG Switzerland
  *
  * Adapted for U-Boot driver model
  * (C) Copyright 2015 Google, Inc
- *
- * SPDX-License-Identifier:	GPL-2.0+
  * Note: Part of this code has been derived from linux
  *
  */
 #ifndef _USB_H_
 #define _USB_H_
 
+#include <stdbool.h>
 #include <fdtdec.h>
 #include <usb_defs.h>
 #include <linux/usb/ch9.h>
 #include <asm/cache.h>
 #include <part.h>
+
+extern bool usb_started; /* flag for the started/stopped USB status */
 
 /*
  * The EHCI spec says that we must align to at least 32 bytes.  However,
@@ -46,6 +48,12 @@
  * time for a BULK device to react - some are slow.
  */
 #define USB_TIMEOUT_MS(pipe) (usb_pipebulk(pipe) ? 5000 : 1000)
+
+/*
+ * The xhcd hcd driver prepares only a limited number interfaces / endpoints.
+ * Define this limit so that drivers do not exceed it.
+ */
+#define USB_MAX_ACTIVE_INTERFACES	2
 
 /* device request (setup) */
 struct devrequest {
@@ -96,7 +104,7 @@ enum {
  * (the hubs) have this as parent data. Hubs are children of controllers or
  * other hubs and there is always a single root hub for each controller.
  * Therefore struct usb_device can always be accessed with
- * dev_get_parentdata(dev), where dev is a USB device.
+ * dev_get_parent_priv(dev), where dev is a USB device.
  *
  * Pointers exist for obtaining both the device (could be any uclass) and
  * controller (UCLASS_USB) from this structure. The controller does not have
@@ -104,7 +112,7 @@ enum {
  */
 struct usb_device {
 	int	devnum;			/* Device number on USB bus */
-	int	speed;			/* full/low/high */
+	enum usb_device_speed speed;	/* full/low/high */
 	char	mf[32];			/* manufacturer */
 	char	prod[32];		/* product */
 	char	serial[32];		/* serial number */
@@ -130,7 +138,7 @@ struct usb_device {
 	int string_langid;		/* language ID for strings */
 	int (*irq_handle)(struct usb_device *dev);
 	unsigned long irq_status;
-	int irq_act_len;		/* transfered bytes */
+	int irq_act_len;		/* transferred bytes */
 	void *privptr;
 	/*
 	 * Child devices -  if this is a hub device
@@ -138,10 +146,10 @@ struct usb_device {
 	 */
 	unsigned long status;
 	unsigned long int_pending;	/* 1 bit per ep, used by int_queue */
-	int act_len;			/* transfered bytes */
+	int act_len;			/* transferred bytes */
 	int maxchild;			/* Number of ports if hub */
 	int portnr;			/* Port number, 1=first */
-#ifndef CONFIG_DM_USB
+#if !CONFIG_IS_ENABLED(DM_USB)
 	/* parent hub, or NULL if this is the root hub */
 	struct usb_device *parent;
 	struct usb_device *children[USB_MAXCHILDREN];
@@ -149,7 +157,7 @@ struct usb_device {
 #endif
 	/* slot_id - for xHCI enabled devices */
 	unsigned int slot_id;
-#ifdef CONFIG_DM_USB
+#if CONFIG_IS_ENABLED(DM_USB)
 	struct udevice *dev;		/* Pointer to associated device */
 	struct udevice *controller_dev;	/* Pointer to associated controller */
 #endif
@@ -164,7 +172,8 @@ struct int_queue;
  */
 enum usb_init_type {
 	USB_INIT_HOST,
-	USB_INIT_DEVICE
+	USB_INIT_DEVICE,
+	USB_INIT_UNKNOWN,
 };
 
 /**********************************************************************
@@ -174,10 +183,10 @@ enum usb_init_type {
 int usb_lowlevel_init(int index, enum usb_init_type init, void **controller);
 int usb_lowlevel_stop(int index);
 
-#if defined(CONFIG_MUSB_HOST) || defined(CONFIG_DM_USB)
-int usb_reset_root_port(void);
+#if defined(CONFIG_USB_MUSB_HOST) || CONFIG_IS_ENABLED(DM_USB)
+int usb_reset_root_port(struct usb_device *dev);
 #else
-#define usb_reset_root_port()
+#define usb_reset_root_port(dev)
 #endif
 
 int submit_bulk_msg(struct usb_device *dev, unsigned long pipe,
@@ -185,9 +194,10 @@ int submit_bulk_msg(struct usb_device *dev, unsigned long pipe,
 int submit_control_msg(struct usb_device *dev, unsigned long pipe, void *buffer,
 			int transfer_len, struct devrequest *setup);
 int submit_int_msg(struct usb_device *dev, unsigned long pipe, void *buffer,
-			int transfer_len, int interval);
+			int transfer_len, int interval, bool nonblock);
 
-#if defined CONFIG_USB_EHCI || defined CONFIG_MUSB_HOST || defined(CONFIG_DM_USB)
+#if defined CONFIG_USB_EHCI_HCD || defined CONFIG_USB_MUSB_HOST \
+	|| CONFIG_IS_ENABLED(DM_USB)
 struct int_queue *create_int_queue(struct usb_device *dev, unsigned long pipe,
 	int queuesize, int elementsize, void *buffer, int interval);
 int destroy_int_queue(struct usb_device *dev, struct int_queue *queue);
@@ -197,15 +207,6 @@ void *poll_int_queue(struct usb_device *dev, struct int_queue *queue);
 /* Defines */
 #define USB_UHCI_VEND_ID	0x8086
 #define USB_UHCI_DEV_ID		0x7112
-
-/*
- * PXA25x can only act as USB device. There are drivers
- * which works with USB CDC gadgets implementations.
- * Some of them have common routines which can be used
- * in boards init functions e.g. udc_disconnect() used for
- * forced device disconnection from host.
- */
-extern void udc_disconnect(void);
 
 /*
  * board-specific hardware initialization, called by
@@ -227,8 +228,7 @@ int board_usb_cleanup(int index, enum usb_init_type init);
 
 #ifdef CONFIG_USB_STORAGE
 
-#define USB_MAX_STOR_DEV 5
-block_dev_desc_t *usb_stor_get_dev(int index);
+#define USB_MAX_STOR_DEV 7
 int usb_stor_scan(int mode);
 int usb_stor_info(void);
 
@@ -241,17 +241,21 @@ int usb_host_eth_scan(int mode);
 
 #endif
 
-#ifdef CONFIG_USB_KEYBOARD
+/*
+ * USB Keyboard reports are 8 bytes in boot protocol.
+ * Appendix B of HID Device Class Definition 1.11
+ */
+#define USB_KBD_BOOT_REPORT_SIZE 8
 
-int drv_usb_kbd_init(void);
-int usb_kbd_deregister(int force);
+/*
+ * usb_init() - initialize the USB Controllers
+ *
+ * Returns: 0 if OK, -ENOENT if there are no USB devices
+ */
+int usb_init(void);
 
-#endif
-/* routines */
-int usb_init(void); /* initialize the USB Controller */
 int usb_stop(void); /* stop the USB Controller */
 int usb_detect_change(void); /* detect if a USB device has been (un)plugged */
-
 
 int usb_set_protocol(struct usb_device *dev, int ifnum, int protocol);
 int usb_set_idle(struct usb_device *dev, int ifnum, int duration,
@@ -262,12 +266,14 @@ int usb_control_msg(struct usb_device *dev, unsigned int pipe,
 			void *data, unsigned short size, int timeout);
 int usb_bulk_msg(struct usb_device *dev, unsigned int pipe,
 			void *data, int len, int *actual_length, int timeout);
-int usb_submit_int_msg(struct usb_device *dev, unsigned long pipe,
-			void *buffer, int transfer_len, int interval);
+int usb_int_msg(struct usb_device *dev, unsigned long pipe,
+		void *buffer, int transfer_len, int interval, bool nonblock);
+int usb_lock_async(struct usb_device *dev, int lock);
 int usb_disable_asynch(int disable);
 int usb_maxpacket(struct usb_device *dev, unsigned long pipe);
-int usb_get_configuration_no(struct usb_device *dev, unsigned char *buffer,
-				int cfgno);
+int usb_get_configuration_no(struct usb_device *dev, int cfgno,
+			unsigned char *buffer, int length);
+int usb_get_configuration_len(struct usb_device *dev, int cfgno);
 int usb_get_report(struct usb_device *dev, int ifnum, unsigned char type,
 			unsigned char id, void *buf, int size);
 int usb_get_class_descriptor(struct usb_device *dev, int ifnum,
@@ -493,15 +499,31 @@ struct usb_device_id {
 
 /**
  * struct usb_driver_entry - Matches a driver to its usb_device_ids
- * @compatible: Compatible string
- * @data: Data for this compatible string
+ * @driver: Driver to use
+ * @match: List of match records for this driver, terminated by {}
  */
 struct usb_driver_entry {
 	struct driver *driver;
 	const struct usb_device_id *match;
 };
 
-#define USB_DEVICE(__name, __match)					\
+#define USB_DEVICE_ID_MATCH_DEVICE \
+		(USB_DEVICE_ID_MATCH_VENDOR | USB_DEVICE_ID_MATCH_PRODUCT)
+
+/**
+ * USB_DEVICE - macro used to describe a specific usb device
+ * @vend: the 16 bit USB Vendor ID
+ * @prod: the 16 bit USB Product ID
+ *
+ * This macro is used to create a struct usb_device_id that matches a
+ * specific device.
+ */
+#define USB_DEVICE(vend, prod) \
+	.match_flags = USB_DEVICE_ID_MATCH_DEVICE, \
+	.idVendor = (vend), \
+	.idProduct = (prod)
+
+#define U_BOOT_USB_DEVICE(__name, __match) \
 	ll_entry_declare(struct usb_driver_entry, __name, usb_driver_entry) = {\
 		.driver = llsym(struct driver, __name, driver), \
 		.match = __match, \
@@ -520,6 +542,21 @@ struct usb_hub_status {
 	unsigned short wHubChange;
 } __attribute__ ((packed));
 
+/*
+ * Hub Device descriptor
+ * USB Hub class device protocols
+ */
+#define USB_HUB_PR_FS		0 /* Full speed hub */
+#define USB_HUB_PR_HS_NO_TT	0 /* Hi-speed hub without TT */
+#define USB_HUB_PR_HS_SINGLE_TT	1 /* Hi-speed hub with single TT */
+#define USB_HUB_PR_HS_MULTI_TT	2 /* Hi-speed hub with multiple TT */
+#define USB_HUB_PR_SS		3 /* Super speed hub */
+
+/* Transaction Translator Think Times, in bits */
+#define HUB_TTTT_8_BITS		0x00
+#define HUB_TTTT_16_BITS	0x20
+#define HUB_TTTT_24_BITS	0x40
+#define HUB_TTTT_32_BITS	0x60
 
 /* Hub descriptor */
 struct usb_hub_descriptor {
@@ -529,32 +566,47 @@ struct usb_hub_descriptor {
 	unsigned short wHubCharacteristics;
 	unsigned char  bPwrOn2PwrGood;
 	unsigned char  bHubContrCurrent;
-	unsigned char  DeviceRemovable[(USB_MAXCHILDREN+1+7)/8];
-	unsigned char  PortPowerCtrlMask[(USB_MAXCHILDREN+1+7)/8];
-	/* DeviceRemovable and PortPwrCtrlMask want to be variable-length
-	   bitmaps that hold max 255 entries. (bit0 is ignored) */
-} __attribute__ ((packed));
+	/* 2.0 and 3.0 hubs differ here */
+	union {
+		struct {
+			/* add 1 bit for hub status change; round to bytes */
+			__u8 DeviceRemovable[(USB_MAXCHILDREN + 1 + 7) / 8];
+			__u8 PortPowerCtrlMask[(USB_MAXCHILDREN + 1 + 7) / 8];
+		} __attribute__ ((packed)) hs;
 
+		struct {
+			__u8 bHubHdrDecLat;
+			__le16 wHubDelay;
+			__le16 DeviceRemovable;
+		} __attribute__ ((packed)) ss;
+	} u;
+} __attribute__ ((packed));
 
 struct usb_hub_device {
 	struct usb_device *pusb_dev;
 	struct usb_hub_descriptor desc;
+
+	ulong connect_timeout;		/* Device connection timeout in ms */
+	ulong query_delay;		/* Device query delay in ms */
+	int overcurrent_count[USB_MAXCHILDREN];	/* Over-current counter */
+	int hub_depth;			/* USB 3.0 hub depth */
+	struct usb_tt tt;		/* Transaction Translator */
 };
 
-#ifdef CONFIG_DM_USB
+#if CONFIG_IS_ENABLED(DM_USB)
 /**
- * struct usb_platdata - Platform data about a USB controller
+ * struct usb_plat - Platform data about a USB controller
  *
- * Given a USB controller (UCLASS_USB) dev this is dev_get_platdata(dev)
+ * Given a USB controller (UCLASS_USB) dev this is dev_get_plat(dev)
  */
-struct usb_platdata {
+struct usb_plat {
 	enum usb_init_type init_type;
 };
 
 /**
- * struct usb_dev_platdata - Platform data about a USB device
+ * struct usb_dev_plat - Platform data about a USB device
  *
- * Given a USB device dev this structure is dev_get_parent_platdata(dev).
+ * Given a USB device dev this structure is dev_get_parent_plat(dev).
  * This is used by sandbox to provide emulation data also.
  *
  * @id:		ID used to match this device
@@ -563,7 +615,7 @@ struct usb_platdata {
  * @strings:	List of descriptor strings (for sandbox emulation purposes)
  * @desc_list:	List of descriptors (for sandbox emulation purposes)
  */
-struct usb_dev_platdata {
+struct usb_dev_plat {
 	struct usb_device_id id;
 	int devnum;
 	/*
@@ -602,6 +654,18 @@ struct usb_bus_priv {
 	int next_addr;
 	bool desc_before_addr;
 	bool companion;
+};
+
+/**
+ * struct usb_emul_plat - platform data about the USB emulator
+ *
+ * Given a USB emulator (UCLASS_USB_EMUL) 'dev', this is
+ * dev_get_uclass_plat(dev).
+ *
+ * @port1:	USB emulator device port number on the parent hub
+ */
+struct usb_emul_plat {
+	int port1;	/* Port number (numbered from 1) */
 };
 
 /**
@@ -649,7 +713,7 @@ struct dm_usb_ops {
 	 */
 	int (*interrupt)(struct udevice *bus, struct usb_device *udev,
 			 unsigned long pipe, void *buffer, int length,
-			 int interval);
+			 int interval, bool nonblock);
 
 	/**
 	 * create_int_queue() - Create and queue interrupt packets
@@ -705,51 +769,63 @@ struct dm_usb_ops {
 	 * is read). This should be NULL for EHCI, which does not need this.
 	 */
 	int (*alloc_device)(struct udevice *bus, struct usb_device *udev);
+
+	/**
+	 * reset_root_port() - Reset usb root port
+	 */
+	int (*reset_root_port)(struct udevice *bus, struct usb_device *udev);
+
+	/**
+	 * update_hub_device() - Update HCD's internal representation of hub
+	 *
+	 * After a hub descriptor is fetched, notify HCD so that its internal
+	 * representation of this hub can be updated (xHCI)
+	 */
+	int (*update_hub_device)(struct udevice *bus, struct usb_device *udev);
+
+	/**
+	 * get_max_xfer_size() - Get HCD's maximum transfer bytes
+	 *
+	 * The HCD may have limitation on the maximum bytes to be transferred
+	 * in a USB transfer. USB class driver needs to be aware of this.
+	 */
+	int (*get_max_xfer_size)(struct udevice *bus, size_t *size);
+
+	/**
+	 * lock_async() - Keep async schedule after a transfer
+	 *
+	 * It may be desired to keep the asynchronous schedule running even
+	 * after a transfer finishes, usually when doing multiple transfers
+	 * back-to-back. This callback allows signalling the USB controller
+	 * driver to do just that.
+	 */
+	int (*lock_async)(struct udevice *udev, int lock);
 };
 
 #define usb_get_ops(dev)	((struct dm_usb_ops *)(dev)->driver->ops)
 #define usb_get_emul_ops(dev)	((struct dm_usb_ops *)(dev)->driver->ops)
-
-#ifdef CONFIG_MUSB_HOST
-int usb_reset_root_port(void);
-#endif
-
-/**
- * usb_get_dev_index() - look up a device index number
- *
- * Look up devices using their index number (starting at 0). This works since
- * in U-Boot device addresses are allocated starting at 1 with no gaps.
- *
- * TODO(sjg@chromium.org): Remove this function when usb_ether.c is modified
- * to work better with driver model.
- *
- * @bus:	USB bus to check
- * @index:	Index number of device to find (0=first). This is just the
- *		device address less 1.
- */
-struct usb_device *usb_get_dev_index(struct udevice *bus, int index);
-
-/**
- * usb_legacy_port_reset() - Legacy function to reset a hub port
- *
- * @hub:	Hub device
- * @portnr:	Port number (1=first)
- */
-int usb_legacy_port_reset(struct usb_device *hub, int portnr);
 
 /**
  * usb_setup_device() - set up a device ready for use
  *
  * @dev:	USB device pointer. This need not be a real device - it is
  *		common for it to just be a local variable with its ->dev
- *		member (i.e. @dev->dev) set to the parent device
+ *		member (i.e. @dev->dev) set to the parent device and
+ *		dev->portnr set to the port number on the hub (1=first)
  * @do_read:	true to read the device descriptor before an address is set
  *		(should be false for XHCI buses, true otherwise)
  * @parent:	Parent device (either UCLASS_USB or UCLASS_USB_HUB)
- * @portnr:	Port number on hub (1=first) or 0 for none
- * @return 0 if OK, -ve on error */
+ * Return: 0 if OK, -ve on error */
 int usb_setup_device(struct usb_device *dev, bool do_read,
-		     struct usb_device *parent, int portnr);
+		     struct usb_device *parent);
+
+/**
+ * usb_hub_is_root_hub() - Test whether a hub device is root hub or not
+ *
+ * @hub:	USB hub device to test
+ * @return:	true if the hub device is root hub, false otherwise.
+ */
+bool usb_hub_is_root_hub(struct udevice *hub);
 
 /**
  * usb_hub_scan() - Scan a hub and find its devices
@@ -769,7 +845,7 @@ int usb_hub_scan(struct udevice *hub);
  * @port:	Hub port number (numbered from 1)
  * @speed:	USB speed to use for this device
  * @devp:	Returns pointer to device if all is well
- * @return 0 if OK, -ve on error
+ * Return: 0 if OK, -ve on error
  */
 int usb_scan_device(struct udevice *parent, int port,
 		    enum usb_device_speed speed, struct udevice **devp);
@@ -781,7 +857,7 @@ int usb_scan_device(struct udevice *parent, int port,
  * will be a device with uclass UCLASS_USB.
  *
  * @dev:	Device to check
- * @return The bus, or NULL if not found (this indicates a critical error in
+ * Return: The bus, or NULL if not found (this indicates a critical error in
  *	the USB stack
  */
 struct udevice *usb_get_bus(struct udevice *dev);
@@ -829,6 +905,15 @@ struct ehci_ctrl;
 int usb_setup_ehci_gadget(struct ehci_ctrl **ctlrp);
 
 /**
+ * usb_remove_ehci_gadget() - Remove a gadget USB device
+ *
+ * TODO(sjg@chromium.org): Tidy this up when USB gadgets can use driver model
+ *
+ * This provides a way to tell a controller to remove a USB device
+ */
+int usb_remove_ehci_gadget(struct ehci_ctrl **ctlrp);
+
+/**
  * usb_stor_reset() - Prepare to scan USB storage devices
  *
  * Empty the list of USB storage devices in preparation for scanning them.
@@ -836,7 +921,7 @@ int usb_setup_ehci_gadget(struct ehci_ctrl **ctlrp);
  */
 void usb_stor_reset(void);
 
-#else /* !CONFIG_DM_USB */
+#else /* !CONFIG_IS_ENABLED(DM_USB) */
 
 struct usb_device *usb_get_dev_index(int index);
 
@@ -847,23 +932,17 @@ bool usb_device_has_child_on_port(struct usb_device *parent, int port);
 int usb_hub_probe(struct usb_device *dev, int ifnum);
 void usb_hub_reset(void);
 
-/**
- * legacy_hub_port_reset() - reset a port given its usb_device pointer
+/*
+ * usb_find_usb2_hub_address_port() - Get hub address and port for TT setting
  *
- * Reset a hub port and see if a device is present on that port, providing
- * sufficient time for it to show itself. The port status is returned.
+ * Searches for the first HS hub above the given device. If a
+ * HS hub is found, the hub address and the port the device is
+ * connected to is return, as required for SPLIT transactions
  *
- * With driver model this moves to hub_port_reset() and is passed a struct
- * udevice.
- *
- * @dev:	USB device to reset
- * @port:	Port number to reset (note ports are numbered from 0 here)
- * @portstat:	Returns port status
+ * @param: udev full speed or low speed device
  */
-int legacy_hub_port_reset(struct usb_device *dev, int port,
-			  unsigned short *portstat);
-
-int hub_port_reset(struct udevice *dev, int port, unsigned short *portstat);
+void usb_find_usb2_hub_address_port(struct usb_device *udev,
+				    uint8_t *hub_address, uint8_t *hub_port);
 
 /**
  * usb_alloc_new_device() - Allocate a new device
@@ -871,7 +950,7 @@ int hub_port_reset(struct udevice *dev, int port, unsigned short *portstat);
  * @devp: returns a pointer of a new device structure. With driver model this
  *		is a device pointer, but with legacy USB this pointer is
  *		driver-specific.
- * @return 0 if OK, -ENOSPC if we have found out of room for new devices
+ * Return: 0 if OK, -ENOSPC if we have found out of room for new devices
  */
 int usb_alloc_new_device(struct udevice *controller, struct usb_device **devp);
 
@@ -888,22 +967,44 @@ int usb_new_device(struct usb_device *dev);
 int usb_alloc_device(struct usb_device *dev);
 
 /**
+ * usb_update_hub_device() - Update HCD's internal representation of hub
+ *
+ * After a hub descriptor is fetched, notify HCD so that its internal
+ * representation of this hub can be updated.
+ *
+ * @dev:		Hub device
+ * Return: 0 if OK, -ve on error
+ */
+int usb_update_hub_device(struct usb_device *dev);
+
+/**
+ * usb_get_max_xfer_size() - Get HCD's maximum transfer bytes
+ *
+ * The HCD may have limitation on the maximum bytes to be transferred
+ * in a USB transfer. USB class driver needs to be aware of this.
+ *
+ * @dev:		USB device
+ * @size:		maximum transfer bytes
+ * Return: 0 if OK, -ve on error
+ */
+int usb_get_max_xfer_size(struct usb_device *dev, size_t *size);
+
+/**
  * usb_emul_setup_device() - Set up a new USB device emulation
  *
  * This is normally called when a new emulation device is bound. It tells
  * the USB emulation uclass about the features of the emulator.
  *
  * @dev:		Emulation device
- * @maxpacketsize:	Maximum packet size (e.g. PACKET_SIZE_64)
  * @strings:		List of USB string descriptors, terminated by a NULL
  *			entry
  * @desc_list:		List of points or USB descriptors, terminated by NULL.
  *			The first entry must be struct usb_device_descriptor,
  *			and others follow on after that.
- * @return 0 if OK, -ve on error
+ * Return: 0 if OK, -ENOSYS if not implemented, other -ve on error
  */
-int usb_emul_setup_device(struct udevice *dev, int maxpacketsize,
-			  struct usb_string *strings, void **desc_list);
+int usb_emul_setup_device(struct udevice *dev, struct usb_string *strings,
+			  void **desc_list);
 
 /**
  * usb_emul_control() - Send a control packet to an emulator
@@ -911,7 +1012,7 @@ int usb_emul_setup_device(struct udevice *dev, int maxpacketsize,
  * @emul:	Emulator device
  * @udev:	USB device (which the emulator is causing to appear)
  * See struct dm_usb_ops for details on other parameters
- * @return 0 if OK, -ve on error
+ * Return: 0 if OK, -ve on error
  */
 int usb_emul_control(struct udevice *emul, struct usb_device *udev,
 		     unsigned long pipe, void *buffer, int length,
@@ -923,29 +1024,75 @@ int usb_emul_control(struct udevice *emul, struct usb_device *udev,
  * @emul:	Emulator device
  * @udev:	USB device (which the emulator is causing to appear)
  * See struct dm_usb_ops for details on other parameters
- * @return 0 if OK, -ve on error
+ * Return: 0 if OK, -ve on error
  */
 int usb_emul_bulk(struct udevice *emul, struct usb_device *udev,
 		  unsigned long pipe, void *buffer, int length);
 
 /**
+ * usb_emul_int() - Send an interrupt packet to an emulator
+ *
+ * @emul:	Emulator device
+ * @udev:	USB device (which the emulator is causing to appear)
+ * See struct dm_usb_ops for details on other parameters
+ * Return: 0 if OK, -ve on error
+ */
+int usb_emul_int(struct udevice *emul, struct usb_device *udev,
+		  unsigned long pipe, void *buffer, int length, int interval,
+		  bool nonblock);
+
+/**
  * usb_emul_find() - Find an emulator for a particular device
  *
- * Check @pipe to find a device number on bus @bus and return it.
+ * Check @pipe and @port1 to find a device number on bus @bus and return it.
  *
  * @bus:	USB bus (controller)
  * @pipe:	Describes pipe being used, and includes the device number
+ * @port1:	Describes port number on the parent hub
  * @emulp:	Returns pointer to emulator, or NULL if not found
- * @return 0 if found, -ve on error
+ * Return: 0 if found, -ve on error
  */
-int usb_emul_find(struct udevice *bus, ulong pipe, struct udevice **emulp);
+int usb_emul_find(struct udevice *bus, ulong pipe, int port1,
+		  struct udevice **emulp);
 
 /**
- * usb_emul_reset() - Reset all emulators ready for use
+ * usb_emul_find_for_dev() - Find an emulator for a particular device
  *
- * Clear out any address information in the emulators and make then ready for
- * a new USB scan
+ * @dev:	USB device to check
+ * @emulp:	Returns pointer to emulator, or NULL if not found
+ * Return: 0 if found, -ve on error
  */
-void usb_emul_reset(struct udevice *dev);
+int usb_emul_find_for_dev(struct udevice *dev, struct udevice **emulp);
+
+/**
+ * usb_emul_find_descriptor() - Find a USB descriptor of a particular device
+ *
+ * @ptr:	a pointer to a list of USB descriptor pointers
+ * @type:	type of USB descriptor to find
+ * @index:	if @type is USB_DT_CONFIG, this is the configuration value
+ * Return: a pointer to the USB descriptor found, NULL if not found
+ */
+struct usb_generic_descriptor **usb_emul_find_descriptor(
+		struct usb_generic_descriptor **ptr, int type, int index);
+
+/**
+ * usb_show_tree() - show the USB device tree
+ *
+ * This shows a list of active USB devices along with basic information about
+ * each.
+ */
+void usb_show_tree(void);
+
+/**
+ * usb_kbd_remove_for_test() - Remove any USB keyboard
+ *
+ * This can only be called from test_pre_run(). It removes the USB keyboard from
+ * the console system so that the USB device can be dropped
+ */
+#if CONFIG_IS_ENABLED(USB_KEYBOARD)
+int usb_kbd_remove_for_test(void);
+#else
+static inline int usb_kbd_remove_for_test(void) { return 0; }
+#endif
 
 #endif /*_USB_H_ */

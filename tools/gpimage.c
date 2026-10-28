@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * (C) Copyright 2014
  * Texas Instruments Incorporated
@@ -15,8 +16,6 @@
  * (C) Copyright 2008
  * Marvell Semiconductor <www.marvell.com>
  * Written-by: Prafulla Wadaskar <prafulla@marvell.com>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #include "imagetool.h"
@@ -42,7 +41,7 @@ static int gpimage_verify_header(unsigned char *ptr, int image_size,
 	return gph_verify_header(gph, 1);
 }
 
-static void gpimage_print_header(const void *ptr)
+static void gpimage_print_header(const void *ptr, struct image_tool_params *params)
 {
 	const struct gp_header *gph = (struct gp_header *)ptr;
 

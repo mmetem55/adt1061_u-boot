@@ -1,10 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * MCF5441X Internal Memory Map
  *
  * Copyright 2010-2012 Freescale Semiconductor, Inc.
  * TsiChung Liew (Tsi-Chung.Liew@freescale.com)
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #ifndef __MCF5441X__
@@ -700,7 +699,6 @@
 #define GPIO_PAR_FEC_FEC_RMII0FUL_1FUL	(0x03)
 #define GPIO_PAR_FEC_FEC_MII		(0x01)	/* MDC & MDIO - GPIO */
 #define GPIO_PAR_FEC_FEC_MIIFUL	(0x00)
-
 
 /* TC: Need to edit here.... */
 

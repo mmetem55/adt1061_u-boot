@@ -1,8 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  *  Copyright (C) 2012 Samsung Electronics
  *  Lukasz Majewski <l.majewski@samsung.com>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #ifndef __MAX17042_FG_H_
@@ -43,7 +42,6 @@ enum {
 
 #define RCOMP0			0x0060
 #define TempCo			0x1015
-
 
 #define MAX17042_POR (1 << 1)
 

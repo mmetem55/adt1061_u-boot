@@ -1,8 +1,5 @@
-/*
- * SPDX-License-Identifier:	GPL-2.0+
- */
+// SPDX-License-Identifier: GPL-2.0+
 
-#include <common.h>
 #include <exports.h>
 
 /*
@@ -23,7 +20,6 @@
  * This may be modified such thread_yield may be called in syscalls, and
  * timer interrupts.
  */
-
 
 #define MAX_THREADS 8
 
@@ -58,12 +54,11 @@ struct lthread {
 static volatile struct lthread lthreads[MAX_THREADS];
 static volatile int current_tid = MASTER_THREAD;
 
-
 static uchar dbg = 0;
 
 #define PDEBUG(fmt, args...)	 {					\
 	if(dbg != 0) {							\
-		printf("[%s %d %s]: ",__FILE__,__LINE__,__FUNCTION__);\
+		printf("[%s %d %s]: ", __FILE__, __LINE__, __func__);\
 		printf(fmt, ##args);				\
 		printf("\n");					\
 	}								\
@@ -164,7 +159,6 @@ static int testthread (void *name)
 
 	return *(int *) name + 1;
 }
-
 
 static void sched_init (void)
 {
@@ -267,9 +261,8 @@ static void thread_launcher (void)
 static int thread_start (int id)
 {
 	PDEBUG ("thread_start: id=%d", id);
-	if (id <= MASTER_THREAD || id > MAX_THREADS) {
+	if (id <= MASTER_THREAD || id >= MAX_THREADS)
 		return RC_FAILURE;
-	}
 
 	if (lthreads[id].state != STATE_STOPPED)
 		return RC_FAILURE;

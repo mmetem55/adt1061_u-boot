@@ -1,9 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Chromium OS cros_ec driver - SPI interface
  *
  * Copyright (c) 2012 The Chromium OS Authors.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 /*
@@ -13,18 +12,17 @@
  * KBC.
  */
 
-#include <common.h>
 #include <cros_ec.h>
 #include <dm.h>
 #include <errno.h>
+#include <log.h>
 #include <spi.h>
-
-DECLARE_GLOBAL_DATA_PTR;
+#include <time.h>
 
 int cros_ec_spi_packet(struct udevice *udev, int out_bytes, int in_bytes)
 {
 	struct cros_ec_dev *dev = dev_get_uclass_priv(udev);
-	struct spi_slave *slave = dev_get_parentdata(dev->dev);
+	struct spi_slave *slave = dev_get_parent_priv(dev->dev);
 	ulong start;
 	uint8_t byte;
 	int rv;
@@ -77,14 +75,14 @@ done:
  * @param dinp		Returns pointer to response data. This will be
  *			untouched unless we return a value > 0.
  * @param din_len	Maximum size of response in bytes
- * @return number of bytes in response, or -1 on error
+ * Return: number of bytes in response, or -1 on error
  */
 int cros_ec_spi_command(struct udevice *udev, uint8_t cmd, int cmd_version,
 		     const uint8_t *dout, int dout_len,
 		     uint8_t **dinp, int din_len)
 {
 	struct cros_ec_dev *dev = dev_get_uclass_priv(udev);
-	struct spi_slave *slave = dev_get_parentdata(dev->dev);
+	struct spi_slave *slave = dev_get_parent_priv(dev->dev);
 	int in_bytes = din_len + 4;	/* status, length, checksum, trailer */
 	uint8_t *out;
 	uint8_t *p;
@@ -153,7 +151,7 @@ int cros_ec_spi_command(struct udevice *udev, uint8_t cmd, int cmd_version,
 
 	/* Response code is first byte of message */
 	if (p[0] != EC_RES_SUCCESS) {
-		printf("%s: Returned status %d\n", __func__, p[0]);
+		log_debug("Returned status %d\n", p[0]);
 		return -(int)(p[0]);
 	}
 
@@ -186,8 +184,8 @@ static const struct udevice_id cros_ec_ids[] = {
 	{ }
 };
 
-U_BOOT_DRIVER(cros_ec_spi) = {
-	.name		= "cros_ec_spi",
+U_BOOT_DRIVER(google_cros_ec_spi) = {
+	.name		= "google_cros_ec_spi",
 	.id		= UCLASS_CROS_EC,
 	.of_match	= cros_ec_ids,
 	.probe		= cros_ec_probe,

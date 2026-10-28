@@ -1,23 +1,10 @@
+/* SPDX-License-Identifier: LGPL-2.1 */
 /**
  * \file sha1.h
  * based from http://xyssl.org/code/source/sha1/
  *  FIPS-180-1 compliant SHA-1 implementation
  *
  *  Copyright (C) 2003-2006  Christophe Devine
- *
- *  This library is free software; you can redistribute it and/or
- *  modify it under the terms of the GNU Lesser General Public
- *  License, version 2.1 as published by the Free Software Foundation.
- *
- *  This library is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- *  Lesser General Public License for more details.
- *
- *  You should have received a copy of the GNU Lesser General Public
- *  License along with this library; if not, write to the Free Software
- *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- *  MA	02110-1301  USA
  */
 /*
  *  The SHA-1 standard was published by NIST in 1993.
@@ -27,30 +14,51 @@
 #ifndef _SHA1_H
 #define _SHA1_H
 
+#include <linux/kconfig.h>
+#include <linux/types.h>
+
+#if CONFIG_IS_ENABLED(MBEDTLS_LIB_CRYPTO)
+#include "mbedtls_options.h"
+#include <mbedtls/sha1.h>
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 #define SHA1_SUM_POS	-0x20
 #define SHA1_SUM_LEN	20
+#define SHA1_DER_LEN	15
 
+#define SHA1_DEF_CHUNK_SZ 0x10000
+
+#define K_IPAD_VAL 0x36
+#define K_OPAD_VAL 0x5C
+#define K_PAD_LEN 64
+
+extern const uint8_t sha1_der_prefix[];
+
+#if CONFIG_IS_ENABLED(MBEDTLS_LIB_CRYPTO)
+typedef mbedtls_sha1_context sha1_context;
+#else
 /**
  * \brief	   SHA-1 context structure
  */
 typedef struct
 {
     unsigned long total[2];	/*!< number of bytes processed	*/
-    unsigned long state[5];	/*!< intermediate digest state	*/
+    uint32_t state[5];		/*!< intermediate digest state	*/
     unsigned char buffer[64];	/*!< data block being processed */
 }
 sha1_context;
+#endif
 
 /**
  * \brief	   SHA-1 context setup
  *
  * \param ctx	   SHA-1 context to be initialized
  */
-void sha1_starts( sha1_context *ctx );
+void sha1_starts(sha1_context *ctx);
 
 /**
  * \brief	   SHA-1 process buffer
@@ -69,16 +77,6 @@ void sha1_update(sha1_context *ctx, const unsigned char *input,
  * \param output   SHA-1 checksum result
  */
 void sha1_finish( sha1_context *ctx, unsigned char output[20] );
-
-/**
- * \brief	   Output = SHA-1( input buffer )
- *
- * \param input    buffer holding the  data
- * \param ilen	   length of the input data
- * \param output   SHA-1 checksum result
- */
-void sha1_csum(const unsigned char *input, unsigned int ilen,
-		unsigned char *output);
 
 /**
  * \brief	   Output = SHA-1( input buffer ), with watchdog triggering

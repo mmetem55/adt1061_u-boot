@@ -1,7 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /* (C) Copyright 2002
  * Detlev Zundel, DENX Software Engineering, dzu@denx.de.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 /************************************************************************/
@@ -10,6 +9,8 @@
 
 #ifndef _BMP_H_
 #define _BMP_H_
+
+#include <linux/compiler.h>
 
 struct __packed bmp_color_table_entry {
 	__u8	blue;

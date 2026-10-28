@@ -1,110 +1,152 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
- *  Copyright (C) 2012 Altera Corporation <www.altera.com>
- *
- * SPDX-License-Identifier:	GPL-2.0+
+ *  Copyright (C) 2012-2025 Altera Corporation <www.altera.com>
  */
 
-#include <common.h>
-#include <asm/io.h>
-#include <altera.h>
+#include <config.h>
+#include <command.h>
+#include <errno.h>
+#include <init.h>
+#include <handoff.h>
+#include <hang.h>
+#include <watchdog.h>
+#include <fdtdec.h>
+#include <dm/ofnode.h>
+#include <linux/libfdt.h>
+#include <linux/printk.h>
 #include <miiphy.h>
 #include <netdev.h>
-#include <watchdog.h>
-#include <asm/arch/reset_manager.h>
-#include <asm/arch/system_manager.h>
-#include <asm/arch/dwmmc.h>
-#include <asm/arch/nic301.h>
-#include <asm/arch/scu.h>
+#include <asm/global_data.h>
+#include <asm/io.h>
+#include <asm/cache.h>
 #include <asm/pl310.h>
+#include <asm/arch/misc.h>
+#include <asm/arch/nic301.h>
+#include <asm/arch/reset_manager.h>
+#include <asm/arch/scan_manager.h>
+#include <asm/arch/scu.h>
+#include <asm/arch/system_manager.h>
+#include <altera.h>
+#include <bloblist.h>
+#include <cpu_func.h>
 
 DECLARE_GLOBAL_DATA_PTR;
 
-static struct pl310_regs *const pl310 =
-	(struct pl310_regs *)CONFIG_SYS_PL310_BASE;
-static struct socfpga_system_manager *sysmgr_regs =
-	(struct socfpga_system_manager *)SOCFPGA_SYSMGR_ADDRESS;
-static struct socfpga_reset_manager *reset_manager_base =
-	(struct socfpga_reset_manager *)SOCFPGA_RSTMGR_ADDRESS;
-static struct nic301_registers *nic301_regs =
-	(struct nic301_registers *)SOCFPGA_L3REGS_ADDRESS;
-static struct scu_registers *scu_regs =
-	(struct scu_registers *)SOCFPGA_MPUSCU_ADDRESS;
+phys_addr_t socfpga_clkmgr_base __section(".data");
+phys_addr_t socfpga_rstmgr_base __section(".data");
+phys_addr_t socfpga_sysmgr_base __section(".data");
+
+#ifdef CONFIG_SYS_L2_PL310
+static const struct pl310_regs *const pl310 =
+	(struct pl310_regs *)CFG_SYS_PL310_BASE;
+#endif
+
+struct bsel bsel_str[] = {
+	{ "rsvd", "Reserved", },
+	{ "fpga", "FPGA (HPS2FPGA Bridge)", },
+	{ "nand", "NAND Flash (1.8V)", },
+	{ "nand", "NAND Flash (3.0V)", },
+	{ "sd", "SD/MMC External Transceiver (1.8V)", },
+	{ "sd", "SD/MMC Internal Transceiver (3.0V)", },
+	{ "qspi", "QSPI Flash (1.8V)", },
+	{ "qspi", "QSPI Flash (3.0V)", },
+};
 
 int dram_init(void)
 {
-	gd->ram_size = get_ram_size((long *)PHYS_SDRAM_1, PHYS_SDRAM_1_SIZE);
+#if CONFIG_IS_ENABLED(HANDOFF) && IS_ENABLED(CONFIG_ARCH_SOCFPGA_AGILEX5)
+	struct spl_handoff *ho;
+
+	ho = bloblist_find(BLOBLISTT_U_BOOT_SPL_HANDOFF, sizeof(*ho));
+	if (!ho)
+		return log_msg_ret("Missing SPL hand-off info", -ENOENT);
+	gd->ram_size = ho->ram_bank[0].size;
+	gd->ram_base = ho->ram_bank[0].start;
+#else
+	if (fdtdec_setup_mem_size_base() != 0)
+		return -EINVAL;
+#endif /* HANDOFF && CONFIG_ARCH_SOCFPGA_AGILEX5 */
+
 	return 0;
 }
 
 void enable_caches(void)
 {
-#ifndef CONFIG_SYS_ICACHE_OFF
+#if !CONFIG_IS_ENABLED(SYS_ICACHE_OFF)
 	icache_enable();
 #endif
-#ifndef CONFIG_SYS_DCACHE_OFF
+#if !CONFIG_IS_ENABLED(SYS_DCACHE_OFF)
 	dcache_enable();
 #endif
 }
 
-/*
- * DesignWare Ethernet initialization
- */
-#ifdef CONFIG_ETH_DESIGNWARE
-int cpu_eth_init(bd_t *bis)
+#ifdef CONFIG_SYS_L2_PL310
+void v7_outer_cache_enable(void)
 {
-#if CONFIG_EMAC_BASE == SOCFPGA_EMAC0_ADDRESS
-	const int physhift = SYSMGR_EMACGRP_CTRL_PHYSEL0_LSB;
-#elif CONFIG_EMAC_BASE == SOCFPGA_EMAC1_ADDRESS
-	const int physhift = SYSMGR_EMACGRP_CTRL_PHYSEL1_LSB;
-#else
-#error "Incorrect CONFIG_EMAC_BASE value!"
-#endif
+	struct udevice *dev;
 
-	/* Initialize EMAC. This needs to be done at least once per boot. */
+	if (uclass_get_device(UCLASS_CACHE, 0, &dev))
+		pr_err("cache controller driver NOT found!\n");
+}
+
+void v7_outer_cache_disable(void)
+{
+	/* Disable the L2 cache */
+	clrbits_le32(&pl310->pl310_ctrl, L2X0_CTRL_EN);
+}
+
+void socfpga_pl310_clear(void)
+{
+	u32 mask = 0xff, ena = 0;
+
+	icache_enable();
+
+	/* Disable the L2 cache */
+	clrbits_le32(&pl310->pl310_ctrl, L2X0_CTRL_EN);
+
+	writel(0x0, &pl310->pl310_tag_latency_ctrl);
+	writel(0x10, &pl310->pl310_data_latency_ctrl);
+
+	/* enable BRESP, instruction and data prefetch, full line of zeroes */
+	setbits_le32(&pl310->pl310_aux_ctrl,
+		     L310_AUX_CTRL_DATA_PREFETCH_MASK |
+		     L310_AUX_CTRL_INST_PREFETCH_MASK |
+		     L310_SHARED_ATT_OVERRIDE_ENABLE);
+
+	/* Enable the L2 cache */
+	ena = readl(&pl310->pl310_ctrl);
+	ena |= L2X0_CTRL_EN;
 
 	/*
-	 * Putting the EMAC controller to reset when configuring the PHY
-	 * interface select at System Manager
+	 * Invalidate the PL310 L2 cache. Keep the invalidation code
+	 * entirely in L1 I-cache to avoid any bus traffic through
+	 * the L2.
 	 */
-	socfpga_emac_reset(1);
+	asm volatile(
+		".align	5			\n"
+		"	b	3f		\n"
+		"1:	str	%1,	[%4]	\n"
+		"	dsb			\n"
+		"	isb			\n"
+		"	str	%0,	[%2]	\n"
+		"	dsb			\n"
+		"	isb			\n"
+		"2:	ldr	%0,	[%2]	\n"
+		"	cmp	%0,	#0	\n"
+		"	bne	2b		\n"
+		"	str	%0,	[%3]	\n"
+		"	dsb			\n"
+		"	isb			\n"
+		"	b	4f		\n"
+		"3:	b	1b		\n"
+		"4:	nop			\n"
+	: "+r"(mask), "+r"(ena)
+	: "r"(&pl310->pl310_inv_way),
+	  "r"(&pl310->pl310_cache_sync), "r"(&pl310->pl310_ctrl)
+	: "memory", "cc");
 
-	/* Clearing emac0 PHY interface select to 0 */
-	clrbits_le32(&sysmgr_regs->emacgrp_ctrl,
-		     SYSMGR_EMACGRP_CTRL_PHYSEL_MASK << physhift);
-
-	/* configure to PHY interface select choosed */
-	setbits_le32(&sysmgr_regs->emacgrp_ctrl,
-		     SYSMGR_EMACGRP_CTRL_PHYSEL_ENUM_RGMII << physhift);
-
-	/* Release the EMAC controller from reset */
-	socfpga_emac_reset(0);
-
-	/* initialize and register the emac */
-	return designware_initialize(CONFIG_EMAC_BASE,
-				     CONFIG_PHY_INTERFACE_MODE);
-}
-#endif
-
-#ifdef CONFIG_DWMMC
-/*
- * Initializes MMC controllers.
- * to override, implement board_mmc_init()
- */
-int cpu_mmc_init(bd_t *bis)
-{
-	return socfpga_dwmmc_init(SOCFPGA_SDMMC_ADDRESS,
-				  CONFIG_HPS_SDMMC_BUSWIDTH, 0);
-}
-#endif
-
-#if defined(CONFIG_DISPLAY_CPUINFO)
-/*
- * Print CPU information
- */
-int print_cpuinfo(void)
-{
-	puts("CPU:   Altera SoCFPGA Platform\n");
-	return 0;
+	/* Disable the L2 cache */
+	clrbits_le32(&pl310->pl310_ctrl, L2X0_CTRL_EN);
 }
 #endif
 
@@ -117,40 +159,18 @@ int overwrite_console(void)
 #endif
 
 #ifdef CONFIG_FPGA
-/*
- * FPGA programming support for SoC FPGA Cyclone V
- */
-static Altera_desc altera_fpga[] = {
-	{
-		/* Family */
-		Altera_SoCFPGA,
-		/* Interface type */
-		fast_passive_parallel,
-		/* No limitation as additional data will be ignored */
-		-1,
-		/* No device function table */
-		NULL,
-		/* Base interface address specified in driver */
-		NULL,
-		/* No cookie implementation */
-		0
-	},
-};
-
 /* add device descriptor to FPGA device table */
-static void socfpga_fpga_add(void)
+void socfpga_fpga_add(void *fpga_desc)
 {
-	int i;
 	fpga_init();
-	for (i = 0; i < ARRAY_SIZE(altera_fpga); i++)
-		fpga_add(fpga_altera, &altera_fpga[i]);
+	fpga_add(fpga_altera, fpga_desc);
 }
-#else
-static inline void socfpga_fpga_add(void) {}
 #endif
 
 int arch_cpu_init(void)
 {
+	socfpga_get_managers_addr();
+
 #ifdef CONFIG_HW_WATCHDOG
 	/*
 	 * In case the watchdog is enabled, make sure to (re-)configure it
@@ -164,114 +184,35 @@ int arch_cpu_init(void)
 	 * If the HW watchdog is NOT enabled, make sure it is not running,
 	 * for example because it was enabled in the preloader. This might
 	 * trigger a watchdog-triggered reboot of Linux kernel later.
+	 * Toggle watchdog reset, so watchdog in not running state.
 	 */
-	socfpga_watchdog_reset();
+	socfpga_per_reset(SOCFPGA_RESET(L4WD0), 1);
+	socfpga_per_reset(SOCFPGA_RESET(L4WD0), 0);
 #endif
 
 	return 0;
 }
 
-/*
- * Convert all NIC-301 AMBA slaves from secure to non-secure
- */
-static void socfpga_nic301_slave_ns(void)
+#ifndef CONFIG_XPL_BUILD
+static int do_bridge(struct cmd_tbl *cmdtp, int flag, int argc,
+		     char *const argv[])
 {
-	writel(0x1, &nic301_regs->lwhps2fpgaregs);
-	writel(0x1, &nic301_regs->hps2fpgaregs);
-	writel(0x1, &nic301_regs->acp);
-	writel(0x1, &nic301_regs->rom);
-	writel(0x1, &nic301_regs->ocram);
-	writel(0x1, &nic301_regs->sdrdata);
-}
+	unsigned int mask = ~0;
 
-static uint32_t iswgrp_handoff[8];
-
-int arch_early_init_r(void)
-{
-	int i;
-	for (i = 0; i < 8; i++)	/* Cache initial SW setting regs */
-		iswgrp_handoff[i] = readl(&sysmgr_regs->iswgrp_handoff[i]);
-
-	socfpga_bridges_reset(1);
-	socfpga_nic301_slave_ns();
-
-	/*
-	 * Private components security:
-	 * U-Boot : configure private timer, global timer and cpu component
-	 * access as non secure for kernel stage (as required by Linux)
-	 */
-	setbits_le32(&scu_regs->sacr, 0xfff);
-
-	/* Configure the L2 controller to make SDRAM start at 0 */
-#ifdef CONFIG_SOCFPGA_VIRTUAL_TARGET
-	writel(0x2, &nic301_regs->remap);
-#else
-	writel(0x1, &nic301_regs->remap);	/* remap.mpuzero */
-	writel(0x1, &pl310->pl310_addr_filter_start);
-#endif
-
-	/* Add device descriptor to FPGA device table */
-	socfpga_fpga_add();
-
-#ifdef CONFIG_DESIGNWARE_SPI
-	/* Get Designware SPI controller out of reset */
-	socfpga_spim_enable();
-#endif
-
-	return 0;
-}
-
-static void socfpga_sdram_apply_static_cfg(void)
-{
-	const uint32_t staticcfg = SOCFPGA_SDR_ADDRESS + 0x505c;
-	const uint32_t applymask = 0x8;
-	uint32_t val = readl(staticcfg) | applymask;
-
-	/*
-	 * SDRAM staticcfg register specific:
-	 * When applying the register setting, the CPU must not access
-	 * SDRAM. Luckily for us, we can abuse i-cache here to help us
-	 * circumvent the SDRAM access issue. The idea is to make sure
-	 * that the code is in one full i-cache line by branching past
-	 * it and back. Once it is in the i-cache, we execute the core
-	 * of the code and apply the register settings.
-	 *
-	 * The code below uses 7 instructions, while the Cortex-A9 has
-	 * 32-byte cachelines, thus the limit is 8 instructions total.
-	 */
-	asm volatile(
-		".align	5			\n"
-		"	b	2f		\n"
-		"1:	str	%0,	[%1]	\n"
-		"	dsb			\n"
-		"	isb			\n"
-		"	b	3f		\n"
-		"2:	b	1b		\n"
-		"3:	nop			\n"
-	: : "r"(val), "r"(staticcfg) : "memory", "cc");
-}
-
-int do_bridge(cmd_tbl_t *cmdtp, int flag, int argc, char * const argv[])
-{
-	if (argc != 2)
+	if (argc < 2 || argc > 3)
 		return CMD_RET_USAGE;
 
 	argv++;
 
+	if (argc == 3)
+		mask = hextoul(argv[1], NULL);
+
 	switch (*argv[0]) {
 	case 'e':	/* Enable */
-		writel(iswgrp_handoff[2], &sysmgr_regs->fpgaintfgrp_module);
-		socfpga_sdram_apply_static_cfg();
-		writel(iswgrp_handoff[3], SOCFPGA_SDR_ADDRESS + 0x5080);
-		writel(iswgrp_handoff[0], &reset_manager_base->brg_mod_reset);
-		writel(iswgrp_handoff[1], &nic301_regs->remap);
+		do_bridge_reset(1, mask);
 		break;
 	case 'd':	/* Disable */
-		writel(0, &sysmgr_regs->fpgaintfgrp_module);
-		writel(0, SOCFPGA_SDR_ADDRESS + 0x5080);
-		socfpga_sdram_apply_static_cfg();
-		writel(0, &reset_manager_base->brg_mod_reset);
-		writel(1, &nic301_regs->remap);
+		do_bridge_reset(0, mask);
 		break;
 	default:
 		return CMD_RET_USAGE;
@@ -280,10 +221,133 @@ int do_bridge(cmd_tbl_t *cmdtp, int flag, int argc, char * const argv[])
 	return 0;
 }
 
-U_BOOT_CMD(
-	bridge, 2, 1, do_bridge,
-	"SoCFPGA HPS FPGA bridge control",
-	"enable  - Enable HPS-to-FPGA, FPGA-to-HPS, LWHPS-to-FPGA bridges\n"
-	"bridge disable - Enable HPS-to-FPGA, FPGA-to-HPS, LWHPS-to-FPGA bridges\n"
-	""
+U_BOOT_CMD(bridge, 3, 1, do_bridge,
+	   "GEN5 SoCFPGA HPS FPGA bridge control",
+	   "enable [mask] - Enable HPS-to-FPGA (Bit 0), LWHPS-to-FPGA (Bit 1), FPGA-to-HPS (Bit 2) bridges\n"
+	   "bridge disable [mask] - Disable HPS-to-FPGA (Bit 0), LWHPS-to-FPGA (Bit 1), FPGA-to-HPS (Bit 2) bridges\n"
+	   ""
 );
+
+#endif
+
+static int socfpga_get_base_addr(const char *compat, phys_addr_t *base)
+{
+	const void *blob = gd->fdt_blob;
+	struct fdt_resource r;
+	int node;
+	int ret;
+
+	node = fdt_node_offset_by_compatible(blob, -1, compat);
+	if (node < 0)
+		return node;
+
+	if (!fdtdec_get_is_enabled(blob, node))
+		return -ENODEV;
+
+	ret = fdt_get_resource(blob, node, "reg", 0, &r);
+	if (ret)
+		return ret;
+
+	*base = (phys_addr_t)r.start;
+
+	return 0;
+}
+
+void socfpga_get_managers_addr(void)
+{
+	int ret;
+
+	ret = socfpga_get_base_addr("altr,rst-mgr", &socfpga_rstmgr_base);
+	if (ret)
+		hang();
+
+	if (!IS_ENABLED(CONFIG_ARCH_SOCFPGA_AGILEX) &&
+	    !IS_ENABLED(CONFIG_ARCH_SOCFPGA_AGILEX7M) &&
+	    !IS_ENABLED(CONFIG_ARCH_SOCFPGA_AGILEX5) &&
+	    !IS_ENABLED(CONFIG_ARCH_SOCFPGA_STRATIX10) &&
+	    !IS_ENABLED(CONFIG_ARCH_SOCFPGA_N5X)) {
+		ret = socfpga_get_base_addr("altr,sys-mgr",
+					    &socfpga_sysmgr_base);
+		if (ret)
+			hang();
+	}
+
+	if (IS_ENABLED(CONFIG_ARCH_SOCFPGA_N5X))
+		ret = socfpga_get_base_addr("intel,n5x-clkmgr",
+					    &socfpga_clkmgr_base);
+	else if (!IS_ENABLED(CONFIG_ARCH_SOCFPGA_AGILEX) &&
+		 !IS_ENABLED(CONFIG_ARCH_SOCFPGA_AGILEX7M) &&
+		 !IS_ENABLED(CONFIG_ARCH_SOCFPGA_AGILEX5) &&
+		 !IS_ENABLED(CONFIG_ARCH_SOCFPGA_STRATIX10))
+		ret = socfpga_get_base_addr("altr,clk-mgr",
+					    &socfpga_clkmgr_base);
+
+	if (ret)
+		hang();
+}
+
+void socfpga_get_sys_mgr_addr(void)
+{
+	int ret;
+	struct udevice *dev;
+
+	ofnode node = ofnode_get_aliases_node("sysmgr");
+
+	if (!ofnode_valid(node)) {
+		printf("'sysmgr' alias not found in device tree\n");
+		hang();
+	}
+
+	ret = uclass_get_device_by_ofnode(UCLASS_NOP, node, &dev);
+	if (ret) {
+		printf("Altera system manager init failed: %d\n", ret);
+		hang();
+	} else {
+		socfpga_sysmgr_base = (phys_addr_t)dev_read_addr(dev);
+	}
+}
+
+phys_addr_t socfpga_get_rstmgr_addr(void)
+{
+	return socfpga_rstmgr_base;
+}
+
+phys_addr_t socfpga_get_sysmgr_addr(void)
+{
+	return socfpga_sysmgr_base;
+}
+
+phys_addr_t socfpga_get_clkmgr_addr(void)
+{
+	return socfpga_clkmgr_base;
+}
+
+#if IS_ENABLED(CONFIG_SYS_ARM_CACHE_CP15)
+void dram_bank_mmu_setup(int bank)
+{
+	u32 start, size;
+	int i;
+
+	/* If we're still in OCRAM, don't set the XN bit on it */
+	if (!(gd->flags & GD_FLG_RELOC)) {
+		set_section_dcache(CFG_SYS_INIT_RAM_ADDR >> MMU_SECTION_SHIFT,
+				   DCACHE_WRITETHROUGH);
+
+		/*
+		 * The default implementation of this function allows the DRAM dcache
+		 * to be enabled only after relocation. However, to speed up ECC
+		 * initialization, we want to be able to enable DRAM dcache before
+		 * relocation.
+		 */
+		start = gd->dram[bank].start >> MMU_SECTION_SHIFT;
+		size = gd->dram[bank].size >> MMU_SECTION_SHIFT;
+		for (i = start; i < start + size; i++)
+			set_section_dcache(i, DCACHE_WRITETHROUGH);
+	} else {
+		start = gd->dram[bank].start >> MMU_SECTION_SHIFT;
+		size = gd->dram[bank].size >> MMU_SECTION_SHIFT;
+		for (i = start; i < start + size; i++)
+			set_section_dcache(i, DCACHE_DEFAULT_OPTION);
+	}
+}
+#endif

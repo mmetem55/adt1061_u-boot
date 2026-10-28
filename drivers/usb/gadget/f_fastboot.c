@@ -1,1079 +1,591 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
- * ether.c -- Ethernet gadget driver, with CDC and non-CDC options
+ * (C) Copyright 2008 - 2009
+ * Windriver, <www.windriver.com>
+ * Tom Rix <Tom.Rix@windriver.com>
  *
- * Copyright (C) 2003-2005,2008 David Brownell
- * Copyright (C) 2003-2004 Robert Schwebel, Benedikt Spranger
- * Copyright (C) 2008 Nokia Corporation
+ * Copyright 2011 Sebastian Andrzej Siewior <bigeasy@linutronix.de>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * Copyright 2014 Linaro, Ltd.
+ * Rob Herring <robh@kernel.org>
  */
-//#define DEBUG
-
-#include <common.h>
-#include <asm/errno.h>
+#include <config.h>
+#include <env.h>
+#include <errno.h>
+#include <fastboot.h>
+#include <log.h>
+#include <malloc.h>
+#include <linux/printk.h>
 #include <linux/usb/ch9.h>
 #include <linux/usb/gadget.h>
 #include <linux/usb/composite.h>
-#include <linux/usb/usb_uboot.h>
-#include <asm/arch/check_reboot.h>
-#include <linux/ctype.h>
-#include <asm/arch/check_reboot.h>
-#include "gadget_chips.h"
+#include <linux/compiler.h>
+#include <g_dnl.h>
 
-#define atomic_read
+#define FASTBOOT_INTERFACE_CLASS	0xff
+#define FASTBOOT_INTERFACE_SUB_CLASS	0x42
+#define FASTBOOT_INTERFACE_PROTOCOL	0x03
 
+#define RX_ENDPOINT_MAXIMUM_PACKET_SIZE_2_0  (0x0200)
+#define RX_ENDPOINT_MAXIMUM_PACKET_SIZE_1_1  (0x0040)
+#define TX_ENDPOINT_MAXIMUM_PACKET_SIZE      (0x0040)
 
-unsigned packet_received, packet_sent;
-static volatile int txn_done;
-int txn_status;
+#define EP_BUFFER_SIZE			4096
+/*
+ * EP_BUFFER_SIZE must always be an integral multiple of maxpacket size
+ * (64 or 512 or 1024), else we break on certain controllers like DWC3
+ * that expect bulk OUT requests to be divisible by maxpacket size.
+ */
 
-#define DEV_CONFIG_CDC	1
-#define GFP_ATOMIC ((gfp_t) 0)
-#define GFP_KERNEL ((gfp_t) 0)
+struct f_fastboot {
+	struct usb_function usb_function;
 
-#define DRIVER_DESC		"fastboot Gadget"
-/* Based on linux 2.6.27 version */
-#define DRIVER_VERSION		"May Day 2005"
-
-static const char shortname[] = "fastboot";
-static const char driver_desc[] = DRIVER_DESC;
-
-#define RX_EXTRA	20	/* guard against rx overflows */
-
-/* CDC support the same host-chosen outgoing packet filters. */
-#define	DEFAULT_FILTER	(USB_CDC_PACKET_TYPE_BROADCAST \
-			|USB_CDC_PACKET_TYPE_ALL_MULTICAST \
-			|USB_CDC_PACKET_TYPE_PROMISCUOUS \
-			|USB_CDC_PACKET_TYPE_DIRECTED)
-
-#define USB_CONNECT_TIMEOUT (3 * CONFIG_SYS_HZ)
-
-/*-------------------------------------------------------------------------*/
-struct fastboot_dev {
-	struct usb_gadget *gadget;
-	struct usb_request *req;	/* for control responses */
-	struct usb_request *stat_req;	/* for cdc status */
-
-	u8 config;
+	/* IN/OUT EP's and corresponding requests */
 	struct usb_ep *in_ep, *out_ep;
-	const struct usb_endpoint_descriptor
-	*in, *out;
-
-	struct usb_request *tx_req, *rx_req;
-
-	unsigned suspended:1;
-	unsigned network_started:1;
+	struct usb_request *in_req, *out_req;
 };
 
-static struct fastboot_dev l_fbdev;
-static struct usb_gadget_driver fastboot_driver;
+static char fb_ext_prop_name[] = "DeviceInterfaceGUID";
+static char fb_ext_prop_data[] = "{4866319A-F4D6-4374-93B9-DC2DEB361BA9}";
 
-/*-------------------------------------------------------------------------*/
+static struct usb_os_desc_ext_prop fb_ext_prop = {
+	.type = 1,		/* NUL-terminated Unicode String (REG_SZ) */
+	.name = fb_ext_prop_name,
+	.data = fb_ext_prop_data,
+};
 
-#define DEFAULT_QLEN	2	/* double buffering by default */
+/* 16 bytes of "Compatible ID" and "Subcompatible ID" */
+static char fb_cid[16] = {'W', 'I', 'N', 'U', 'S', 'B'};
+static struct usb_os_desc fb_os_desc = {
+	.ext_compat_id = fb_cid,
+};
 
-/* peak bulk transfer bits-per-second */
-#define	HS_BPS		(13 * 512 * 8 * 1000 * 8)
-#define	FS_BPS		(19 *  64 * 1 * 1000 * 8)
+static struct usb_os_desc_table fb_os_desc_table = {
+	.os_desc = &fb_os_desc,
+};
 
-#ifdef CONFIG_USB_GADGET_DUALSPEED
-#define	DEVSPEED	USB_SPEED_HIGH
-
-/* for dual-speed hardware, use deeper queues at highspeed */
-#define qlen(gadget) \
-	(DEFAULT_QLEN*((gadget->speed == USB_SPEED_HIGH) ? qmult : 1))
-
-static inline int BITRATE(struct usb_gadget *g)
+static inline struct f_fastboot *func_to_fastboot(struct usb_function *f)
 {
-	return (g->speed == USB_SPEED_HIGH) ? HS_BPS : FS_BPS;
+	return container_of(f, struct f_fastboot, usb_function);
 }
 
-#else /* full speed (low speed doesn't do bulk) */
+static struct f_fastboot *fastboot_func;
 
-#define qmult		1
-
-#define	DEVSPEED	USB_SPEED_FULL
-
-#define qlen(gadget) DEFAULT_QLEN
-
-static inline int BITRATE(struct usb_gadget *g)
-{
-	return FS_BPS;
-}
-#endif
-
-/*
- * Thanks to NetChip Technologies for donating this product ID.
- * It's for devices with only CDC Ethernet configurations.
- */
-#define FASTBOOT_VENDOR_NUM		0x18D1	/* Goolge VID */
-#define FASTBOOT_PRODUCT_NUM		0x4ee0	/* Fastboot Product ID */
-//#define FASTBOOT_PRODUCT_NUM          0x0C02  /* Linux-USB Ethernet Gadget */
-
-/*
- * Some systems will want different product identifers published in the
- * device descriptor, either numbers or strings or both.  These string
- * parameters are in UTF-8 (superset of ASCII's 7 bit characters).
- */
-
-static ushort bcdDevice;
-
-static char *iManufacturer = "Spreadtrum";
-
-static char *iProduct;
-static char *iSerialNumber = "20080823";
-extern char *get_product_sn();
-
-
-/*-------------------------------------------------------------------------*/
-
-/*
- * USB DRIVER HOOKUP (to the hardware driver, below us), mostly
- * ep0 implementation:  descriptors, config management, setup().
- * also optional class-specific notification interrupt transfer.
- */
-
-/*
- * DESCRIPTORS ... most are static, but strings and (full) configuration
- * descriptors are built on demand.  For now we do either full CDC, or
- * our simple subset.
- */
-
-#define STRING_MANUFACTURER		1
-#define STRING_PRODUCT			2
-#define STRING_ETHADDR			3
-#define STRING_DATA			4
-#define STRING_CONTROL			5
-#define STRING_CDC			7
-#define STRING_SUBSET			8
-#define STRING_SERIALNUMBER		10
-
-/* holds our biggest descriptor */
-#define USB_BUFSIZ	256
-#define USB_MAX_TRANSFER_SIZE (2 * 1024 * 1024)
-/*
- * This device advertises one configuration, eth_config,
- * on hardware supporting at least two configs.
- *
- * FIXME define some higher-powered configurations to make it easier
- * to recharge batteries ...
- */
-
-#define DEV_CONFIG_VALUE	1	/* cdc or subset */
-
-static struct usb_device_descriptor device_desc = {
-	.bLength = sizeof device_desc,
-	.bDescriptorType = USB_DT_DEVICE,
-
-	.bcdUSB = __constant_cpu_to_le16(0x0200),
-
-	.bDeviceClass = 0,
-	.bDeviceSubClass = 0,
-	.bDeviceProtocol = 0,
-
-	.idVendor = __constant_cpu_to_le16(FASTBOOT_VENDOR_NUM),
-	.idProduct = __constant_cpu_to_le16(FASTBOOT_PRODUCT_NUM),
-	.iManufacturer = STRING_MANUFACTURER,
-	.iProduct = STRING_PRODUCT,
-	.bNumConfigurations = 1,
+static struct usb_endpoint_descriptor fs_ep_in = {
+	.bLength            = USB_DT_ENDPOINT_SIZE,
+	.bDescriptorType    = USB_DT_ENDPOINT,
+	.bEndpointAddress   = USB_DIR_IN,
+	.bmAttributes       = USB_ENDPOINT_XFER_BULK,
+	.wMaxPacketSize     = cpu_to_le16(64),
 };
 
-static struct usb_config_descriptor fastboot_config = {
-	.bLength = sizeof fastboot_config,
-	.bDescriptorType = USB_DT_CONFIG,
-
-	/* compute wTotalLength on the fly */
-	.bNumInterfaces = 1,
-	.bConfigurationValue = DEV_CONFIG_VALUE,
-	.iConfiguration = STRING_CDC,
-	.bmAttributes = USB_CONFIG_ATT_ONE,	// | USB_CONFIG_ATT_SELFPOWER,
-	.bMaxPower = 0xfa,
+static struct usb_endpoint_descriptor fs_ep_out = {
+	.bLength		= USB_DT_ENDPOINT_SIZE,
+	.bDescriptorType	= USB_DT_ENDPOINT,
+	.bEndpointAddress	= USB_DIR_OUT,
+	.bmAttributes		= USB_ENDPOINT_XFER_BULK,
+	.wMaxPacketSize		= cpu_to_le16(64),
 };
 
-/* ... but the "real" data interface has two bulk endpoints */
-
-static const struct usb_interface_descriptor data_intf = {
-	.bLength = sizeof data_intf,
-	.bDescriptorType = USB_DT_INTERFACE,
-
-	.bInterfaceNumber = 0,
-	.bAlternateSetting = 0,
-	.bNumEndpoints = 2,
-	.bInterfaceClass = USB_CLASS_VENDOR_SPEC,
-	.bInterfaceSubClass = 0x42,
-	.bInterfaceProtocol = 3,
-	.iInterface = STRING_DATA,
+static struct usb_endpoint_descriptor hs_ep_in = {
+	.bLength		= USB_DT_ENDPOINT_SIZE,
+	.bDescriptorType	= USB_DT_ENDPOINT,
+	.bEndpointAddress	= USB_DIR_IN,
+	.bmAttributes		= USB_ENDPOINT_XFER_BULK,
+	.wMaxPacketSize		= cpu_to_le16(512),
 };
 
-static struct usb_endpoint_descriptor fs_source_desc = {
-	.bLength = USB_DT_ENDPOINT_SIZE,
-	.bDescriptorType = USB_DT_ENDPOINT,
-
-	.bEndpointAddress = USB_DIR_IN,
-	.bmAttributes = USB_ENDPOINT_XFER_BULK,
+static struct usb_endpoint_descriptor hs_ep_out = {
+	.bLength		= USB_DT_ENDPOINT_SIZE,
+	.bDescriptorType	= USB_DT_ENDPOINT,
+	.bEndpointAddress	= USB_DIR_OUT,
+	.bmAttributes		= USB_ENDPOINT_XFER_BULK,
+	.wMaxPacketSize		= cpu_to_le16(512),
 };
 
-static struct usb_endpoint_descriptor fs_sink_desc = {
-	.bLength = USB_DT_ENDPOINT_SIZE,
-	.bDescriptorType = USB_DT_ENDPOINT,
-
-	.bEndpointAddress = USB_DIR_OUT,
-	.bmAttributes = USB_ENDPOINT_XFER_BULK,
+static struct usb_interface_descriptor interface_desc = {
+	.bLength		= USB_DT_INTERFACE_SIZE,
+	.bDescriptorType	= USB_DT_INTERFACE,
+	.bInterfaceNumber	= 0x00,
+	.bAlternateSetting	= 0x00,
+	.bNumEndpoints		= 0x02,
+	.bInterfaceClass	= FASTBOOT_INTERFACE_CLASS,
+	.bInterfaceSubClass	= FASTBOOT_INTERFACE_SUB_CLASS,
+	.bInterfaceProtocol	= FASTBOOT_INTERFACE_PROTOCOL,
 };
 
-static const struct usb_descriptor_header *fs_fastboot_function[] = {
-//      (struct usb_descriptor_header *) &otg_descriptor,
-#ifdef DEV_CONFIG_CDC
-	/* "cdc" mode descriptors */
-//      (struct usb_descriptor_header *) &control_intf,
-//      (struct usb_descriptor_header *) &header_desc,
-//      (struct usb_descriptor_header *) &union_desc,
-//      (struct usb_descriptor_header *) &ether_desc,
-	/* NOTE: status endpoint may need to be removed */
-//      (struct usb_descriptor_header *) &fs_status_desc,
-	/* data interface, with altsetting */
-	(struct usb_descriptor_header *)&data_intf,
-	(struct usb_descriptor_header *)&fs_source_desc,
-	(struct usb_descriptor_header *)&fs_sink_desc,
+static struct usb_descriptor_header *fb_fs_function[] = {
+	(struct usb_descriptor_header *)&interface_desc,
+	(struct usb_descriptor_header *)&fs_ep_in,
+	(struct usb_descriptor_header *)&fs_ep_out,
 	NULL,
-#endif /* DEV_CONFIG_CDC */
 };
 
-/*
- * usb 2.0 devices need to expose both high speed and full speed
- * descriptors, unless they only run at full speed.
- */
-
-static struct usb_endpoint_descriptor hs_source_desc = {
-	.bLength = USB_DT_ENDPOINT_SIZE,
-	.bDescriptorType = USB_DT_ENDPOINT,
-
-	.bmAttributes = USB_ENDPOINT_XFER_BULK,
-	.wMaxPacketSize = __constant_cpu_to_le16(512),
-};
-
-static struct usb_endpoint_descriptor hs_sink_desc = {
-	.bLength = USB_DT_ENDPOINT_SIZE,
-	.bDescriptorType = USB_DT_ENDPOINT,
-
-	.bmAttributes = USB_ENDPOINT_XFER_BULK,
-	.wMaxPacketSize = __constant_cpu_to_le16(512),
-};
-
-static struct usb_qualifier_descriptor dev_qualifier = {
-	.bLength = sizeof dev_qualifier,
-	.bDescriptorType = USB_DT_DEVICE_QUALIFIER,
-
-	.bcdUSB = __constant_cpu_to_le16(0x0200),
-	.bDeviceClass = USB_CLASS_VENDOR_SPEC,
-
-	.bNumConfigurations = 1,
-};
-
-static const struct usb_descriptor_header *hs_fastboot_function[] = {
-//      (struct usb_descriptor_header *) &otg_descriptor,
-#ifdef DEV_CONFIG_CDC
-	/* "cdc" mode descriptors */
-//      (struct usb_descriptor_header *) &control_intf,
-//      (struct usb_descriptor_header *) &header_desc,
-//      (struct usb_descriptor_header *) &union_desc,
-//      (struct usb_descriptor_header *) &ether_desc,
-	/* NOTE: status endpoint may need to be removed */
-//      (struct usb_descriptor_header *) &hs_status_desc,
-	/* data interface, with altsetting */
-//      (struct usb_descriptor_header *) &data_nop_intf,
-	(struct usb_descriptor_header *)&data_intf,
-	(struct usb_descriptor_header *)&hs_source_desc,
-	(struct usb_descriptor_header *)&hs_sink_desc,
+static struct usb_descriptor_header *fb_hs_function[] = {
+	(struct usb_descriptor_header *)&interface_desc,
+	(struct usb_descriptor_header *)&hs_ep_in,
+	(struct usb_descriptor_header *)&hs_ep_out,
 	NULL,
-#endif /* DEV_CONFIG_CDC */
 };
 
-
-/*-------------------------------------------------------------------------*/
-
-/* descriptors that are built on-demand */
-
-static char manufacturer[50];
-static char product_desc[40] = DRIVER_DESC;
-static char serial_number[128];
-
-/* static strings, in UTF-8 */
-static struct usb_string strings[] = {
-	{STRING_MANUFACTURER, manufacturer,},
-	{STRING_PRODUCT, product_desc,},
-	{STRING_SERIALNUMBER, serial_number,},
-	{STRING_DATA, "fastboot Data",},
-#ifdef	DEV_CONFIG_CDC
-	{STRING_CDC, "fastboot Ethernet",},
-	{STRING_CONTROL, "fastboot Communications Control",},
-#endif
-	{}			/* end of list */
+/* Super speed */
+static struct usb_endpoint_descriptor ss_ep_in = {
+	.bLength		= USB_DT_ENDPOINT_SIZE,
+	.bDescriptorType	= USB_DT_ENDPOINT,
+	.bEndpointAddress	= USB_DIR_IN,
+	.bmAttributes		= USB_ENDPOINT_XFER_BULK,
+	.wMaxPacketSize		= cpu_to_le16(1024),
 };
 
-static struct usb_gadget_strings stringtab = {
-	.language = 0x0409,	/* en-us */
-	.strings = strings,
+static struct usb_endpoint_descriptor ss_ep_out = {
+	.bLength		= USB_DT_ENDPOINT_SIZE,
+	.bDescriptorType	= USB_DT_ENDPOINT,
+	.bEndpointAddress	= USB_DIR_OUT,
+	.bmAttributes		= USB_ENDPOINT_XFER_BULK,
+	.wMaxPacketSize		= cpu_to_le16(1024),
 };
 
-/*============================================================================*/
-static u8 control_req[USB_BUFSIZ] __attribute__ ((aligned(4)));
+static struct usb_ss_ep_comp_descriptor fb_ss_bulk_comp_desc = {
+	.bLength =		sizeof(fb_ss_bulk_comp_desc),
+	.bDescriptorType =	USB_DT_SS_ENDPOINT_COMP,
+};
 
-/**
- * strlcpy - Copy a %NUL terminated string into a sized buffer
- * @dest: Where to copy the string to
- * @src: Where to copy the string from
- * @size: size of destination buffer
- *
- * Compatible with *BSD: the result is always a valid
- * NUL-terminated string that fits in the buffer (unless,
- * of course, the buffer size is zero). It does not pad
- * out the result like strncpy() does.
- */
-/*
-size_t strlcpy(char *dest, const char *src, size_t size)
+static struct usb_descriptor_header *fb_ss_function[] = {
+	(struct usb_descriptor_header *)&interface_desc,
+	(struct usb_descriptor_header *)&ss_ep_in,
+	(struct usb_descriptor_header *)&fb_ss_bulk_comp_desc,
+	(struct usb_descriptor_header *)&ss_ep_out,
+	(struct usb_descriptor_header *)&fb_ss_bulk_comp_desc,
+	NULL,
+};
+
+static struct usb_endpoint_descriptor *
+fb_ep_desc(struct usb_gadget *g, struct usb_endpoint_descriptor *fs,
+	    struct usb_endpoint_descriptor *hs,
+	    struct usb_endpoint_descriptor *ss)
 {
-	size_t ret = strlen(src);
+	if (gadget_is_superspeed(g) && g->speed >= USB_SPEED_SUPER)
+		return ss;
 
-	if (size) {
-		size_t len = (ret >= size) ? size - 1 : ret;
-		memcpy(dest, src, len);
-		dest[len] = '\0';
-	}
-	return ret;
-}*/
-
-/*============================================================================*/
-
-/*
- * one config, two interfaces:  control, data.
- * complications: class descriptors, and an altsetting.
- */
-static int config_buf(struct usb_gadget *g, u8 * buf, u8 type, unsigned index, int is_otg)
-{
-	int len;
-	const struct usb_config_descriptor *config;
-	const struct usb_descriptor_header **function;
-	int hs = 0;
-
-	if (gadget_is_dualspeed(g)) {
-		hs = (g->speed == USB_SPEED_HIGH);
-		if (type == USB_DT_OTHER_SPEED_CONFIG)
-			hs = !hs;
-	}
-#define which_fn(t)	(hs ? hs_ ## t ## _function : fs_ ## t ## _function)
-
-	debug("%s , type :%d, index %d\n", __func__, type, index);
-	if (index >= device_desc.bNumConfigurations)
-		return -EINVAL;
-
-	config = &fastboot_config;
-	function = which_fn(fastboot);
-
-	/* for now, don't advertise srp-only devices */
-/*
-	if (!is_otg)
-		function++;
-*/
-	len = usb_gadget_config_buf(config, buf, USB_BUFSIZ, function);
-	if (len < 0)
-		return len;
-	((struct usb_config_descriptor *)buf)->bDescriptorType = type;
-	return len;
+	if (gadget_is_dualspeed(g) && g->speed == USB_SPEED_HIGH)
+		return hs;
+	return fs;
 }
 
-/*-------------------------------------------------------------------------*/
+/*
+ * static strings, in UTF-8
+ */
+static const char fastboot_name[] = "Android Fastboot";
 
-static int alloc_requests(struct fastboot_dev *dev, unsigned n, gfp_t gfp_flags);
+static struct usb_string fastboot_string_defs[] = {
+	[0].s = fastboot_name,
+	{  }			/* end of list */
+};
 
-static int set_fastboot_config(struct fastboot_dev *dev, gfp_t gfp_flags)
+static struct usb_gadget_strings stringtab_fastboot = {
+	.language	= 0x0409,	/* en-us */
+	.strings	= fastboot_string_defs,
+};
+
+static struct usb_gadget_strings *fastboot_strings[] = {
+	&stringtab_fastboot,
+	NULL,
+};
+
+static void rx_handler_command(struct usb_ep *ep, struct usb_request *req);
+
+static void fastboot_complete(struct usb_ep *ep, struct usb_request *req)
 {
-	int result = 0;
-	struct usb_gadget *gadget = dev->gadget;
-
-	dev->in = ep_choose(gadget, &hs_source_desc, &fs_source_desc);
-	dev->in_ep->driver_data = dev;
-
-	dev->out = ep_choose(gadget, &hs_sink_desc, &fs_sink_desc);
-	dev->out_ep->driver_data = dev;
-
-	result = usb_ep_enable(dev->in_ep, dev->in);
-	if (result != 0) {
-		debug("enable %s --> %d\n", dev->in_ep->name, result);
-		goto done;
-	}
-
-	result = usb_ep_enable(dev->out_ep, dev->out);
-	if (result != 0) {
-		debug("enable %s --> %d\n", dev->out_ep->name, result);
-		goto done;
-	}
-
-done:
-	if (result == 0)
-		result = alloc_requests(dev, 1, gfp_flags);
-
-	/* on error, disable any endpoints  */
-	if (result < 0) {
-		(void)usb_ep_disable(dev->in_ep);
-		(void)usb_ep_disable(dev->out_ep);
-		dev->in = NULL;
-		dev->out = NULL;
-	}
-
-	/* caller is responsible for cleanup on error */
-	return result;
-}
-
-static void fastboot_reset_config(struct fastboot_dev *dev)
-{
-	if (dev->config == 0)
+	int status = req->status;
+	if (!status)
 		return;
-
-	debug("%s\n", __func__);
-
-	/*
-	 * disable endpoints, forcing (synchronous) completion of
-	 * pending i/o.  then free the requests.
-	 */
-
-	if (dev->in) {
-		usb_ep_disable(dev->in_ep);
-		if (dev->tx_req) {
-			usb_ep_free_request(dev->in_ep, dev->tx_req);
-			dev->tx_req = NULL;
-		}
-	}
-	if (dev->out) {
-		usb_ep_disable(dev->out_ep);
-		if (dev->rx_req) {
-			usb_ep_free_request(dev->out_ep, dev->rx_req);
-			dev->rx_req = NULL;
-		}
-	}
-	dev->config = 0;
+	printf("status: %d ep '%s' trans: %d\n", status, ep->name, req->actual);
 }
 
-/*
- * change our operational config.  must agree with the code
- * that returns config descriptors, and altsetting code.
- */
-static int fastboot_set_config(struct fastboot_dev *dev, unsigned number, gfp_t gfp_flags)
+static int fastboot_bind(struct usb_configuration *c, struct usb_function *f)
 {
-	int result = 0;
-	struct usb_gadget *gadget = dev->gadget;
+	int id;
+	struct usb_gadget *gadget = c->cdev->gadget;
+	struct f_fastboot *f_fb = func_to_fastboot(f);
+	const char *s;
 
-	switch (number) {
-	case DEV_CONFIG_VALUE:
-		result = set_fastboot_config(dev, gfp_flags);
-		break;
-	default:
-		result = -EINVAL;
-		/* FALL THROUGH */
-	case 0:
-		break;
-	}
+	/* DYNAMIC interface numbers assignments */
+	id = usb_interface_id(c, f);
+	if (id < 0)
+		return id;
+	interface_desc.bInterfaceNumber = id;
 
-	if (result) {
-		if (number)
-			fastboot_reset_config(dev);
-		usb_gadget_vbus_draw(dev->gadget, gadget_is_otg(dev->gadget) ? 8 : 100);
-	} else {
-		char *speed;
-		unsigned power;
+	/* Enable OS and Extended Properties Feature Descriptor */
+	c->cdev->use_os_string = 1;
+	f->os_desc_table = &fb_os_desc_table;
+	f->os_desc_n = 1;
+	f->os_desc_table->if_id = id;
+	INIT_LIST_HEAD(&fb_os_desc.ext_prop);
+	fb_ext_prop.name_len = strlen(fb_ext_prop.name) * 2 + 2;
+	fb_os_desc.ext_prop_len = 10 + fb_ext_prop.name_len;
+	fb_os_desc.ext_prop_count = 1;
+	fb_ext_prop.data_len = strlen(fb_ext_prop.data) * 2 + 2;
+	fb_os_desc.ext_prop_len += fb_ext_prop.data_len + 4;
+	list_add_tail(&fb_ext_prop.entry, &fb_os_desc.ext_prop);
 
-		power = 2 * fastboot_config.bMaxPower;
-		usb_gadget_vbus_draw(dev->gadget, power);
+	id = usb_string_id(c->cdev);
+	if (id < 0)
+		return id;
+	fastboot_string_defs[0].id = id;
+	interface_desc.iInterface = id;
 
-		switch (gadget->speed) {
-		case USB_SPEED_FULL:
-			speed = "full";
-			break;
-#ifdef CONFIG_USB_GADGET_DUALSPEED
-		case USB_SPEED_HIGH:
-			speed = "high";
-			break;
-#endif
-		default:
-			speed = "?";
-			break;
-		}
-
-		dev->config = number;
-		debug("%s speed config #%d: %d mA, %s\n", speed, number, power, driver_desc);
-	}
-	return result;
-}
-
-/*-------------------------------------------------------------------------*/
-
-static void
-fastboot_setup_complete(struct usb_ep *ep, struct usb_request *req)
-{
-	if (req->status || req->actual != req->length)
-		debug("setup complete --> %d, %d/%d\n",
-			req->status, req->actual, req->length);
-}
-
-/*
- * The setup() callback implements all the ep0 functionality that's not
- * handled lower down.  CDC has a number of less-common features:
- *
- *  - two interfaces:  control, and ethernet data
- *  - Ethernet data interface has two altsettings:  default, and active
- *  - class-specific descriptors for the control interface
- *  - class-specific control requests
- */
-static int
-fastboot_setup(struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
-{
-	struct fastboot_dev *dev = get_gadget_data(gadget);
-	struct usb_request *req = dev->req;
-	int value = -EOPNOTSUPP;
-	u16 wIndex = le16_to_cpu(ctrl->wIndex);
-	u16 wValue = le16_to_cpu(ctrl->wValue);
-	u16 wLength = le16_to_cpu(ctrl->wLength);
-	int is_otg = 0;
-
-	/*
-	 * descriptors just go into the pre-allocated ep0 buffer,
-	 * while config change events may enable network traffic.
-	 */
-	switch (ctrl->bRequest) {
-
-	case USB_REQ_GET_DESCRIPTOR:
-		if (ctrl->bRequestType != USB_DIR_IN)
-			break;
-		switch (wValue >> 8) {
-
-		case USB_DT_DEVICE:
-			device_desc.bMaxPacketSize0 = gadget->ep0->maxpacket;
-			value = min(wLength, (u16) sizeof device_desc);
-			memcpy(req->buf, &device_desc, value);
-			break;
-		case USB_DT_DEVICE_QUALIFIER:
-			if (!gadget_is_dualspeed(gadget))
-				break;
-			/* assumes ep0 uses the same value for both speeds ... */
-			dev_qualifier.bMaxPacketSize0 = device_desc.bMaxPacketSize0;
-			value = min(wLength, (u16) sizeof dev_qualifier);
-			memcpy(req->buf, &dev_qualifier, value);
-			break;
-
-		case USB_DT_OTHER_SPEED_CONFIG:
-			if (!gadget_is_dualspeed(gadget))
-				break;
-			/* FALLTHROUGH */
-		case USB_DT_CONFIG:
-			is_otg = gadget_is_otg(gadget);
-			value = config_buf(gadget, req->buf,
-				wValue >> 8, wValue & 0xff, is_otg);
-			if (value >= 0)
-				value = min(wLength, (u16) value);
-			break;
-
-		case USB_DT_STRING:
-			value = usb_gadget_get_string(&stringtab, wValue & 0xff, req->buf);
-
-			if (value >= 0)
-				value = min(wLength, (u16) value);
-
-			break;
-		}
-		break;
-
-	case USB_REQ_SET_CONFIGURATION:
-		if (ctrl->bRequestType != 0)
-			break;
-		value = fastboot_set_config(dev, wValue, GFP_ATOMIC);
-		l_fbdev.network_started = 1;
-		break;
-	case USB_REQ_GET_CONFIGURATION:
-		if (ctrl->bRequestType != USB_DIR_IN)
-			break;
-		*(u8 *) req->buf = dev->config;
-		value = min(wLength, (u16) 1);
-		break;
-
-	case USB_REQ_SET_INTERFACE:
-		if (ctrl->bRequestType != USB_RECIP_INTERFACE
-			|| !dev->config || wIndex > 1)
-			break;
-		/*
-		 * FIXME this is wrong, as is the assumption that
-		 * all non-PXA hardware talks real CDC ...
-		 */
-		debug("set_interface ignored!\n");
-
-done_set_intf:
-		break;
-	case USB_REQ_GET_INTERFACE:
-		if (ctrl->bRequestType != (USB_DIR_IN | USB_RECIP_INTERFACE)
-		    || !dev->config || wIndex > 1)
-			break;
-
-		/* for CDC, iff carrier is on, data interface is active. */
-		if (wIndex != 1)
-			*(u8 *) req->buf = 0;
-		else {
-			/* *(u8 *)req->buf = netif_carrier_ok (dev->net) ? 1 : 0; */
-			/* carrier always ok ... */
-			*(u8 *) req->buf = 1;
-		}
-		value = min(wLength, (u16) 1);
-		break;
-	default:
-		debug("unknown control req%02x.%02x v%04x i%04x l%d\n",
-			ctrl->bRequestType, ctrl->bRequest, wValue, wIndex, wLength);
-	}
-
-	/* respond with data transfer before status phase? */
-	if (value >= 0) {
-		req->length = value;
-		req->zero = value < wLength;
-		value = usb_ep_queue(gadget->ep0, req, GFP_ATOMIC);
-		if (value < 0) {
-			debug("ep_queue --> %d\n", value);
-			req->status = 0;
-			fastboot_setup_complete(gadget->ep0, req);
-		}
-	}
-
-	/* host either stalls (value < 0) or reports success */
-	return value;
-}
-
-/*-------------------------------------------------------------------------*/
-#if 0
-static void rx_complete(struct usb_ep *ep, struct usb_request *req);
-
-static int rx_submit(struct fastboot_dev *dev, struct usb_request *req, gfp_t gfp_flags)
-{
-	int retval = -ENOMEM;
-	size_t size;
-
-	/*
-	 * Padding up to RX_EXTRA handles minor disagreements with host.
-	 * Normally we use the USB "terminate on short read" convention;
-	 * so allow up to (N*maxpacket), since that memory is normally
-	 * already allocated.  Some hardware doesn't deal well with short
-	 * reads (e.g. DMA must be N*maxpacket), so for now don't trim a
-	 * byte off the end (to force hardware errors on overflow).
-	 */
-
-	debug("%s\n", __func__);
-
-	size = (ETHER_HDR_SIZE + dev->mtu + RX_EXTRA);
-	size += dev->out_ep->maxpacket - 1;
-	size -= size % dev->out_ep->maxpacket;
-
-	/*
-	 * Some platforms perform better when IP packets are aligned,
-	 * but on at least one, checksumming fails otherwise.
-	 */
-
-	req->buf = (u8 *) NetRxPackets[0];
-	req->length = size;
-	req->complete = rx_complete;
-
-	retval = usb_ep_queue(dev->out_ep, req, gfp_flags);
-
-	if (retval)
-		error("rx submit --> %d", retval);
-
-	return retval;
-}
-
-static void rx_complete(struct usb_ep *ep, struct usb_request *req)
-{
-	struct fastboot_dev *dev = ep->driver_data;
-
-	debug("%s: status %d\n", __func__, req->status);
-
-	packet_received = 1;
-}
-
-#endif
-static int alloc_requests(struct fastboot_dev *dev, unsigned n, gfp_t gfp_flags)
-{
-
-#if 0
-	dev->tx_req = usb_ep_alloc_request(dev->in_ep, 0);
-
-	if (!dev->tx_req)
-		goto fail1;
-
-	dev->rx_req = usb_ep_alloc_request(dev->out_ep, 0);
-
-	if (!dev->rx_req)
-		goto fail2;
-
-	return 0;
-
-fail2:
-	usb_ep_free_request(dev->in_ep, dev->tx_req);
-fail1:
-	error("can't alloc requests");
-	return -1;
-#endif
-	return 0;
-}
-
-static void tx_complete(struct usb_ep *ep, struct usb_request *req)
-{
-	debug("%s: status %s\n", __func__, (req->status) ? "failed" : "ok");
-	packet_sent = 1;
-}
-
-static void req_complete(struct usb_ep *ep, struct usb_request *req)
-{
-	if (req->status || req->actual != req->length)
-		debug("req complete --> %d, %d/%d\n",
-			req->status, req->actual, req->length);
-
-	txn_status = req->status;
-	txn_done = 1;
-}
-
-static void fastboot_unbind(struct usb_gadget *gadget)
-{
-	struct fastboot_dev *dev = get_gadget_data(gadget);
-
-	debug("%s...\n", __func__);
-
-	/* we've already been disconnected ... no i/o is active */
-	if (dev->req) {
-		usb_ep_free_request(gadget->ep0, dev->req);
-		dev->req = NULL;
-	}
-#if 0
-	if (dev->tx_req) {
-		usb_ep_free_request(dev->in_ep, dev->tx_req);
-		dev->tx_req = NULL;
-	}
-
-	if (dev->rx_req) {
-		usb_ep_free_request(dev->out_ep, dev->rx_req);
-		dev->rx_req = NULL;
-	}
-#endif
-	set_gadget_data(gadget, NULL);
-}
-
-static void fastboot_disconnect(struct usb_gadget *gadget)
-{
-	fastboot_reset_config(get_gadget_data(gadget));
-}
-
-static void fastboot_suspend(struct usb_gadget *gadget)
-{
-	/* Not used */
-}
-
-static void fastboot_resume(struct usb_gadget *gadget)
-{
-	/* Not used */
-}
-
-/*-------------------------------------------------------------------------*/
-
-static int fastboot_bind(struct usb_gadget *gadget)
-{
-	struct fastboot_dev *dev = &l_fbdev;
-	u8 cdc = 1, zlp = 1;
-	struct usb_ep *in_ep, *out_ep;
-	int gcnum;
-	u8 tmp[7];
-
-	debugf("%s controller :%s recognized\n", __func__, gadget->name);
-	gcnum = usb_gadget_controller_number(gadget);
-	if (gcnum >= 0)
-		device_desc.bcdDevice = cpu_to_le16(0x0300 + gcnum);
-	else {
-		/*
-		 * can't assume CDC works.  don't want to default to
-		 * anything less functional on CDC-capable hardware,
-		 * so we fail in this case.
-		 */
-		error("controller '%s' not recognized", gadget->name);
+	f_fb->in_ep = usb_ep_autoconfig(gadget, &fs_ep_in);
+	if (!f_fb->in_ep)
 		return -ENODEV;
-	}
+	f_fb->in_ep->driver_data = c->cdev;
 
-	if (bcdDevice)
-		device_desc.bcdDevice = cpu_to_le16(bcdDevice);
-	if (iManufacturer)
-		strlcpy(manufacturer, iManufacturer, sizeof manufacturer);
-	if (iProduct)
-		strlcpy(product_desc, iProduct, sizeof product_desc);
-
-	iSerialNumber = get_product_sn();
-	device_desc.iSerialNumber = STRING_SERIALNUMBER,
-	strlcpy(serial_number, iSerialNumber, sizeof serial_number);
-
-	/* all we really need is bulk IN/OUT */
-	usb_ep_autoconfig_reset(gadget);
-	in_ep = usb_ep_autoconfig(gadget, &fs_source_desc);
-	if (!in_ep) {
-autoconf_fail:
-		error("can't autoconfigure on %s\n", gadget->name);
+	f_fb->out_ep = usb_ep_autoconfig(gadget, &fs_ep_out);
+	if (!f_fb->out_ep)
 		return -ENODEV;
-	}
-	in_ep->driver_data = in_ep;	/* claim */
+	f_fb->out_ep->driver_data = c->cdev;
 
-	out_ep = usb_ep_autoconfig(gadget, &fs_sink_desc);
-	if (!out_ep)
-		goto autoconf_fail;
-	out_ep->driver_data = out_ep;	/* claim */
-
-	usb_gadget_set_selfpowered(gadget);
+	f->descriptors = fb_fs_function;
 
 	if (gadget_is_dualspeed(gadget)) {
-
-		/* and that all endpoints are dual-speed */
-		hs_source_desc.bEndpointAddress = fs_source_desc.bEndpointAddress;
-		hs_sink_desc.bEndpointAddress = fs_sink_desc.bEndpointAddress;
+		/* Assume endpoint addresses are the same for both speeds */
+		hs_ep_in.bEndpointAddress = fs_ep_in.bEndpointAddress;
+		hs_ep_out.bEndpointAddress = fs_ep_out.bEndpointAddress;
+		/* copy HS descriptors */
+		f->hs_descriptors = fb_hs_function;
 	}
 
-	dev->network_started = 0;
-	dev->in_ep = in_ep;
-	dev->out_ep = out_ep;
-
-	/* preallocate control message data and buffer */
-	dev->req = usb_ep_alloc_request(gadget->ep0, GFP_KERNEL);
-	if (!dev->req)
-		goto fail;
-	dev->req->buf = control_req;
-	dev->req->complete = fastboot_setup_complete;
-	dev->tx_req = usb_ep_alloc_request(dev->in_ep, GFP_KERNEL);
-	dev->tx_req->complete = req_complete;
-	dev->rx_req = usb_ep_alloc_request(dev->out_ep, GFP_KERNEL);
-	dev->rx_req->complete = req_complete;
-
-	/* ... and maybe likewise for status transfer */
-
-	/* finish hookup to lower layer ... */
-	dev->gadget = gadget;
-	set_gadget_data(gadget, dev);
-	gadget->ep0->driver_data = dev;
-
-	debug("bind controller with the driver\n");
-	/*
-	 * two kinds of host-initiated state changes:
-	 *  - iff DATA transfer is active, carrier is "on"
-	 *  - tx queueing enabled if open *and* carrier is "on"
-	 */
-	return 0;
-
-fail:
-	error("%s failed", __func__);
-	fastboot_unbind(gadget);
-	return -ENOMEM;
-}
-
-static int usb_fastboot_start(void)
-{
-	struct fastboot_dev *dev = &l_fbdev;
-
-	while (!dev->network_started)
-		usb_gadget_handle_interrupts();
-
-/*
-	if (packet_received) {
-		debug("%s: packet received\n", __func__);
-		if (dev->rx_req) {
-			NetReceive(NetRxPackets[0], dev->rx_req->length);
-			packet_received = 0;
-
-			rx_submit(dev, dev->rx_req, 0);
-		} else
-			error("dev->rx_req invalid");
-	}
-*/
-	return 0;
-}
-
-static struct usb_gadget_driver fastboot_driver = {
-	.speed = DEVSPEED,
-
-	.bind = fastboot_bind,
-	.unbind = fastboot_unbind,
-
-	.setup = fastboot_setup,
-	.disconnect = fastboot_disconnect,
-
-	.suspend = fastboot_suspend,
-	.resume = fastboot_resume,
-};
-
-#define mdelay(n)	udelay((n)*1000)
-
-#define BASE_ADDR	0x00000000
-#define DEFAULT_CMDLINE	"mem=128M console=null";
-
-#define TAGS_ADDR	(BASE_ADDR + 0x00000100)
-#define KERNEL_ADDR	(BASE_ADDR + 0x00800000)
-#define RAMDISK_ADDR	(BASE_ADDR + 0x01000000)
-//(BASE_ADDR + 0x02000000)
-
-
-int fb_usb_read(void *_buf, unsigned len)
-{
-	int r;
-	unsigned xfer;
-	unsigned char *buf = _buf;
-	int count = 0;
-	struct usb_request *req = l_fbdev.rx_req;
-	struct usb_ep *ep = l_fbdev.out_ep;
-
-	debugf("usb_read(address = 0x%lx,len=0x%x)\n",(long)_buf, len);
-	while (len > 0) {
-		xfer = (len > USB_MAX_TRANSFER_SIZE) ?
-			USB_MAX_TRANSFER_SIZE : ALIGN(len, ep->maxpacket);
-		req->buf = buf;
-		req->length = xfer;
-		//r = udc_request_queue(out, req);
-		r = usb_ep_queue(ep, req, GFP_ATOMIC);
-		if (r < 0) {
-			debugf("usb_read() queue failed\n");
-			goto oops;
-		}
-		//event_wait(&txn_done);
-		txn_done = 0;
-		while (!txn_done) {
-			if (fastboot_charger_connected()) {
-				usb_gadget_handle_interrupts();
-			} else {
-				/* usb has disconnected */
-				return -ESHUTDOWN;
-			}
-		}
-
-		if (txn_status < 0) {
-			debugf("usb_read() transaction failed\n");
-			goto oops;
-		}
-		if ((count % 0x100000) == 0)
-			debugf("remained size = 0x%x\n", len);
-
-		count += req->actual;
-		buf += req->actual;
-		len -= req->actual;
-
-		/* short transfer? */
-		if (req->actual != xfer)
-			break;
+	if (gadget_is_superspeed(gadget)) {
+		ss_ep_in.bEndpointAddress = fs_ep_in.bEndpointAddress;
+		ss_ep_out.bEndpointAddress = fs_ep_out.bEndpointAddress;
+		f->ss_descriptors = fb_ss_function;
 	}
 
-	return count;
-
-oops:
-	return -1;
-}
-
-int fb_usb_read_triger(void *_buf, unsigned len)
-{
-	int r;
-	unsigned xfer;
-	unsigned char *buf = _buf;
-	struct usb_request *req = l_fbdev.rx_req;
-	struct usb_ep *ep = l_fbdev.out_ep;
-
-	if (len > USB_MAX_TRANSFER_SIZE) {
-		errorf("triger fail, len %d > MAX %d\n", len, USB_MAX_TRANSFER_SIZE);
-		return -1;
-	}
-
-	xfer = (len > USB_MAX_TRANSFER_SIZE) ?
-			USB_MAX_TRANSFER_SIZE : ALIGN(len, ep->maxpacket);
-	req->buf = buf;
-	req->length = xfer;
-	r = usb_ep_queue(ep, req, GFP_ATOMIC);
-	if (r < 0) {
-		debugf("usb read triger queue failed\n");
-		return -2;
-	}
+	s = CONFIG_IS_ENABLED(ENV_SUPPORT, (env_get("serial#")), (NULL));
+	if (s)
+		g_dnl_set_serialnumber((char *)s);
 
 	return 0;
 }
 
-int fb_read_usb_query_finish(void)
+static void fastboot_unbind(struct usb_configuration *c, struct usb_function *f)
 {
-	struct usb_request *req = l_fbdev.rx_req;
-	txn_done = 0;
-
-	while (!txn_done) {
-		usb_gadget_handle_interrupts();
-	}
-
-	return (int)req->actual;
+	f->os_desc_table = NULL;
+	list_del(&fb_os_desc.ext_prop);
+	memset(fastboot_func, 0, sizeof(*fastboot_func));
 }
 
-int fb_usb_write(void *buf, unsigned len)
+static void fastboot_disable(struct usb_function *f)
 {
-	int r;
-	struct usb_request *req = l_fbdev.tx_req;
-	struct usb_ep *ep = l_fbdev.in_ep;
+	struct f_fastboot *f_fb = func_to_fastboot(f);
 
-	req->buf = buf;
-	req->length = len;
-	txn_done = 0;
-	//r = udc_request_queue(in, req);
-	r = usb_ep_queue(ep, req, GFP_ATOMIC);
-	if (r < 0) {
-		debugf("usb_write() queue failed\n");
-		goto oops;
-	}
-	//event_wait(&txn_done);
-	while (!txn_done)
-		usb_gadget_handle_interrupts();
-	if (txn_status < 0) {
-		debugf("usb_write() transaction failed\n");
-		goto oops;
-	}
-	return req->actual;
+	usb_ep_disable(f_fb->out_ep);
+	usb_ep_disable(f_fb->in_ep);
 
-oops:
-	return -1;
+	if (f_fb->out_req) {
+		free(f_fb->out_req->buf);
+		usb_ep_free_request(f_fb->out_ep, f_fb->out_req);
+		f_fb->out_req = NULL;
+	}
+	if (f_fb->in_req) {
+		free(f_fb->in_req->buf);
+		usb_ep_free_request(f_fb->in_ep, f_fb->in_req);
+		f_fb->in_req = NULL;
+	}
 }
 
-
-int usb_fastboot_init(void)
+static struct usb_request *fastboot_start_ep(struct usb_ep *ep)
 {
-	int status = 0;
+	struct usb_request *req;
 
-	usb_driver_init(USB_SPEED_HIGH);
+	req = usb_ep_alloc_request(ep, 0);
+	if (!req)
+		return NULL;
 
-	status = usb_gadget_register_driver(&fastboot_driver);
-	if (status < 0)
-		goto fail;
-	debugf("usb gadget register driver ok!\n");
-	usb_fastboot_start();
-	debugf("usb fastboot start finish!\n");
+	req->length = EP_BUFFER_SIZE;
+	req->buf = memalign(CONFIG_SYS_CACHELINE_SIZE, EP_BUFFER_SIZE);
+	if (!req->buf) {
+		usb_ep_free_request(ep, req);
+		return NULL;
+	}
+
+	memset(req->buf, 0, req->length);
+	return req;
+}
+
+static int fastboot_set_alt(struct usb_function *f,
+			    unsigned interface, unsigned alt)
+{
+	int ret;
+	struct usb_composite_dev *cdev = f->config->cdev;
+	struct usb_gadget *gadget = cdev->gadget;
+	struct f_fastboot *f_fb = func_to_fastboot(f);
+	const struct usb_endpoint_descriptor *d;
+
+	debug("%s: func: %s intf: %d alt: %d\n",
+	      __func__, f->name, interface, alt);
+
+	d = fb_ep_desc(gadget, &fs_ep_out, &hs_ep_out, &ss_ep_out);
+	ret = usb_ep_enable(f_fb->out_ep, d);
+	if (ret) {
+		puts("failed to enable out ep\n");
+		return ret;
+	}
+
+	f_fb->out_req = fastboot_start_ep(f_fb->out_ep);
+	if (!f_fb->out_req) {
+		puts("failed to alloc out req\n");
+		ret = -EINVAL;
+		goto err;
+	}
+	f_fb->out_req->complete = rx_handler_command;
+
+	d = fb_ep_desc(gadget, &fs_ep_in, &hs_ep_in, &ss_ep_in);
+	ret = usb_ep_enable(f_fb->in_ep, d);
+	if (ret) {
+		puts("failed to enable in ep\n");
+		goto err;
+	}
+
+	f_fb->in_req = fastboot_start_ep(f_fb->in_ep);
+	if (!f_fb->in_req) {
+		puts("failed alloc req in\n");
+		ret = -EINVAL;
+		goto err;
+	}
+	f_fb->in_req->complete = fastboot_complete;
+
+	ret = usb_ep_queue(f_fb->out_ep, f_fb->out_req, 0);
+	if (ret)
+		goto err;
+
 	return 0;
+err:
+	fastboot_disable(f);
+	return ret;
+}
 
-fail:
-	error("%s failed. error = %d", __func__, status);
+static int fastboot_add(struct usb_configuration *c)
+{
+	struct f_fastboot *f_fb = fastboot_func;
+	int status;
+
+	debug("%s: cdev: 0x%p\n", __func__, c->cdev);
+
+	if (!f_fb) {
+		f_fb = memalign(CONFIG_SYS_CACHELINE_SIZE, sizeof(*f_fb));
+		if (!f_fb)
+			return -ENOMEM;
+
+		fastboot_func = f_fb;
+		memset(f_fb, 0, sizeof(*f_fb));
+	}
+
+	f_fb->usb_function.name = "f_fastboot";
+	f_fb->usb_function.bind = fastboot_bind;
+	f_fb->usb_function.unbind = fastboot_unbind;
+	f_fb->usb_function.set_alt = fastboot_set_alt;
+	f_fb->usb_function.disable = fastboot_disable;
+	f_fb->usb_function.strings = fastboot_strings;
+
+	status = usb_add_function(c, &f_fb->usb_function);
+	if (status) {
+		free(f_fb);
+		fastboot_func = NULL;
+	}
+
 	return status;
 }
+DECLARE_GADGET_BIND_CALLBACK(usb_dnl_fastboot, fastboot_add);
 
-int usb_fastboot_exit(void)
+static int fastboot_tx_write(const char *buffer, unsigned int buffer_size)
 {
-	int status = 0;
+	struct usb_request *in_req = fastboot_func->in_req;
+	int ret;
 
-	printf("%s \r\n", __func__);
-	usb_driver_exit();
+	memcpy(in_req->buf, buffer, buffer_size);
+	in_req->length = buffer_size;
+
+	usb_ep_dequeue(fastboot_func->in_ep, in_req);
+
+	ret = usb_ep_queue(fastboot_func->in_ep, in_req, 0);
+	if (ret)
+		printf("Error %d on queue\n", ret);
 	return 0;
 }
 
+static int fastboot_tx_write_str(const char *buffer)
+{
+	return fastboot_tx_write(buffer, strlen(buffer));
+}
+
+static void compl_do_reset(struct usb_ep *ep, struct usb_request *req)
+{
+	g_dnl_unregister();
+	fastboot_handle_boot(FASTBOOT_COMMAND_REBOOT, true);
+}
+
+static unsigned int rx_bytes_expected(struct usb_ep *ep)
+{
+	int rx_remain = fastboot_data_remaining();
+	unsigned int rem;
+	unsigned int maxpacket = usb_endpoint_maxp(ep->desc);
+
+	if (rx_remain <= 0)
+		return 0;
+	else if (rx_remain > EP_BUFFER_SIZE)
+		return EP_BUFFER_SIZE;
+
+	/*
+	 * Some controllers e.g. DWC3 don't like OUT transfers to be
+	 * not ending in maxpacket boundary. So just make them happy by
+	 * always requesting for integral multiple of maxpackets.
+	 * This shouldn't bother controllers that don't care about it.
+	 */
+	rem = rx_remain % maxpacket;
+	if (rem > 0)
+		rx_remain = rx_remain + (maxpacket - rem);
+
+	return rx_remain;
+}
+
+static void rx_handler_dl_image(struct usb_ep *ep, struct usb_request *req)
+{
+	char response[FASTBOOT_RESPONSE_LEN] = {0};
+	unsigned int transfer_size = fastboot_data_remaining();
+	const unsigned char *buffer = req->buf;
+	unsigned int buffer_size = req->actual;
+
+	if (req->status != 0) {
+		printf("Bad status: %d\n", req->status);
+		return;
+	}
+
+	if (buffer_size < transfer_size)
+		transfer_size = buffer_size;
+
+	fastboot_data_download(buffer, transfer_size, response);
+	if (response[0]) {
+		fastboot_tx_write_str(response);
+	} else if (!fastboot_data_remaining()) {
+		fastboot_data_complete(response);
+
+		/*
+		 * Reset global transfer variable
+		 */
+		req->complete = rx_handler_command;
+		req->length = EP_BUFFER_SIZE;
+
+		fastboot_tx_write_str(response);
+	} else {
+		req->length = rx_bytes_expected(ep);
+	}
+
+	req->actual = 0;
+	usb_ep_queue(ep, req, 0);
+}
+
+static void do_exit_on_complete(struct usb_ep *ep, struct usb_request *req)
+{
+	g_dnl_trigger_detach();
+}
+
+#ifndef CONFIG_XPL_BUILD
+static void do_bootm_on_complete(struct usb_ep *ep, struct usb_request *req)
+{
+	fastboot_boot();
+	do_exit_on_complete(ep, req);
+}
+#endif
+
+static int multiresponse_cmd = -1;
+static void multiresponse_on_complete(struct usb_ep *ep, struct usb_request *req)
+{
+	char response[FASTBOOT_RESPONSE_LEN] = {0};
+
+	if (multiresponse_cmd == -1)
+		return;
+
+	/* Call handler to obtain next response */
+	fastboot_multiresponse(multiresponse_cmd, response);
+	fastboot_tx_write_str(response);
+
+	/* If response is final OKAY/FAIL response disconnect this handler and unset cmd */
+	if (!strncmp("OKAY", response, 4) || !strncmp("FAIL", response, 4)) {
+		multiresponse_cmd = -1;
+		fastboot_func->in_req->complete = fastboot_complete;
+	}
+}
+
+static void do_acmd_complete(struct usb_ep *ep, struct usb_request *req)
+{
+	/* When usb dequeue complete will be called
+	 *  Need status value before call run_command.
+	 * otherwise, host can't get last message.
+	 */
+	if (req->status == 0)
+		fastboot_acmd_complete();
+}
+
+static void rx_handler_command(struct usb_ep *ep, struct usb_request *req)
+{
+	char *cmdbuf = req->buf;
+	char response[FASTBOOT_RESPONSE_LEN] = {0};
+	int cmd = -1;
+
+	if (req->status != 0 || req->length == 0)
+		return;
+
+	if (req->actual < req->length) {
+		cmdbuf[req->actual] = '\0';
+		cmd = fastboot_handle_command(cmdbuf, response);
+	} else {
+		pr_err("buffer overflow\n");
+		fastboot_fail("buffer overflow", response);
+	}
+
+	if (!strncmp(FASTBOOT_MULTIRESPONSE_START, response, 4)) {
+		multiresponse_cmd = cmd;
+		fastboot_multiresponse(multiresponse_cmd, response);
+
+		/* Only add complete callback if first is not a final OKAY/FAIL response */
+		if (strncmp("OKAY", response, 4) && strncmp("FAIL", response, 4)) {
+			fastboot_func->in_req->complete = multiresponse_on_complete;
+		}
+	}
+
+	if (!strncmp("DATA", response, 4)) {
+		req->complete = rx_handler_dl_image;
+		req->length = rx_bytes_expected(ep);
+	}
+
+	if (!strncmp("OKAY", response, 4)) {
+		switch (cmd) {
+		case FASTBOOT_COMMAND_BOOT:
+#ifndef CONFIG_XPL_BUILD
+			fastboot_func->in_req->complete = do_bootm_on_complete;
+#endif
+			break;
+
+		case FASTBOOT_COMMAND_CONTINUE:
+			fastboot_func->in_req->complete = do_exit_on_complete;
+			break;
+
+		case FASTBOOT_COMMAND_REBOOT:
+		case FASTBOOT_COMMAND_REBOOT_BOOTLOADER:
+		case FASTBOOT_COMMAND_REBOOT_FASTBOOTD:
+		case FASTBOOT_COMMAND_REBOOT_RECOVERY:
+			fastboot_func->in_req->complete = compl_do_reset;
+			break;
+		case FASTBOOT_COMMAND_ACMD:
+			if (CONFIG_IS_ENABLED(FASTBOOT_UUU_SUPPORT))
+				fastboot_func->in_req->complete = do_acmd_complete;
+			break;
+		}
+	}
+
+	fastboot_tx_write_str(response);
+
+	*cmdbuf = '\0';
+	req->actual = 0;
+	usb_ep_queue(ep, req, 0);
+}

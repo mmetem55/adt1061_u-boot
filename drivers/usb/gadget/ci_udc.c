@@ -1,20 +1,22 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Copyright 2011, Marvell Semiconductor Inc.
  * Lei Wen <leiwen@marvell.com>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  *
  * Back ported to the 8xx platform (from the 8260 platform) by
  * Murray.Jensen@cmst.csiro.au, 27-Jan-01.
  */
 
-#include <common.h>
 #include <command.h>
 #include <config.h>
+#include <cpu_func.h>
 #include <net.h>
 #include <malloc.h>
+#include <wait_bit.h>
 #include <asm/byteorder.h>
-#include <asm/errno.h>
+#include <asm/cache.h>
+#include <linux/delay.h>
+#include <linux/errno.h>
 #include <asm/io.h>
 #include <asm/unaligned.h>
 #include <linux/types.h>
@@ -87,21 +89,27 @@ static int ci_ep_enable(struct usb_ep *ep,
 static int ci_ep_disable(struct usb_ep *ep);
 static int ci_ep_queue(struct usb_ep *ep,
 		struct usb_request *req, gfp_t gfp_flags);
+static int ci_ep_dequeue(struct usb_ep *ep, struct usb_request *req);
 static struct usb_request *
 ci_ep_alloc_request(struct usb_ep *ep, unsigned int gfp_flags);
 static void ci_ep_free_request(struct usb_ep *ep, struct usb_request *_req);
 
-static struct usb_gadget_ops ci_udc_ops = {
+static const struct usb_gadget_ops ci_udc_ops = {
 	.pullup = ci_pullup,
 };
 
-static struct usb_ep_ops ci_ep_ops = {
+static const struct usb_ep_ops ci_ep_ops = {
 	.enable         = ci_ep_enable,
 	.disable        = ci_ep_disable,
 	.queue          = ci_ep_queue,
+	.dequeue	= ci_ep_dequeue,
 	.alloc_request  = ci_ep_alloc_request,
 	.free_request   = ci_ep_free_request,
 };
+
+__weak void ci_init_after_reset(struct ehci_ctrl *ctrl)
+{
+}
 
 /* Init values for USB endpoints. */
 static const struct usb_ep ci_ep_init[5] = {
@@ -137,6 +145,7 @@ static struct ci_drv controller = {
 		.name	= "ci_udc",
 		.ops	= &ci_udc_ops,
 		.is_dualspeed = 1,
+		.max_speed = USB_SPEED_HIGH,
 	},
 };
 
@@ -221,8 +230,8 @@ static void ci_flush_qtd(int ep_num)
  */
 static void ci_flush_td(struct ept_queue_item *td)
 {
-	const uint32_t  start = (uint32_t)td;
-	const uint32_t end = (uint32_t) td + ILIST_ENT_SZ;
+	const unsigned long start = (unsigned long)td;
+	const unsigned long end = (unsigned long)td + ILIST_ENT_SZ;
 	flush_dcache_range(start, end);
 }
 
@@ -249,8 +258,8 @@ static void ci_invalidate_qtd(int ep_num)
  */
 static void ci_invalidate_td(struct ept_queue_item *td)
 {
-	const uint32_t start = (uint32_t)td;
-	const uint32_t end = start + ILIST_ENT_SZ;
+	const unsigned long start = (unsigned long)td;
+	const unsigned long end = start + ILIST_ENT_SZ;
 	invalidate_dcache_range(start, end);
 }
 
@@ -258,12 +267,16 @@ static struct usb_request *
 ci_ep_alloc_request(struct usb_ep *ep, unsigned int gfp_flags)
 {
 	struct ci_ep *ci_ep = container_of(ep, struct ci_ep, ep);
-	int num;
+	int num = -1;
 	struct ci_req *ci_req;
 
-	num = ci_ep->desc->bEndpointAddress & USB_ENDPOINT_NUMBER_MASK;
-	if (num == 0 && controller.ep0_req)
+	if (ci_ep->desc)
+		num = ci_ep->desc->bEndpointAddress & USB_ENDPOINT_NUMBER_MASK;
+
+	if (num == 0 && controller.ep0_req) {
+		DBG("%s: already got controller.ep0_req = %p\n", __func__, controller.ep0_req);
 		return &controller.ep0_req->req;
+	}
 
 	ci_req = calloc(1, sizeof(*ci_req));
 	if (!ci_req)
@@ -281,9 +294,13 @@ static void ci_ep_free_request(struct usb_ep *ep, struct usb_request *req)
 {
 	struct ci_ep *ci_ep = container_of(ep, struct ci_ep, ep);
 	struct ci_req *ci_req = container_of(req, struct ci_req, req);
-	int num;
+	int num = -1;
 
-	num = ci_ep->desc->bEndpointAddress & USB_ENDPOINT_NUMBER_MASK;
+	if (ci_ep->desc)
+		num = ci_ep->desc->bEndpointAddress & USB_ENDPOINT_NUMBER_MASK;
+	else
+		DBG("%s: no endpoint %p descriptor\n", __func__, ci_ep);
+
 	if (num == 0) {
 		if (!controller.ep0_req)
 			return;
@@ -295,21 +312,42 @@ static void ci_ep_free_request(struct usb_ep *ep, struct usb_request *req)
 	free(ci_req);
 }
 
-static void ep_enable(int num, int in, int maxpacket)
+static void request_complete(struct usb_ep *ep, struct ci_req *req, int status)
+{
+	if (req->req.status == -EINPROGRESS)
+		req->req.status = status;
+
+	DBG("%s: req %p complete: status %d, actual %u\n",
+	    ep->name, req, req->req.status, req->req.actual);
+
+	req->req.complete(ep, &req->req);
+}
+
+static void request_complete_list(struct usb_ep *ep, struct list_head *list, int status)
+{
+	struct ci_req *req, *tmp_req;
+
+	list_for_each_entry_safe(req, tmp_req, list, queue) {
+		list_del_init(&req->queue);
+		request_complete(ep, req, status);
+	}
+}
+
+static void ep_enable(int num, int in, int type, int maxpacket)
 {
 	struct ci_udc *udc = (struct ci_udc *)controller.ctrl->hcor;
 	unsigned n;
 
 	n = readl(&udc->epctrl[num]);
 	if (in)
-		n |= (CTRL_TXE | CTRL_TXR | CTRL_TXT_BULK);
+		n |= (CTRL_TXE | CTRL_TXR | CTRL_TXT(type));
 	else
-		n |= (CTRL_RXE | CTRL_RXR | CTRL_RXT_BULK);
+		n |= (CTRL_RXE | CTRL_RXR | CTRL_RXT(type));
 
 	if (num != 0) {
 		struct ept_queue_head *head = ci_get_qh(num, in);
 
-		head->config = CONFIG_MAX_PKT(maxpacket) | CONFIG_ZLT;
+		head->config = CFG_MAX_PKT(maxpacket) | CFG_ZLT;
 		ci_flush_qh(num);
 	}
 	writel(n, &udc->epctrl[num]);
@@ -319,10 +357,18 @@ static int ci_ep_enable(struct usb_ep *ep,
 		const struct usb_endpoint_descriptor *desc)
 {
 	struct ci_ep *ci_ep = container_of(ep, struct ci_ep, ep);
-	int num, in;
+	int num, in, type;
 	num = desc->bEndpointAddress & USB_ENDPOINT_NUMBER_MASK;
 	in = (desc->bEndpointAddress & USB_DIR_IN) != 0;
+
+	if (ci_ep->desc) {
+		DBG("%s: endpoint num %d in %d already enabled\n", __func__, num, in);
+		return -EBUSY;
+	}
+
+	type = usb_endpoint_type(desc);
 	ci_ep->desc = desc;
+	ep->desc = desc;
 
 	if (num) {
 		int max = get_unaligned_le16(&desc->wMaxPacketSize);
@@ -335,17 +381,68 @@ static int ci_ep_enable(struct usb_ep *ep,
 			ep->maxpacket = max;
 		}
 	}
-	ep_enable(num, in, ep->maxpacket);
+	ep_enable(num, in, type, ep->maxpacket);
 	DBG("%s: num=%d maxpacket=%d\n", __func__, num, ep->maxpacket);
+	return 0;
+}
+
+static int ep_disable(int num, int in)
+{
+	struct ci_udc *udc = (struct ci_udc *)controller.ctrl->hcor;
+	unsigned int ep_bit, enable_bit;
+	int err;
+
+	if (in) {
+		ep_bit = EPT_TX(num);
+		enable_bit = CTRL_TXE;
+	} else {
+		ep_bit = EPT_RX(num);
+		enable_bit = CTRL_RXE;
+	}
+
+	/* clear primed buffers */
+	do {
+		writel(ep_bit, &udc->epflush);
+		err = wait_for_bit_le32(&udc->epflush, ep_bit, false, 1000, false);
+		if (err)
+			return err;
+	} while (readl(&udc->epstat) & ep_bit);
+
+	/* clear enable bit */
+	clrbits_le32(&udc->epctrl[num], enable_bit);
+
 	return 0;
 }
 
 static int ci_ep_disable(struct usb_ep *ep)
 {
 	struct ci_ep *ci_ep = container_of(ep, struct ci_ep, ep);
+	LIST_HEAD(req_list);
+	int num, in, err;
+
+	if (!ci_ep->desc) {
+		DBG("%s: attempt to disable a not enabled yet endpoint\n", __func__);
+		err = -EBUSY;
+		goto nodesc;
+	}
+
+	num = ci_ep->desc->bEndpointAddress & USB_ENDPOINT_NUMBER_MASK;
+	in = (ci_ep->desc->bEndpointAddress & USB_DIR_IN) != 0;
+
+	list_splice_init(&ci_ep->queue, &req_list);
+	request_complete_list(ep, &req_list, -ESHUTDOWN);
+
+	err = ep_disable(num, in);
+	if (err)
+		return err;
 
 	ci_ep->desc = NULL;
-	return 0;
+	err = 0;
+
+nodesc:
+	ep->desc = NULL;
+	ci_ep->req_primed = false;
+	return err;
 }
 
 static int ci_bounce(struct ci_req *ci_req, int in)
@@ -387,6 +484,9 @@ align:
 
 flush:
 	hwaddr = (unsigned long)ci_req->hw_buf;
+	if (!hwaddr)
+		return 0;
+
 	aligned_used_len = roundup(req->length, ARCH_DMA_MINALIGN);
 	flush_dcache_range(hwaddr, hwaddr + aligned_used_len);
 
@@ -400,7 +500,7 @@ static void ci_debounce(struct ci_req *ci_req, int in)
 	unsigned long hwaddr = (unsigned long)ci_req->hw_buf;
 	uint32_t aligned_used_len;
 
-	if (in)
+	if (in || !hwaddr)
 		return;
 
 	aligned_used_len = roundup(req->actual, ARCH_DMA_MINALIGN);
@@ -420,7 +520,7 @@ static void ci_ep_submit_next_request(struct ci_ep *ci_ep)
 	int bit, num, len, in;
 	struct ci_req *ci_req;
 	u8 *buf;
-	uint32_t length, actlen;
+	uint32_t len_left, len_this_dtd;
 	struct ept_queue_item *dtd, *qtd;
 
 	ci_ep->req_primed = true;
@@ -438,34 +538,32 @@ static void ci_ep_submit_next_request(struct ci_ep *ci_ep)
 
 	ci_req->dtd_count = 0;
 	buf = ci_req->hw_buf;
-	actlen = 0;
+	len_left = len;
 	dtd = item;
 
 	do {
-		length = min(ci_req->req.length - actlen,
-			     (unsigned)EP_MAX_LENGTH_TRANSFER);
+		len_this_dtd = min(len_left, (unsigned)EP_MAX_LENGTH_TRANSFER);
 
-		dtd->info = INFO_BYTES(length) | INFO_ACTIVE;
+		dtd->info = INFO_BYTES(len_this_dtd) | INFO_ACTIVE;
 		dtd->page0 = (unsigned long)buf;
 		dtd->page1 = ((unsigned long)buf & 0xfffff000) + 0x1000;
 		dtd->page2 = ((unsigned long)buf & 0xfffff000) + 0x2000;
 		dtd->page3 = ((unsigned long)buf & 0xfffff000) + 0x3000;
 		dtd->page4 = ((unsigned long)buf & 0xfffff000) + 0x4000;
 
-		len -= length;
-		actlen += length;
-		buf += length;
+		len_left -= len_this_dtd;
+		buf += len_this_dtd;
 
-		if (len) {
+		if (len_left) {
 			qtd = (struct ept_queue_item *)
 			       memalign(ILIST_ALIGN, ILIST_ENT_SZ);
-			dtd->next = (uint32_t)qtd;
+			dtd->next = (unsigned long)qtd;
 			dtd = qtd;
 			memset(dtd, 0, ILIST_ENT_SZ);
 		}
 
 		ci_req->dtd_count++;
-	} while (len);
+	} while (len_left);
 
 	item = dtd;
 	/*
@@ -503,10 +601,10 @@ static void ci_ep_submit_next_request(struct ci_ep *ci_ep)
 
 	ci_flush_qtd(num);
 
-	item = (struct ept_queue_item *)head->next;
+	item = (struct ept_queue_item *)(unsigned long)head->next;
 	while (item->next != TERMINATE) {
-		ci_flush_td((struct ept_queue_item *)item->next);
-		item = (struct ept_queue_item *)item->next;
+		ci_flush_td((struct ept_queue_item *)(unsigned long)item->next);
+		item = (struct ept_queue_item *)(unsigned long)item->next;
 	}
 
 	DBG("ept%d %s queue len %x, req %p, buffer %p\n",
@@ -521,6 +619,32 @@ static void ci_ep_submit_next_request(struct ci_ep *ci_ep)
 	writel(bit, &udc->epprime);
 }
 
+static int ci_ep_dequeue(struct usb_ep *_ep, struct usb_request *_req)
+{
+	struct ci_ep *ci_ep = container_of(_ep, struct ci_ep, ep);
+	struct ci_req *ci_req;
+
+	list_for_each_entry(ci_req, &ci_ep->queue, queue) {
+		if (&ci_req->req == _req)
+			break;
+	}
+
+	if (&ci_req->req != _req) {
+		DBG("%s: ci_req not found in the queue\n", __func__);
+		return -EINVAL;
+	}
+
+	list_del_init(&ci_req->queue);
+
+	if (ci_req->req.status == -EINPROGRESS) {
+		ci_req->req.status = -ECONNRESET;
+		if (ci_req->req.complete)
+			ci_req->req.complete(_ep, _req);
+	}
+
+	return 0;
+}
+
 static int ci_ep_queue(struct usb_ep *ep,
 		struct usb_request *req, gfp_t gfp_flags)
 {
@@ -528,6 +652,11 @@ static int ci_ep_queue(struct usb_ep *ep,
 	struct ci_req *ci_req = container_of(req, struct ci_req, req);
 	int in, ret;
 	int __maybe_unused num;
+
+	if (!ci_ep->desc) {
+		DBG("%s: ci_ep->desc == NULL, nothing to do!\n", __func__);
+		return -EINVAL;
+	}
 
 	num = ci_ep->desc->bEndpointAddress & USB_ENDPOINT_NUMBER_MASK;
 	in = (ci_ep->desc->bEndpointAddress & USB_DIR_IN) != 0;
@@ -551,6 +680,8 @@ static int ci_ep_queue(struct usb_ep *ep,
 	if (ret)
 		return ret;
 
+	req->status = -EINPROGRESS;
+
 	DBG("ept%d %s pre-queue req %p, buffer %p\n",
 	    num, in ? "in" : "out", ci_req, ci_req->hw_buf);
 	list_add_tail(&ci_req->queue, &ci_ep->queue);
@@ -572,17 +703,46 @@ static void flip_ep0_direction(void)
 	}
 }
 
+/*
+ * This function explicitly sets the address, without the "USBADRA" (advance)
+ * feature, which is not supported by older versions of the controller.
+ */
+static void ci_set_address(struct ci_udc *udc, u8 address)
+{
+	DBG("%s %x\n", __func__, address);
+	writel(address << 25, &udc->devaddr);
+}
+
 static void handle_ep_complete(struct ci_ep *ci_ep)
 {
 	struct ept_queue_item *item, *next_td;
 	int num, in, len, j;
 	struct ci_req *ci_req;
 
+	/* Set the device address that was previously sent by SET_ADDRESS */
+	if (controller.next_device_address != 0) {
+		struct ci_udc *udc = (struct ci_udc *)controller.ctrl->hcor;
+
+		ci_set_address(udc, controller.next_device_address);
+		controller.next_device_address = 0;
+	}
+
 	num = ci_ep->desc->bEndpointAddress & USB_ENDPOINT_NUMBER_MASK;
 	in = (ci_ep->desc->bEndpointAddress & USB_DIR_IN) != 0;
 	item = ci_get_qtd(num, in);
 	ci_invalidate_qtd(num);
 	ci_req = list_first_entry(&ci_ep->queue, struct ci_req, queue);
+
+	/* Check all dtd are completed, otherwise return for next irq process */
+	next_td = item;
+	for (j = 0; j < ci_req->dtd_count; j++) {
+		ci_invalidate_td(next_td);
+		if (next_td->info & INFO_ACTIVE)
+			return;
+		if (j != ci_req->dtd_count - 1)
+			next_td = (struct ept_queue_item *)(unsigned long)
+				next_td->next;
+	}
 
 	next_td = item;
 	len = 0;
@@ -594,7 +754,8 @@ static void handle_ep_complete(struct ci_ep *ci_ep)
 			printf("EP%d/%s FAIL info=%x pg0=%x\n",
 			       num, in ? "in" : "out", item->info, item->page0);
 		if (j != ci_req->dtd_count - 1)
-			next_td = (struct ept_queue_item *)item->next;
+			next_td = (struct ept_queue_item *)(unsigned long)
+				item->next;
 		if (j != 0)
 			free(item);
 	}
@@ -606,6 +767,7 @@ static void handle_ep_complete(struct ci_ep *ci_ep)
 		ci_ep_submit_next_request(ci_ep);
 
 	ci_req->req.actual = ci_req->req.length - len;
+	ci_req->req.status = 0;
 	ci_debounce(ci_req, in);
 
 	DBG("ept%d %s req %p, complete %x\n",
@@ -636,7 +798,7 @@ static void handle_setup(void)
 	struct ept_queue_head *head;
 	struct usb_ctrlrequest r;
 	int status = 0;
-	int num, in, _num, _in, i;
+	int num, in, _num, _in, i, type;
 	char *buf;
 
 	ci_req = controller.ep0_req;
@@ -690,8 +852,9 @@ static void handle_setup(void)
 						& USB_ENDPOINT_NUMBER_MASK;
 				in = (ep->desc->bEndpointAddress
 						& USB_DIR_IN) != 0;
+				type = usb_endpoint_type(ep->desc);
 				if ((num == _num) && (in == _in)) {
-					ep_enable(num, in, ep->ep.maxpacket);
+					ep_enable(num, in, type, ep->ep.maxpacket);
 					usb_ep_queue(controller.gadget.ep0,
 							req, 0);
 					break;
@@ -705,7 +868,7 @@ static void handle_setup(void)
 		 * write address delayed (will take effect
 		 * after the next IN txn)
 		 */
-		writel((r.wValue << 25) | (1 << 24), &udc->devaddr);
+		controller.next_device_address = r.wValue;
 		req->length = 0;
 		usb_ep_queue(controller.gadget.ep0, req, 0);
 		return;
@@ -736,6 +899,9 @@ static void stop_activity(void)
 	int i, num, in;
 	struct ept_queue_head *head;
 	struct ci_udc *udc = (struct ci_udc *)controller.ctrl->hcor;
+
+	ci_set_address(udc, 0);
+
 	writel(readl(&udc->epcomp), &udc->epcomp);
 #ifdef CONFIG_CI_UDC_HAS_HOSTPC
 	writel(readl(&udc->epsetupstat), &udc->epsetupstat);
@@ -828,10 +994,10 @@ void udc_irq(void)
 	}
 }
 
-int usb_gadget_handle_interrupts(int index)
+int dm_usb_gadget_handle_interrupts(struct udevice *dev)
 {
-	u32 value;
 	struct ci_udc *udc = (struct ci_udc *)controller.ctrl->hcor;
+	u32 value;
 
 	value = readl(&udc->usbsts);
 	if (value)
@@ -840,7 +1006,7 @@ int usb_gadget_handle_interrupts(int index)
 	return value;
 }
 
-void udc_disconnect(void)
+static void udc_disconnect(void)
 {
 	struct ci_udc *udc = (struct ci_udc *)controller.ctrl->hcor;
 	/* disable pullup */
@@ -856,8 +1022,11 @@ static int ci_pullup(struct usb_gadget *gadget, int is_on)
 	struct ci_udc *udc = (struct ci_udc *)controller.ctrl->hcor;
 	if (is_on) {
 		/* RESET */
+		controller.next_device_address = 0;
 		writel(USBCMD_ITC(MICRO_8FRAME) | USBCMD_RST, &udc->usbcmd);
 		udelay(200);
+
+		ci_init_after_reset(controller.ctrl);
 
 		writel((unsigned long)controller.epts, &udc->epinitaddr);
 
@@ -872,7 +1041,8 @@ static int ci_pullup(struct usb_gadget *gadget, int is_on)
 		writel(0xffffffff, &udc->epflush);
 
 		/* Turn on the USB connection by enabling the pullup resistor */
-		writel(USBCMD_ITC(MICRO_8FRAME) | USBCMD_RUN, &udc->usbcmd);
+		setbits_le32(&udc->usbcmd, USBCMD_ITC(MICRO_8FRAME) |
+			     USBCMD_RUN);
 	} else {
 		udc_disconnect();
 	}
@@ -915,11 +1085,11 @@ static int ci_udc_probe(void)
 		 */
 		head = controller.epts + i;
 		if (i < 2)
-			head->config = CONFIG_MAX_PKT(EP0_MAX_PACKET_SIZE)
-				| CONFIG_ZLT | CONFIG_IOS;
+			head->config = CFG_MAX_PKT(EP0_MAX_PACKET_SIZE)
+				| CFG_ZLT | CFG_IOS;
 		else
-			head->config = CONFIG_MAX_PKT(EP_MAX_PACKET_SIZE)
-				| CONFIG_ZLT;
+			head->config = CFG_MAX_PKT(EP_MAX_PACKET_SIZE)
+				| CFG_ZLT;
 		head->next = TERMINATE;
 		head->info = 0;
 
@@ -977,10 +1147,8 @@ int usb_gadget_register_driver(struct usb_gadget_driver *driver)
 		return -EINVAL;
 	if (!driver->bind || !driver->setup || !driver->disconnect)
 		return -EINVAL;
-	if (driver->speed != USB_SPEED_FULL && driver->speed != USB_SPEED_HIGH)
-		return -EINVAL;
 
-#ifdef CONFIG_DM_USB
+#if CONFIG_IS_ENABLED(DM_USB)
 	ret = usb_setup_ehci_gadget(&controller.ctrl);
 #else
 	ret = usb_lowlevel_init(0, USB_INIT_DEVICE, (void **)&controller.ctrl);
@@ -989,18 +1157,10 @@ int usb_gadget_register_driver(struct usb_gadget_driver *driver)
 		return ret;
 
 	ret = ci_udc_probe();
-#if defined(CONFIG_USB_EHCI_MX6) || defined(CONFIG_USB_EHCI_MXS)
-	/*
-	 * FIXME: usb_lowlevel_init()->ehci_hcd_init() should be doing all
-	 * HW-specific initialization, e.g. ULPI-vs-UTMI PHY selection
-	 */
-	if (!ret) {
-		struct ci_udc *udc = (struct ci_udc *)controller.ctrl->hcor;
-
-		/* select ULPI phy */
-		writel(PTS(PTS_ENABLE) | PFSC, &udc->portsc);
+	if (ret) {
+		DBG("udc probe failed, returned %d\n", ret);
+		return ret;
 	}
-#endif
 
 	ret = driver->bind(&controller.gadget);
 	if (ret) {
@@ -1022,6 +1182,13 @@ int usb_gadget_unregister_driver(struct usb_gadget_driver *driver)
 	ci_ep_free_request(&controller.ep[0].ep, &controller.ep0_req->req);
 	free(controller.items_mem);
 	free(controller.epts);
+
+#if CONFIG_IS_ENABLED(DM_USB)
+	usb_remove_ehci_gadget(&controller.ctrl);
+#else
+	usb_lowlevel_stop(0);
+	controller.ctrl = NULL;
+#endif
 
 	return 0;
 }

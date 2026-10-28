@@ -1,8 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * (C) Copyright 2010, 2011
  * NVIDIA Corporation <www.nvidia.com>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #ifndef _WARM_BOOT_H_
@@ -10,12 +9,6 @@
 
 #define STRAP_OPT_A_RAM_CODE_SHIFT	4
 #define STRAP_OPT_A_RAM_CODE_MASK	(0xf << STRAP_OPT_A_RAM_CODE_SHIFT)
-
-/* Defines the supported operating modes */
-enum fuse_operating_mode {
-	MODE_PRODUCTION = 3,
-	MODE_UNDEFINED,
-};
 
 /* Defines the CMAC-AES-128 hash length in 32 bit words. (128 bits = 4 words) */
 enum {
@@ -118,16 +111,14 @@ union scratch3_reg {
 	u32 word;
 };
 
-
 /**
  * Save warmboot memory settings for a later resume
  *
- * @return 0 if ok, -1 on error
+ * Return: 0 if ok, -1 on error
  */
 int warmboot_save_sdram_params(void);
 
 int warmboot_prepare_code(u32 seg_address, u32 seg_length);
-int sign_data_block(u8 *source, u32 length, u8 *signature);
 void wb_start(void);	/* Start of WB assembly code */
 void wb_end(void);	/* End of WB assembly code */
 

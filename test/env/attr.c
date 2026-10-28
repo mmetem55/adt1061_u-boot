@@ -1,11 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * (C) Copyright 2015
  * Joe Hershberger, National Instruments, joe.hershberger@ni.com
- *
- * SPDX-License-Identifier:	GPL-2.0
  */
 
-#include <common.h>
 #include <command.h>
 #include <env_attr.h>
 #include <test/env.h>

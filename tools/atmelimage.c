@@ -1,8 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * (C) Copyright 2014
- * Andreas Bießmann <andreas.devel@googlemail.com>
- *
- * SPDX-License-Identifier:	GPL-2.0+
+ * Andreas Bießmann <andreas@biessmann.org>
  */
 
 #include "imagetool.h"
@@ -56,7 +55,7 @@ static const char * const configs[] = {
 static int atmel_find_pmecc_parameter_in_token(const char *token)
 {
 	size_t pos;
-	char *param;
+	const char *param;
 
 	debug("token: '%s'\n", token);
 
@@ -131,7 +130,7 @@ static int atmel_verify_header(unsigned char *ptr, int image_size,
 
 	/* check the seven interrupt vectors of binary */
 	for (pos = 0; pos < 7; pos++) {
-		debug("atmelimage: interrupt vector #%d is 0x%08X\n", pos+1,
+		debug("atmelimage: interrupt vector #%zu is 0x%08X\n", pos+1,
 		      ints[pos]);
 		/*
 		 * all vectors except the 6'th one must contain valid
@@ -183,7 +182,7 @@ static void atmel_print_pmecc_header(const uint32_t word)
 	printf("\t\t====================\n");
 }
 
-static void atmel_print_header(const void *ptr)
+static void atmel_print_header(const void *ptr, struct image_tool_params *params)
 {
 	uint32_t *ints = (uint32_t *)ptr;
 	size_t pos;

@@ -45,11 +45,13 @@
 *		Jason ported this file to u-boot to run the ATI video card
 *		BIOS in u-boot.
 ****************************************************************************/
-#include <common.h>
+#include <compiler.h>
 #include <bios_emul.h>
 #include <errno.h>
+#include <log.h>
 #include <malloc.h>
-#include <vbe.h>
+#include <vesa.h>
+#include <linux/delay.h>
 #include "biosemui.h"
 
 /* Length of the BIOS image */
@@ -65,6 +67,7 @@ static u32 saveBaseAddress20;
 /* Addres im memory of VBE region */
 const int vbe_offset = 0x2000;
 
+#ifdef CONFIG_FRAMEBUFFER_SET_VESA_MODE
 static const void *bios_ptr(const void *buf, BE_VGAInfo *vga_info,
 			    u32 x86_dword_ptr)
 {
@@ -79,13 +82,13 @@ static const void *bios_ptr(const void *buf, BE_VGAInfo *vga_info,
 }
 
 static int atibios_debug_mode(BE_VGAInfo *vga_info, RMREGS *regs,
-			      int vesa_mode, struct vbe_mode_info *mode_info)
+			      int vesa_mode, struct vesa_state *mode_info)
 {
 	void *buffer = (void *)(M.mem_base + vbe_offset);
 	u16 buffer_seg = (((unsigned long)vbe_offset) >> 4) & 0xff00;
 	u16 buffer_adr = ((unsigned long)vbe_offset) & 0xffff;
 	struct vesa_mode_info *vm;
-	struct vbe_info *info;
+	struct vesa_bios_ext_info *info;
 	const u16 *modes_bios, *ptr;
 	u16 *modes;
 	int size;
@@ -96,7 +99,7 @@ static int atibios_debug_mode(BE_VGAInfo *vga_info, RMREGS *regs,
 	regs->e.edi = buffer_adr;
 	info = buffer;
 	memset(info, '\0', sizeof(*info));
-	strcpy(info->signature, "VBE2");
+	memcpy(info->signature, "VBE2", 4);
 	BE_int86(0x10, regs, regs);
 	if (regs->e.eax != 0x4f) {
 		debug("VESA_GET_INFO: error %x\n", regs->e.eax);
@@ -135,9 +138,8 @@ static int atibios_debug_mode(BE_VGAInfo *vga_info, RMREGS *regs,
 		bool linear_ok;
 		int attr;
 
-		break;
 		debug("Mode %x: ", mode);
-		memset(buffer, '\0', sizeof(struct vbe_mode_info));
+		memset(buffer, '\0', sizeof(struct vesa_state));
 		regs->e.eax = VESA_GET_MODE_INFO;
 		regs->e.ebx = 0;
 		regs->e.ecx = mode;
@@ -171,7 +173,7 @@ static int atibios_debug_mode(BE_VGAInfo *vga_info, RMREGS *regs,
 }
 
 static int atibios_set_vesa_mode(RMREGS *regs, int vesa_mode,
-				 struct vbe_mode_info *mode_info)
+				 struct vesa_state *mode_info)
 {
 	void *buffer = (void *)(M.mem_base + vbe_offset);
 	u16 buffer_seg = (((unsigned long)vbe_offset) >> 4) & 0xff00;
@@ -189,7 +191,7 @@ static int atibios_set_vesa_mode(RMREGS *regs, int vesa_mode,
 		return -ENOSYS;
 	}
 
-	memset(buffer, '\0', sizeof(struct vbe_mode_info));
+	memset(buffer, '\0', sizeof(struct vesa_state));
 	debug("VBE: Geting info for VESA mode %#04x\n", vesa_mode);
 	regs->e.eax = VESA_GET_MODE_INFO;
 	regs->e.ecx = vesa_mode;
@@ -215,6 +217,7 @@ static int atibios_set_vesa_mode(RMREGS *regs, int vesa_mode,
 
 	return 0;
 }
+#endif /* CONFIG_FRAMEBUFFER_SET_VESA_MODE */
 
 /****************************************************************************
 PARAMETERS:
@@ -226,11 +229,12 @@ This function executes the BIOS POST code on the controller. We assume that
 at this stage the controller has its I/O and memory space enabled and
 that all other controllers are in a disabled state.
 ****************************************************************************/
-static void PCI_doBIOSPOST(pci_dev_t pcidev, BE_VGAInfo *vga_info,
-			   int vesa_mode, struct vbe_mode_info *mode_info)
+static void PCI_doBIOSPOST(struct udevice *pcidev, BE_VGAInfo *vga_info,
+			   int vesa_mode, struct vesa_state *mode_info)
 {
 	RMREGS regs;
 	RMSREGS sregs;
+	pci_dev_t bdf;
 
 	/* Determine the value to store in AX for BIOS POST. Per the PCI specs,
 	 AH must contain the bus and AL must contain the devfn, encoded as
@@ -238,9 +242,9 @@ static void PCI_doBIOSPOST(pci_dev_t pcidev, BE_VGAInfo *vga_info,
 	 */
 	memset(&regs, 0, sizeof(regs));
 	memset(&sregs, 0, sizeof(sregs));
-	regs.x.ax = ((int)PCI_BUS(pcidev) << 8) |
-	    ((int)PCI_DEV(pcidev) << 3) | (int)PCI_FUNC(pcidev);
-
+	bdf = dm_pci_get_bdf(pcidev);
+	regs.x.ax = (int)PCI_BUS(bdf) << 8 |
+			(int)PCI_DEV(bdf) << 3 | (int)PCI_FUNC(bdf);
 	/*Setup the X86 emulator for the VGA BIOS*/
 	BE_setVGA(vga_info);
 
@@ -250,11 +254,13 @@ static void PCI_doBIOSPOST(pci_dev_t pcidev, BE_VGAInfo *vga_info,
 	/*Cleanup and exit*/
 	BE_getVGA(vga_info);
 
+#ifdef CONFIG_FRAMEBUFFER_SET_VESA_MODE
 	/* Useful for debugging */
 	if (0)
 		atibios_debug_mode(vga_info, &regs, vesa_mode, mode_info);
 	if (vesa_mode != -1)
 		atibios_set_vesa_mode(&regs, vesa_mode, mode_info);
+#endif
 }
 
 /****************************************************************************
@@ -281,15 +287,15 @@ NOTE: This function leaves the original memory aperture disabled by leaving
       it programmed to all 1's. It must be restored to the correct value
       later.
 ****************************************************************************/
-static u32 PCI_findBIOSAddr(pci_dev_t pcidev, int *bar)
+static u32 PCI_findBIOSAddr(struct udevice *pcidev, int *bar)
 {
 	u32 base, size;
 
 	for (*bar = 0x10; *bar <= 0x14; (*bar) += 4) {
-		pci_read_config_dword(pcidev, *bar, &base);
+		dm_pci_read_config32(pcidev, *bar, &base);
 		if (!(base & 0x1)) {
-			pci_write_config_dword(pcidev, *bar, 0xFFFFFFFF);
-			pci_read_config_dword(pcidev, *bar, &size);
+			dm_pci_write_config32(pcidev, *bar, 0xFFFFFFFF);
+			dm_pci_read_config32(pcidev, *bar, &size);
 			size = ~(size & ~0xFF) + 1;
 			if (size >= MAX_BIOSLEN)
 				return base & ~0xFF;
@@ -312,11 +318,11 @@ necessary).
 Anyway to fix this we change all I/O mapped base registers and
 chop off the top bits.
 ****************************************************************************/
-static void PCI_fixupIObase(pci_dev_t pcidev, int reg, u32 * base)
+static void PCI_fixupIObase(struct udevice *pcidev, int reg, u32 *base)
 {
 	if ((*base & 0x1) && (*base > 0xFFFE)) {
 		*base &= 0xFFFF;
-		pci_write_config_dword(pcidev, reg, *base);
+		dm_pci_write_config32(pcidev, reg, *base);
 
 	}
 }
@@ -331,18 +337,18 @@ Pointers to the mapped BIOS image
 REMARKS:
 Maps a pointer to the BIOS image on the graphics card on the PCI bus.
 ****************************************************************************/
-void *PCI_mapBIOSImage(pci_dev_t pcidev)
+void *PCI_mapBIOSImage(struct udevice *pcidev)
 {
 	u32 BIOSImageBus;
 	int BIOSImageBAR;
 	u8 *BIOSImage;
 
 	/*Save PCI BAR registers that might get changed*/
-	pci_read_config_dword(pcidev, PCI_ROM_ADDRESS, &saveROMBaseAddress);
-	pci_read_config_dword(pcidev, PCI_BASE_ADDRESS_0, &saveBaseAddress10);
-	pci_read_config_dword(pcidev, PCI_BASE_ADDRESS_1, &saveBaseAddress14);
-	pci_read_config_dword(pcidev, PCI_BASE_ADDRESS_2, &saveBaseAddress18);
-	pci_read_config_dword(pcidev, PCI_BASE_ADDRESS_4, &saveBaseAddress20);
+	dm_pci_read_config32(pcidev, PCI_ROM_ADDRESS, &saveROMBaseAddress);
+	dm_pci_read_config32(pcidev, PCI_BASE_ADDRESS_0, &saveBaseAddress10);
+	dm_pci_read_config32(pcidev, PCI_BASE_ADDRESS_1, &saveBaseAddress14);
+	dm_pci_read_config32(pcidev, PCI_BASE_ADDRESS_2, &saveBaseAddress18);
+	dm_pci_read_config32(pcidev, PCI_BASE_ADDRESS_4, &saveBaseAddress20);
 
 	/*Fix up I/O base registers to less than 64K */
 	if(saveBaseAddress14 != 0)
@@ -361,13 +367,12 @@ void *PCI_mapBIOSImage(pci_dev_t pcidev)
 		return NULL;
 	}
 
-	BIOSImage = pci_bus_to_virt(pcidev, BIOSImageBus,
-				    PCI_REGION_MEM, 0, MAP_NOCACHE);
+	BIOSImage = dm_pci_bus_to_virt(pcidev, BIOSImageBus, 0, PCI_REGION_TYPE,
+				       PCI_REGION_MEM, MAP_NOCACHE);
 
 	/*Change the PCI BAR registers to map it onto the bus.*/
-	pci_write_config_dword(pcidev, BIOSImageBAR, 0);
-	pci_write_config_dword(pcidev, PCI_ROM_ADDRESS, BIOSImageBus | 0x1);
-
+	dm_pci_write_config32(pcidev, BIOSImageBAR, 0);
+	dm_pci_write_config32(pcidev, PCI_ROM_ADDRESS, BIOSImageBus | 0x1);
 	udelay(1);
 
 	/*Check that the BIOS image is valid. If not fail, or return the
@@ -387,13 +392,13 @@ pcidev	- PCI device info for the video card on the bus
 REMARKS:
 Unmaps the BIOS image for the device and restores framebuffer mappings
 ****************************************************************************/
-void PCI_unmapBIOSImage(pci_dev_t pcidev, void *BIOSImage)
+void PCI_unmapBIOSImage(struct udevice *pcidev, void *BIOSImage)
 {
-	pci_write_config_dword(pcidev, PCI_ROM_ADDRESS, saveROMBaseAddress);
-	pci_write_config_dword(pcidev, PCI_BASE_ADDRESS_0, saveBaseAddress10);
-	pci_write_config_dword(pcidev, PCI_BASE_ADDRESS_1, saveBaseAddress14);
-	pci_write_config_dword(pcidev, PCI_BASE_ADDRESS_2, saveBaseAddress18);
-	pci_write_config_dword(pcidev, PCI_BASE_ADDRESS_4, saveBaseAddress20);
+	dm_pci_write_config32(pcidev, PCI_ROM_ADDRESS, saveROMBaseAddress);
+	dm_pci_write_config32(pcidev, PCI_BASE_ADDRESS_0, saveBaseAddress10);
+	dm_pci_write_config32(pcidev, PCI_BASE_ADDRESS_1, saveBaseAddress14);
+	dm_pci_write_config32(pcidev, PCI_BASE_ADDRESS_2, saveBaseAddress18);
+	dm_pci_write_config32(pcidev, PCI_BASE_ADDRESS_4, saveBaseAddress20);
 }
 
 /****************************************************************************
@@ -408,13 +413,14 @@ REMARKS:
 Loads and POST's the display controllers BIOS, directly from the BIOS
 image we can extract over the PCI bus.
 ****************************************************************************/
-static int PCI_postController(pci_dev_t pcidev, uchar *bios_rom, int bios_len,
-			      BE_VGAInfo *vga_info, int vesa_mode,
-			      struct vbe_mode_info *mode_info)
+static int PCI_postController(struct udevice *pcidev, uchar *bios_rom,
+			      int bios_len, BE_VGAInfo *vga_info,
+			      int vesa_mode, struct vesa_state *mode_info)
 {
 	u32 bios_image_len;
 	uchar *mapped_bios;
 	uchar *copy_of_bios;
+	pci_dev_t bdf;
 
 	if (bios_rom) {
 		copy_of_bios = bios_rom;
@@ -442,9 +448,10 @@ static int PCI_postController(pci_dev_t pcidev, uchar *bios_rom, int bios_len,
 	}
 
 	/*Save information in vga_info structure*/
-	vga_info->function = PCI_FUNC(pcidev);
-	vga_info->device = PCI_DEV(pcidev);
-	vga_info->bus = PCI_BUS(pcidev);
+	bdf = dm_pci_get_bdf(pcidev);
+	vga_info->function = PCI_FUNC(bdf);
+	vga_info->device = PCI_DEV(bdf);
+	vga_info->bus = PCI_BUS(bdf);
 	vga_info->pcidev = pcidev;
 	vga_info->BIOSImage = copy_of_bios;
 	vga_info->BIOSImageLen = bios_image_len;
@@ -462,13 +469,13 @@ static int PCI_postController(pci_dev_t pcidev, uchar *bios_rom, int bios_len,
 	return true;
 }
 
-int biosemu_setup(pci_dev_t pcidev, BE_VGAInfo **vga_infop)
+int biosemu_setup(struct udevice *pcidev, BE_VGAInfo **vga_infop)
 {
 	BE_VGAInfo *VGAInfo;
+	pci_dev_t bdf = dm_pci_get_bdf(pcidev);
 
 	printf("videoboot: Booting PCI video card bus %d, function %d, device %d\n",
-	     PCI_BUS(pcidev), PCI_FUNC(pcidev), PCI_DEV(pcidev));
-
+	       PCI_BUS(bdf), PCI_FUNC(bdf), PCI_DEV(bdf));
 	/*Initialise the x86 BIOS emulator*/
 	if ((VGAInfo = malloc(sizeof(*VGAInfo))) == NULL) {
 		printf("videoboot: Out of memory!\n");
@@ -486,9 +493,9 @@ void biosemu_set_interrupt_handler(int intnum, int (*int_func)(void))
 	X86EMU_setupIntrFunc(intnum, (X86EMU_intrFuncs)int_func);
 }
 
-int biosemu_run(pci_dev_t pcidev, uchar *bios_rom, int bios_len,
+int biosemu_run(struct udevice *pcidev, uchar *bios_rom, int bios_len,
 		BE_VGAInfo *vga_info, int clean_up, int vesa_mode,
-		struct vbe_mode_info *mode_info)
+		struct vesa_state *mode_info)
 {
 	/*Post all the display controller BIOS'es*/
 	if (!PCI_postController(pcidev, bios_rom, bios_len, vga_info,
@@ -503,10 +510,9 @@ int biosemu_run(pci_dev_t pcidev, uchar *bios_rom, int bios_len,
 	if (clean_up) {
 		BE_exit();
 		if (vga_info->BIOSImage &&
-		    (u32)(vga_info->BIOSImage) != 0xc0000)
+		    (ulong)(vga_info->BIOSImage) != 0xc0000)
 			free(vga_info->BIOSImage);
 		free(vga_info);
-		vga_info = NULL;
 	}
 
 	return 0;
@@ -522,7 +528,8 @@ REMARKS:
 Boots the PCI/AGP video card on the bus using the Video ROM BIOS image
 and the X86 BIOS emulator module.
 ****************************************************************************/
-int BootVideoCardBIOS(pci_dev_t pcidev, BE_VGAInfo **pVGAInfo, int clean_up)
+int BootVideoCardBIOS(struct udevice *pcidev, BE_VGAInfo **pVGAInfo,
+		      int clean_up)
 {
 	BE_VGAInfo *VGAInfo;
 	int ret;

@@ -1,8 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0+
 #
 # Copyright (C) 2015, Bin Meng <bmeng.cn@gmail.com>
-#
-# SPDX-License-Identifier:	GPL-2.0+
-#
 
-obj-y += car.o dram.o qemu.o
-obj-$(CONFIG_PCI) += pci.o
+ifndef CONFIG_$(PHASE_)X86_64
+obj-y += car.o
+endif
+obj-y += dram.o
+obj-y += qemu.o
+obj-$(CONFIG_QFW) += cpu.o e820.o

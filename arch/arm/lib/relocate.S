@@ -1,15 +1,16 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  *  relocate - common relocation function for ARM U-Boot
  *
  *  Copyright (c) 2013  Albert ARIBAUD <albert.u.boot@aribaud.net>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #include <asm-offsets.h>
+#include <asm/assembler.h>
 #include <config.h>
+#include <elf.h>
 #include <linux/linkage.h>
-#ifdef CONFIG_CPU_V7M
+#ifdef CONFIG_CPU_V7M_V8M
 #include <asm/armv7m.h>
 #endif
 
@@ -22,11 +23,10 @@
  */
 
 	.section	.text.relocate_vectors,"ax",%progbits
-	.weak		relocate_vectors
 
-ENTRY(relocate_vectors)
+WEAK(relocate_vectors)
 
-#ifdef CONFIG_CPU_V7M
+#ifdef CONFIG_CPU_V7M_V8M
 	/*
 	 * On ARMv7-M we only have to write the new vector address
 	 * to VTOR register.
@@ -60,7 +60,7 @@ ENTRY(relocate_vectors)
 	stmia	r1!, {r2-r8,r10}
 #endif
 #endif
-	bx	lr
+	ret	lr
 
 ENDPROC(relocate_vectors)
 
@@ -77,31 +77,55 @@ ENDPROC(relocate_vectors)
  */
 
 ENTRY(relocate_code)
-	ldr	r1, =__image_copy_start	/* r1 <- SRC &__image_copy_start */
-	subs	r4, r0, r1		/* r4 <- relocation offset */
-	beq	relocate_done		/* skip relocation */
-	ldr	r2, =__image_copy_end	/* r2 <- SRC &__image_copy_end */
+relocate_base:
+	adr	r3, relocate_base
 
+#ifdef CONFIG_SKIP_RELOCATE_CODE
+	mov r4,	#CONFIG_SKIP_RELOCATE_CODE_DATA_OFFSET
+
+	ldr	r1, _data_start_ofs
+	add	r5, r1, r3		/* r5 <- Run &__data_start */
+	ldr	r1, _data_end_ofs
+	add	r6, r1, r3		/* r6 <- Run &__data_end */
+#else
+	ldr	r1, _image_copy_start_ofs
+	add	r1, r3			/* r1 <- Run &__image_copy_start */
+	subs	r4, r0, r1		/* r4 <- Run to copy offset      */
+	beq	relocate_done		/* skip relocation               */
+	ldr	r2, _image_copy_end_ofs
+	add	r2, r3			/* r2 <- Run &__image_copy_end   */
 copy_loop:
-	ldmia	r1!, {r10-r11}		/* copy from source address [r1]    */
-	stmia	r0!, {r10-r11}		/* copy to   target address [r0]    */
-	cmp	r1, r2			/* until source end address [r2]    */
+	ldmia	r1!, {r10-r11}		/* copy from source address [r1] */
+	stmia	r0!, {r10-r11}		/* copy to   target address [r0] */
+	cmp	r1, r2			/* until source end address [r2] */
 	blo	copy_loop
+#endif
 
 	/*
 	 * fix .rel.dyn relocations
 	 */
-	ldr	r2, =__rel_dyn_start	/* r2 <- SRC &__rel_dyn_start */
-	ldr	r3, =__rel_dyn_end	/* r3 <- SRC &__rel_dyn_end */
+	ldr	r1, _rel_dyn_start_ofs
+	add	r2, r1, r3		/* r2 <- Run &__rel_dyn_start */
+	ldr	r1, _rel_dyn_end_ofs
+	add	r3, r1, r3		/* r3 <- Run &__rel_dyn_end */
 fixloop:
 	ldmia	r2!, {r0-r1}		/* (r0,r1) <- (SRC location,fixup) */
 	and	r1, r1, #0xff
-	cmp	r1, #23			/* relative fixup? */
+	cmp	r1, #R_ARM_RELATIVE
 	bne	fixnext
 
 	/* relative fix: increase location by offset */
 	add	r0, r0, r4
 	ldr	r1, [r0]
+
+#ifdef CONFIG_SKIP_RELOCATE_CODE
+	/* Test whether this is data, if not, do not relocate. */
+	cmp	r1, r5
+	blt	fixnext
+	cmp	r1, r6
+	bgt	fixnext
+#endif
+
 	add	r1, r1, r4
 	str	r1, [r0]
 fixnext:
@@ -109,22 +133,21 @@ fixnext:
 	blo	fixloop
 
 relocate_done:
-
-#ifdef __XSCALE__
-	/*
-	 * On xscale, icache must be invalidated and write buffers drained,
-	 * even with cache disabled - 4.2.7 of xscale core developer's manual
-	 */
-	mcr	p15, 0, r0, c7, c7, 0	/* invalidate icache */
-	mcr	p15, 0, r0, c7, c10, 4	/* drain write buffer */
-#endif
-
-	/* ARMv4- don't know bx lr but the assembler fails to see that */
-
-#ifdef __ARM_ARCH_4__
-	mov	pc, lr
-#else
-	bx	lr
-#endif
+	ret	lr
 
 ENDPROC(relocate_code)
+
+_image_copy_start_ofs:
+	.word	__image_copy_start - relocate_code
+_image_copy_end_ofs:
+	.word	__image_copy_end - relocate_code
+_rel_dyn_start_ofs:
+	.word	__rel_dyn_start - relocate_code
+_rel_dyn_end_ofs:
+	.word	__rel_dyn_end - relocate_code
+#ifdef CONFIG_SKIP_RELOCATE_CODE
+_data_start_ofs:
+	.word	__data_start - relocate_code
+_data_end_ofs:
+	.word	__data_end - relocate_code
+#endif

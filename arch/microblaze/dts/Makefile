@@ -1,11 +1,8 @@
-dtb-y += microblaze-generic.dtb
+# SPDX-License-Identifier: GPL-2.0+
 
-targets += $(dtb-y)
+dtb-y += $(shell echo $(CONFIG_DEFAULT_DEVICE_TREE)).dtb
 
-DTC_FLAGS += -R 4 -p 0x1000
+include $(srctree)/scripts/Makefile.dts
 
-PHONY += dtbs
-dtbs: $(addprefix $(obj)/, $(dtb-y))
-	@:
-
-clean-files := *.dtb
+# Add any required device tree compiler flags here
+DTC_FLAGS += -R 4

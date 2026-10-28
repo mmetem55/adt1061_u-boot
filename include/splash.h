@@ -23,37 +23,47 @@
 #define _SPLASH_H_
 
 #include <errno.h>
+#include <linux/types.h>
 
 enum splash_storage {
 	SPLASH_STORAGE_NAND,
 	SPLASH_STORAGE_SF,
+	SPLASH_STORAGE_MMC,
+	SPLASH_STORAGE_USB,
+	SPLASH_STORAGE_SATA,
+	SPLASH_STORAGE_VIRTIO,
+	SPLASH_STORAGE_SCSI,
+};
+
+enum splash_flags {
+	SPLASH_STORAGE_RAW, /* Stored in raw memory */
+	SPLASH_STORAGE_FS,  /* Stored within a file system */
+	SPLASH_STORAGE_FIT, /* Stored inside a FIT image */
 };
 
 struct splash_location {
 	char *name;
 	enum splash_storage storage;
+	enum splash_flags flags;
 	u32 offset;	/* offset from start of storage */
+	char *devpart;  /* Use the load command dev:part conventions */
+	char *mtdpart;	/* MTD partition for ubi part */
+	char *ubivol;	/* UBI volume-name for ubifsmount */
 };
 
+#if CONFIG_IS_ENABLED(SPLASH_SOURCE)
 int splash_source_load(struct splash_location *locations, uint size);
-int splash_screen_prepare(uchar *logo_part_name, u8 *addr);
-
-
-#ifdef CONFIG_SPLASH_SCREEN_ALIGN
-void splash_get_pos(int *x, int *y);
 #else
-static inline void splash_get_pos(int *x, int *y) { }
-#endif
-
-#if defined(CONFIG_SPLASH_SCREEN) && defined(CONFIG_LCD)
-int lcd_splash(uchar *logo_part_name);
-int splash_get_bpix(uchar *logo_part_name);
-#else
-static inline int lcd_splash(uchar *logo_part_name)
+static inline int splash_source_load(struct splash_location *locations,
+				     uint size)
 {
-	return -ENOSYS;
+	return 0;
 }
 #endif
+
+int splash_screen_prepare(void);
+void splash_get_pos(int *x, int *y);
+int splash_display(void);
 
 #define BMP_ALIGN_CENTER	0x7FFF
 

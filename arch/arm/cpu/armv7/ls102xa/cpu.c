@@ -1,11 +1,15 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Copyright 2014 Freescale Semiconductor, Inc.
- *
- * SPDX-License-Identifier:	GPL-2.0+
+ * Copyright 2021 NXP
  */
 
-#include <common.h>
+#include <cpu_func.h>
+#include <init.h>
+#include <net.h>
+#include <vsprintf.h>
 #include <asm/arch/clock.h>
+#include <asm/global_data.h>
 #include <asm/io.h>
 #include <asm/arch/immap_ls102xa.h>
 #include <asm/cache.h>
@@ -13,6 +17,10 @@
 #include <tsec.h>
 #include <netdev.h>
 #include <fsl_esdhc.h>
+#include <config.h>
+#include <fsl_wdog.h>
+#include <linux/delay.h>
+#include <dm.h>
 
 #include "fsl_epu.h"
 
@@ -25,7 +33,7 @@
 
 DECLARE_GLOBAL_DATA_PTR;
 
-#ifndef CONFIG_SYS_DCACHE_OFF
+#if !CONFIG_IS_ENABLED(SYS_DCACHE_OFF)
 
 /*
  * Bit[1] of the descriptor indicates the descriptor type,
@@ -159,18 +167,18 @@ static void mmu_setup(void)
 	/* Level 1 has 512 entries */
 	for (i = 0; i < 512; i++) {
 		/* Mapping for PCIe 1 */
-		if (va_start >= CONFIG_SYS_PCIE1_VIRT_ADDR &&
-		    va_start < (CONFIG_SYS_PCIE1_VIRT_ADDR +
-				 CONFIG_SYS_PCIE_MMAP_SIZE))
+		if (va_start >= CFG_SYS_PCIE1_VIRT_ADDR &&
+		    va_start < (CFG_SYS_PCIE1_VIRT_ADDR +
+				 CFG_SYS_PCIE_MMAP_SIZE))
 			set_pgsection(level1_table, i,
-				      CONFIG_SYS_PCIE1_PHYS_BASE + va_start,
+				      CFG_SYS_PCIE1_PHYS_BASE + va_start,
 				      MT_DEVICE_MEM);
 		/* Mapping for PCIe 2 */
-		else if (va_start >= CONFIG_SYS_PCIE2_VIRT_ADDR &&
-			 va_start < (CONFIG_SYS_PCIE2_VIRT_ADDR +
-				     CONFIG_SYS_PCIE_MMAP_SIZE))
+		else if (va_start >= CFG_SYS_PCIE2_VIRT_ADDR &&
+			 va_start < (CFG_SYS_PCIE2_VIRT_ADDR +
+				     CFG_SYS_PCIE_MMAP_SIZE))
 			set_pgsection(level1_table, i,
-				      CONFIG_SYS_PCIE2_PHYS_BASE + va_start,
+				      CFG_SYS_PCIE2_PHYS_BASE + va_start,
 				      MT_DEVICE_MEM);
 		else
 			set_pgsection(level1_table, i,
@@ -214,13 +222,20 @@ void enable_caches(void)
 	invalidate_dcache_all();
 	set_cr(get_cr() | CR_C);
 }
-#endif /* #ifndef CONFIG_SYS_DCACHE_OFF */
+#endif /* #if !CONFIG_IS_ENABLED(SYS_DCACHE_OFF) */
+
+uint get_svr(void)
+{
+	struct ccsr_gur __iomem *gur = (void *)(CFG_SYS_FSL_GUTS_ADDR);
+
+	return in_be32(&gur->svr);
+}
 
 #if defined(CONFIG_DISPLAY_CPUINFO)
 int print_cpuinfo(void)
 {
 	char buf1[32], buf2[32];
-	struct ccsr_gur __iomem *gur = (void *)(CONFIG_SYS_FSL_GUTS_ADDR);
+	struct ccsr_gur __iomem *gur = (void *)(CFG_SYS_FSL_GUTS_ADDR);
 	unsigned int svr, major, minor, ver, i;
 
 	svr = in_be32(&gur->svr);
@@ -279,27 +294,21 @@ int print_cpuinfo(void)
 #endif
 
 #ifdef CONFIG_FSL_ESDHC
-int cpu_mmc_init(bd_t *bis)
+int cpu_mmc_init(struct bd_info *bis)
 {
 	return fsl_esdhc_mmc_init(bis);
 }
 #endif
 
-int cpu_eth_init(bd_t *bis)
-{
-#ifdef CONFIG_TSEC_ENET
-	tsec_standard_init(bis);
-#endif
-
-	return 0;
-}
-
 int arch_cpu_init(void)
 {
-	void *epu_base = (void *)(CONFIG_SYS_DCSRBAR + EPU_BLOCK_OFFSET);
+	void *epu_base = (void *)(CFG_SYS_DCSRBAR + EPU_BLOCK_OFFSET);
 	void *rcpm2_base =
-		(void *)(CONFIG_SYS_DCSRBAR + DCSR_RCPM2_BLOCK_OFFSET);
+		(void *)(CFG_SYS_DCSRBAR + DCSR_RCPM2_BLOCK_OFFSET);
+	struct ccsr_scfg *scfg = (void *)CFG_SYS_FSL_SCFG_ADDR;
 	u32 state;
+
+	icache_enable();
 
 	/*
 	 * The RCPM FSM state may not be reset after power-on.
@@ -326,6 +335,8 @@ int arch_cpu_init(void)
 	 */
 	fsl_epu_clean(epu_base);
 
+	setbits_be32(&scfg->snpcnfgcr, SCFG_SNPCNFGCR_SEC_RD_WR);
+
 	return 0;
 }
 
@@ -333,7 +344,7 @@ int arch_cpu_init(void)
 /* Set the address at which the secondary core starts from.*/
 void smp_set_core_boot_addr(unsigned long addr, int corenr)
 {
-	struct ccsr_gur __iomem *gur = (void *)(CONFIG_SYS_FSL_GUTS_ADDR);
+	struct ccsr_gur __iomem *gur = (void *)(CFG_SYS_FSL_GUTS_ADDR);
 
 	out_be32(&gur->scratchrw[0], addr);
 }
@@ -341,8 +352,55 @@ void smp_set_core_boot_addr(unsigned long addr, int corenr)
 /* Release the secondary core from holdoff state and kick it */
 void smp_kick_all_cpus(void)
 {
-	struct ccsr_gur __iomem *gur = (void *)(CONFIG_SYS_FSL_GUTS_ADDR);
+	struct ccsr_gur __iomem *gur = (void *)(CFG_SYS_FSL_GUTS_ADDR);
 
 	out_be32(&gur->brrl, 0x2);
+
+	/*
+	 * LS1 STANDBYWFE is not captured outside the ARM module in the soc.
+	 * So add a delay to wait bootrom execute WFE.
+	 */
+	udelay(1);
+
+	asm volatile("sev");
+}
+#endif
+
+void reset_cpu(void)
+{
+	struct watchdog_regs *wdog = (struct watchdog_regs *)WDOG1_BASE_ADDR;
+
+	clrbits_be16(&wdog->wcr, WCR_SRS);
+
+	while (1) {
+		/*
+		 * Let the watchdog trigger
+		 */
+	}
+}
+
+void arch_preboot_os(void)
+{
+	unsigned long ctrl;
+
+	/* Disable PL1 Physical Timer */
+	asm("mrc p15, 0, %0, c14, c2, 1" : "=r" (ctrl));
+	ctrl &= ~ARCH_TIMER_CTRL_ENABLE;
+	asm("mcr p15, 0, %0, c14, c2, 1" : : "r" (ctrl));
+}
+
+#ifdef CONFIG_ARCH_MISC_INIT
+int arch_misc_init(void)
+{
+	if (IS_ENABLED(CONFIG_FSL_CAAM)) {
+		struct udevice *dev;
+		int ret;
+
+		ret = uclass_get_device_by_driver(UCLASS_MISC, DM_DRIVER_GET(caam_jr), &dev);
+		if (ret)
+			printf("Failed to initialize caam_jr: %d\n", ret);
+	}
+
+	return 0;
 }
 #endif

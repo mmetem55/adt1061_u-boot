@@ -1,17 +1,23 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * (C) Copyright 2000-2006
  * Wolfgang Denk, DENX Software Engineering, wd@denx.de.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
-#include <common.h>
-#include <watchdog.h>
+#include <blk.h>
 #include <command.h>
-#include <image.h>
-#include <malloc.h>
-#include <u-boot/zlib.h>
+#include <console.h>
 #include <div64.h>
+#include <env.h>
+#include <gzip.h>
+#include <image.h>
+#include <linux/sizes.h>
+#include <malloc.h>
+#include <memalign.h>
+#include <u-boot/crc.h>
+#include <watchdog.h>
+#include <u-boot/zlib.h>
+#include <asm/sections.h>
 
 #define HEADER0			'\x1f'
 #define HEADER1			'\x8b'
@@ -40,7 +46,7 @@ void gzfree(void *x, void *addr, unsigned nb)
 	free (addr);
 }
 
-int gunzip(void *dst, int dstlen, unsigned char *src, unsigned long *lenp)
+__rcode int gzip_parse_header(const unsigned char *src, unsigned long len)
 {
 	int i, flags;
 
@@ -61,74 +67,96 @@ int gunzip(void *dst, int dstlen, unsigned char *src, unsigned long *lenp)
 			;
 	if ((flags & HEAD_CRC) != 0)
 		i += 2;
-	if (i >= *lenp) {
+	if (i >= len) {
 		puts ("Error: gunzip out of data in header\n");
 		return (-1);
 	}
-
-	return zunzip(dst, dstlen, src, lenp, 1, i);
+	return i;
 }
 
+__rcode int gunzip(void *dst, int dstlen, unsigned char *src, unsigned long *lenp)
+{
+	int offset = gzip_parse_header(src, *lenp);
+
+	if (offset < 0)
+		return offset;
+
+	return zunzip(dst, dstlen, src, lenp, 1, offset);
+}
+
+#ifdef CONFIG_CMD_UNZIP
 __weak
-void gzwrite_progress_init(u64 expectedsize)
+void gzwrite_progress_init(size_t expectedsize)
 {
 	putc('\n');
 }
 
 __weak
 void gzwrite_progress(int iteration,
-		     u64 bytes_written,
-		     u64 total_bytes)
+		     ulong bytes_written,
+		     size_t total_bytes)
 {
 	if (0 == (iteration & 3))
-		printf("%llu/%llu\r", bytes_written, total_bytes);
+		printf("%lu/%zu\r", bytes_written, total_bytes);
 }
 
 __weak
 void gzwrite_progress_finish(int returnval,
-			     u64 bytes_written,
-			     u64 total_bytes,
+			     ulong bytes_written,
+			     size_t total_bytes,
 			     u32 expected_crc,
 			     u32 calculated_crc)
 {
 	if (0 == returnval) {
-		printf("\n\t%llu bytes, crc 0x%08x\n",
+		printf("\n\t%zu bytes, crc 0x%08x\n",
 		       total_bytes, calculated_crc);
 	} else {
-		printf("\n\tuncompressed %llu of %llu\n"
+		printf("\n\tuncompressed %lu of %zu\n"
 		       "\tcrcs == 0x%08x/0x%08x\n",
 		       bytes_written, total_bytes,
 		       expected_crc, calculated_crc);
 	}
 }
 
-int gzwrite(unsigned char *src, int len,
-	    struct block_dev_desc *dev,
-	    unsigned long szwritebuf,
-	    u64 startoffs,
-	    u64 szexpected)
+int gzwrite(unsigned char *src, size_t len, struct blk_desc *dev,
+	    size_t szwritebuf, off_t startoffs, size_t szexpected)
 {
-	int i, flags;
+	int flags;
 	z_stream s;
 	int r = 0;
 	unsigned char *writebuf;
 	unsigned crc = 0;
-	u64 totalfilled = 0;
+	ulong totalfilled = 0;
 	lbaint_t blksperbuf, outblock;
 	u32 expected_crc;
-	u32 payload_size;
+	size_t i, payload_size;
+	unsigned long blocks_written;
+	lbaint_t writeblocks;
+	int numfilled = 0;
 	int iteration = 0;
+	/*
+	 * Allow runtime configuration of decompression chunk on
+	 * sandbox to better cover the chunked decompression
+	 * functionality without having to use > 4 GiB files.
+	 */
+	const ulong minchunk = 0x400;
+	const ulong maxchunk = SZ_4G - minchunk;
+	const ulong chunk =
+		CONFIG_IS_ENABLED(SANDBOX,
+				  (clamp(env_get_ulong("gzwrite_chunk", 10, maxchunk),
+					 minchunk, maxchunk)),
+				  (maxchunk));
 
 	if (!szwritebuf ||
 	    (szwritebuf % dev->blksz) ||
 	    (szwritebuf < dev->blksz)) {
-		printf("%s: size %lu not a multiple of %lu\n",
+		printf("%s: size %zu not a multiple of %lu\n",
 		       __func__, szwritebuf, dev->blksz);
 		return -1;
 	}
 
 	if (startoffs & (dev->blksz-1)) {
-		printf("%s: start offset %llu not a multiple of %lu\n",
+		printf("%s: start offset %lu not a multiple of %lu\n",
 		       __func__, startoffs, dev->blksz);
 		return -1;
 	}
@@ -159,7 +187,7 @@ int gzwrite(unsigned char *src, int len,
 		return -1;
 	}
 
-	payload_size = len - i - 8;
+	payload_size = len - i;
 
 	memcpy(&expected_crc, src + len - 8, sizeof(expected_crc));
 	expected_crc = le32_to_cpu(expected_crc);
@@ -168,12 +196,12 @@ int gzwrite(unsigned char *src, int len,
 	if (szexpected == 0) {
 		szexpected = le32_to_cpu(szuncompressed);
 	} else if (szuncompressed != (u32)szexpected) {
-		printf("size of %llx doesn't match trailer low bits %x\n",
+		printf("size of %zx doesn't match trailer low bits %x\n",
 		       szexpected, szuncompressed);
 		return -1;
 	}
 	if (lldiv(szexpected, dev->blksz) > (dev->lba - outblock)) {
-		printf("%s: uncompressed size %llu exceeds device size\n",
+		printf("%s: uncompressed size %zu exceeds device size\n",
 		       __func__, szexpected);
 		return -1;
 	}
@@ -189,35 +217,54 @@ int gzwrite(unsigned char *src, int len,
 		return -1;
 	}
 
-	s.next_in = src + i;
-	s.avail_in = payload_size+8;
-	writebuf = (unsigned char *)malloc(szwritebuf);
+	src += i;
+	s.avail_in = 0;
+	writebuf = (unsigned char *)malloc_cache_aligned(szwritebuf);
 
 	/* decompress until deflate stream ends or end of file */
 	do {
 		if (s.avail_in == 0) {
-			printf("%s: weird termination with result %d\n",
-			       __func__, r);
-			break;
+			if (payload_size == 0) {
+				printf("%s: weird termination with result %d\n",
+				       __func__, r);
+				break;
+			}
+
+			s.next_in = src;
+			s.avail_in = (payload_size > chunk) ? chunk : payload_size;
+			src += s.avail_in;
+			payload_size -= s.avail_in;
 		}
 
 		/* run inflate() on input until output buffer not full */
 		do {
-			unsigned long blocks_written;
-			int numfilled;
-			lbaint_t writeblocks;
-
-			s.avail_out = szwritebuf;
-			s.next_out = writebuf;
+			if (numfilled) {
+				s.avail_out = szwritebuf - numfilled;
+				s.next_out = writebuf + numfilled;
+			} else {
+				s.avail_out = szwritebuf;
+				s.next_out = writebuf;
+			}
 			r = inflate(&s, Z_SYNC_FLUSH);
+			if (r == Z_BUF_ERROR && !s.avail_in && payload_size) {
+				/*
+				 * The input chunk was exhausted at exactly
+				 * the same time as the write buffer filled
+				 * up, so no progress was possible. This is
+				 * not fatal, let the outer loop refill the
+				 * input chunk.
+				 */
+				break;
+			}
 			if ((r != Z_OK) &&
 			    (r != Z_STREAM_END)) {
 				printf("Error: inflate() returned %d\n", r);
 				goto out;
 			}
+			crc = crc32(crc, writebuf + numfilled,
+				    szwritebuf - s.avail_out - numfilled);
+			totalfilled += szwritebuf - s.avail_out - numfilled;
 			numfilled = szwritebuf - s.avail_out;
-			crc = crc32(crc, writebuf, numfilled);
-			totalfilled += numfilled;
 			if (numfilled < szwritebuf) {
 				writeblocks = (numfilled+dev->blksz-1)
 						/ dev->blksz;
@@ -225,24 +272,31 @@ int gzwrite(unsigned char *src, int len,
 				       dev->blksz-(numfilled%dev->blksz));
 			} else {
 				writeblocks = blksperbuf;
+				numfilled = 0;
 			}
 
 			gzwrite_progress(iteration++,
 					 totalfilled,
 					 szexpected);
-			blocks_written = dev->block_write(dev->dev,
-							  outblock,
-							  writeblocks,
-							  writebuf);
-			outblock += blocks_written;
+			if (!numfilled) {
+				blocks_written = blk_dwrite(dev, outblock,
+						    writeblocks, writebuf);
+				outblock += blocks_written;
+			}
 			if (ctrlc()) {
 				puts("abort\n");
 				goto out;
 			}
-			WATCHDOG_RESET();
+			schedule();
 		} while (s.avail_out == 0);
 		/* done when inflate() says it's done */
 	} while (r != Z_STREAM_END);
+
+	if (numfilled) {
+		blocks_written = blk_dwrite(dev, outblock,
+				    writeblocks, writebuf);
+		outblock += blocks_written;
+	}
 
 	if ((szexpected != totalfilled) ||
 	    (crc != expected_crc))
@@ -258,12 +312,13 @@ out:
 
 	return r;
 }
+#endif
 
 /*
  * Uncompress blocks compressed with zlib without headers
  */
-int zunzip(void *dst, int dstlen, unsigned char *src, unsigned long *lenp,
-						int stoponerr, int offset)
+__rcode int zunzip(void *dst, int dstlen, unsigned char *src,
+		   unsigned long *lenp, int stoponerr, int offset)
 {
 	z_stream s;
 	int err = 0;
@@ -284,12 +339,11 @@ int zunzip(void *dst, int dstlen, unsigned char *src, unsigned long *lenp,
 	do {
 		r = inflate(&s, Z_FINISH);
 		if (stoponerr == 1 && r != Z_STREAM_END &&
-		    (s.avail_out == 0 || r != Z_BUF_ERROR)) {
+		    (s.avail_in == 0 || s.avail_out == 0 || r != Z_BUF_ERROR)) {
 			printf("Error: inflate() returned %d\n", r);
-			err = -1;
+			err = r;
 			break;
 		}
-		s.avail_in = *lenp - offset - (int)(s.next_out - (unsigned char*)dst);
 	} while (r == Z_BUF_ERROR);
 	*lenp = s.next_out - (unsigned char *) dst;
 	inflateEnd(&s);

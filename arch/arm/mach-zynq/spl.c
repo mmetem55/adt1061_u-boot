@@ -1,33 +1,43 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
- * (C) Copyright 2014 Xilinx, Inc. Michal Simek
- *
- * SPDX-License-Identifier:	GPL-2.0+
+ * (C) Copyright 2014 - 2017 Xilinx, Inc. Michal Simek
  */
-#include <common.h>
+#include <debug_uart.h>
+#include <hang.h>
+#include <image.h>
+#include <init.h>
+#include <log.h>
 #include <spl.h>
 
 #include <asm/io.h>
-#include <asm/arch/hardware.h>
 #include <asm/spl.h>
+#include <asm/arch/hardware.h>
 #include <asm/arch/sys_proto.h>
+#include <asm/arch/ps7_init_gpl.h>
 
-DECLARE_GLOBAL_DATA_PTR;
+#if defined(CONFIG_DEBUG_UART_BOARD_INIT)
+void board_debug_uart_init(void)
+{
+	ps7_init();
+}
+#endif
 
 void board_init_f(ulong dummy)
 {
+#if !defined(CONFIG_DEBUG_UART_BOARD_INIT)
 	ps7_init();
+#endif
 
-	/* Clear the BSS. */
-	memset(__bss_start, 0, __bss_end - __bss_start);
-
-	preloader_console_init();
 	arch_cpu_init();
-	board_init_r(NULL, 0);
 }
 
-#ifdef CONFIG_SPL_BOARD_INIT
-void spl_board_init(void)
+#ifdef CONFIG_SPL_SOC_INIT
+void spl_soc_init(void)
 {
+	preloader_console_init();
+#if defined(CONFIG_ARCH_EARLY_INIT_R) && defined(CONFIG_SPL_FPGA)
+	arch_early_init_r();
+#endif
 	board_init();
 }
 #endif
@@ -37,9 +47,8 @@ u32 spl_boot_device(void)
 	u32 mode;
 
 	switch ((zynq_slcr_get_boot_mode()) & ZYNQ_BM_MASK) {
-#ifdef CONFIG_SPL_SPI_SUPPORT
+#ifdef CONFIG_SPL_SPI
 	case ZYNQ_BM_QSPI:
-		puts("qspi boot\n");
 		mode = BOOT_DEVICE_SPI;
 		break;
 #endif
@@ -49,9 +58,8 @@ u32 spl_boot_device(void)
 	case ZYNQ_BM_NOR:
 		mode = BOOT_DEVICE_NOR;
 		break;
-#ifdef CONFIG_SPL_MMC_SUPPORT
+#ifdef CONFIG_SPL_MMC
 	case ZYNQ_BM_SD:
-		puts("mmc boot\n");
 		mode = BOOT_DEVICE_MMC1;
 		break;
 #endif
@@ -66,13 +74,6 @@ u32 spl_boot_device(void)
 	return mode;
 }
 
-#ifdef CONFIG_SPL_MMC_SUPPORT
-u32 spl_boot_mode(void)
-{
-	return MMCSD_MODE_FS;
-}
-#endif
-
 #ifdef CONFIG_SPL_OS_BOOT
 int spl_start_uboot(void)
 {
@@ -81,10 +82,8 @@ int spl_start_uboot(void)
 }
 #endif
 
-__weak void ps7_init(void)
+void spl_board_prepare_for_boot(void)
 {
-	/*
-	 * This function is overridden by the one in
-	 * board/xilinx/zynq/(platform)/ps7_init_gpl.c, if it exists.
-	 */
+	ps7_post_config();
+	debug("SPL bye\n");
 }

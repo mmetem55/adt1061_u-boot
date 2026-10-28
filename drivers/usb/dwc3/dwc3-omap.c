@@ -1,7 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0
 /**
  * dwc3-omap.c - OMAP Specific Glue layer
  *
- * Copyright (C) 2015 Texas Instruments Incorporated - http://www.ti.com
+ * Copyright (C) 2015 Texas Instruments Incorporated - https://www.ti.com
  *
  * Authors: Felipe Balbi <balbi@ti.com>,
  *	    Sebastian Andrzej Siewior <bigeasy@linutronix.de>
@@ -10,14 +11,14 @@
  * to uboot.
  *
  * commit 7ee2566ff5 : usb: dwc3: dwc3-omap: get rid of ->prepare()/->complete()
- *
- * SPDX-License-Identifier:     GPL-2.0
  */
 
-#include <common.h>
 #include <malloc.h>
 #include <asm/io.h>
+#include <dm.h>
 #include <dwc3-omap-uboot.h>
+#include <dm/device_compat.h>
+#include <dm/devres.h>
 #include <linux/usb/dwc3-omap.h>
 #include <linux/ioport.h>
 
@@ -91,6 +92,16 @@
 #define USBOTGSS_IRQMISC_DISCHRGVBUS_FALL		(1 << 3)
 #define USBOTGSS_IRQMISC_IDPULLUP_FALL		(1 << 0)
 
+#define USBOTGSS_INTERRUPTS (USBOTGSS_IRQMISC_OEVT | \
+			     USBOTGSS_IRQMISC_DRVVBUS_RISE | \
+			     USBOTGSS_IRQMISC_CHRGVBUS_RISE | \
+			     USBOTGSS_IRQMISC_DISCHRGVBUS_RISE | \
+			     USBOTGSS_IRQMISC_IDPULLUP_RISE | \
+			     USBOTGSS_IRQMISC_DRVVBUS_FALL | \
+			     USBOTGSS_IRQMISC_CHRGVBUS_FALL | \
+			     USBOTGSS_IRQMISC_DISCHRGVBUS_FALL | \
+			     USBOTGSS_IRQMISC_IDPULLUP_FALL)
+
 /* UTMI_OTG_CTRL REGISTER */
 #define USBOTGSS_UTMI_OTG_CTRL_DRVVBUS		(1 << 5)
 #define USBOTGSS_UTMI_OTG_CTRL_CHRGVBUS		(1 << 4)
@@ -107,7 +118,7 @@
 #define USBOTGSS_UTMI_OTG_STATUS_VBUSVALID	(1 << 1)
 
 struct dwc3_omap {
-	struct device		*dev;
+	struct udevice		*dev;
 
 	void __iomem		*base;
 
@@ -184,6 +195,18 @@ static void dwc3_omap_write_irqmisc_set(struct dwc3_omap *omap, u32 value)
 static void dwc3_omap_write_irq0_set(struct dwc3_omap *omap, u32 value)
 {
 	dwc3_omap_writel(omap->base, USBOTGSS_IRQENABLE_SET_0 -
+						omap->irq0_offset, value);
+}
+
+static void dwc3_omap_write_irqmisc_clr(struct dwc3_omap *omap, u32 value)
+{
+	dwc3_omap_writel(omap->base, USBOTGSS_IRQENABLE_CLR_MISC +
+						omap->irqmisc_offset, value);
+}
+
+static void dwc3_omap_write_irq0_clr(struct dwc3_omap *omap, u32 value)
+{
+	dwc3_omap_writel(omap->base, USBOTGSS_IRQENABLE_CLR_0 -
 						omap->irq0_offset, value);
 }
 
@@ -285,30 +308,18 @@ static irqreturn_t dwc3_omap_interrupt(int irq, void *_omap)
 
 static void dwc3_omap_enable_irqs(struct dwc3_omap *omap)
 {
-	u32			reg;
-
 	/* enable all IRQs */
-	reg = USBOTGSS_IRQO_COREIRQ_ST;
-	dwc3_omap_write_irq0_set(omap, reg);
+	dwc3_omap_write_irq0_set(omap, USBOTGSS_IRQO_COREIRQ_ST);
 
-	reg = (USBOTGSS_IRQMISC_OEVT |
-			USBOTGSS_IRQMISC_DRVVBUS_RISE |
-			USBOTGSS_IRQMISC_CHRGVBUS_RISE |
-			USBOTGSS_IRQMISC_DISCHRGVBUS_RISE |
-			USBOTGSS_IRQMISC_IDPULLUP_RISE |
-			USBOTGSS_IRQMISC_DRVVBUS_FALL |
-			USBOTGSS_IRQMISC_CHRGVBUS_FALL |
-			USBOTGSS_IRQMISC_DISCHRGVBUS_FALL |
-			USBOTGSS_IRQMISC_IDPULLUP_FALL);
-
-	dwc3_omap_write_irqmisc_set(omap, reg);
+	dwc3_omap_write_irqmisc_set(omap, USBOTGSS_INTERRUPTS);
 }
 
 static void dwc3_omap_disable_irqs(struct dwc3_omap *omap)
 {
 	/* disable all IRQs */
-	dwc3_omap_write_irqmisc_set(omap, 0x00);
-	dwc3_omap_write_irq0_set(omap, 0x00);
+	dwc3_omap_write_irq0_clr(omap, USBOTGSS_IRQO_COREIRQ_ST);
+
+	dwc3_omap_write_irqmisc_clr(omap, USBOTGSS_INTERRUPTS);
 }
 
 static void dwc3_omap_map_offset(struct dwc3_omap *omap)
@@ -364,10 +375,10 @@ static void dwc3_omap_set_utmi_mode(struct dwc3_omap *omap, int utmi_mode)
 int dwc3_omap_uboot_init(struct dwc3_omap_device *omap_dev)
 {
 	u32			reg;
-	struct device		*dev;
+	struct device		*dev = NULL;
 	struct dwc3_omap	*omap;
 
-	omap = devm_kzalloc(dev, sizeof(*omap), GFP_KERNEL);
+	omap = devm_kzalloc((struct udevice *)dev, sizeof(*omap), GFP_KERNEL);
 	if (!omap)
 		return -ENOMEM;
 
@@ -416,20 +427,20 @@ void dwc3_omap_uboot_exit(int index)
 }
 
 /**
- * dwc3_omap_uboot_interrupt_status - check the status of interrupt
- * @index: index of this controller
+ * dwc3_uboot_interrupt_status - check the status of interrupt
+ * @dev: device of this controller
  *
  * Checks the status of interrupts and returns true if an interrupt
  * is detected or false otherwise.
  *
  * Generally called from board file.
  */
-int dwc3_omap_uboot_interrupt_status(int index)
+int dwc3_uboot_interrupt_status(struct udevice *dev)
 {
 	struct dwc3_omap *omap = NULL;
 
 	list_for_each_entry(omap, &dwc3_omap_list, list)
-		if (omap->index == index)
+		if (omap->dev == dev)
 			return dwc3_omap_interrupt(-1, omap);
 
 	return 0;

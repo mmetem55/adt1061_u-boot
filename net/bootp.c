@@ -1,31 +1,37 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  *	Based on LiMon - BOOTP.
  *
  *	Copyright 1994, 1995, 2000 Neil Russell.
- *	(See License)
  *	Copyright 2000 Roland Borde
  *	Copyright 2000 Paolo Scaffardi
  *	Copyright 2000-2004 Wolfgang Denk, wd@denx.de
  */
 
-#include <common.h>
+#include <bootstage.h>
 #include <command.h>
+#include <env.h>
+#include <efi_loader.h>
+#include <log.h>
 #include <net.h>
+#include <rand.h>
+#include <u-boot/uuid.h>
+#include <linux/delay.h>
+#include <net/tftp.h>
 #include "bootp.h"
-#include "tftp.h"
-#include "nfs.h"
-#ifdef CONFIG_STATUS_LED
-#include <status_led.h>
+#if IS_ENABLED(CONFIG_LED_BOOT)
+#include <led.h>
 #endif
 #ifdef CONFIG_BOOTP_RANDOM_DELAY
 #include "net_rand.h"
 #endif
+#include <malloc.h>
 
 #define BOOTP_VENDOR_MAGIC	0x63825363	/* RFC1048 Magic Cookie */
 
 /*
  * The timeout for the initial BOOTP/DHCP request used to be described by a
- * counter of fixed-length timeout periods. TIMEOUT_COUNT represents
+ * counter of fixed-length timeout periods. CONFIG_NET_RETRY_COUNT represents
  * that counter
  *
  * Now that the timeout periods are variable (exponential backoff and retry)
@@ -33,56 +39,54 @@
  * execute that many retries, and keep sending retry packets until that time
  * is reached.
  */
-#ifndef CONFIG_NET_RETRY_COUNT
-# define TIMEOUT_COUNT	5		/* # of timeouts before giving up */
-#else
-# define TIMEOUT_COUNT	(CONFIG_NET_RETRY_COUNT)
+#define TIMEOUT_MS	((3 + (CONFIG_NET_RETRY_COUNT * 5)) * 1000)
+
+/*
+ * According to rfc951 : 7.2. Client Retransmission Strategy
+ * "After the 'average' backoff reaches about 60 seconds, it should be
+ * increased no further, but still randomized."
+ *
+ * U-Boot has saturated this backoff at 2 seconds for a long time.
+ * To modify, set the environment variable "bootpretransmitperiodmax"
+ */
+#define RETRANSMIT_PERIOD_MAX_MS	60000
+
+/* Retransmission timeout for the initial packet (in milliseconds).
+ * This timeout will double on each retry.  To modify, set the
+ * environment variable bootpretransmitperiodinit.
+ */
+#define RETRANSMIT_PERIOD_INIT_MS	250
+
+#ifndef CFG_DHCP_MIN_EXT_LEN		/* minimal length of extension list */
+#define CFG_DHCP_MIN_EXT_LEN 64
 #endif
-#define TIMEOUT_MS	((3 + (TIMEOUT_COUNT * 5)) * 1000)
 
-#define PORT_BOOTPS	67		/* BOOTP server UDP port */
-#define PORT_BOOTPC	68		/* BOOTP client UDP port */
-
-#ifndef CONFIG_DHCP_MIN_EXT_LEN		/* minimal length of extension list */
-#define CONFIG_DHCP_MIN_EXT_LEN 64
+#ifndef CFG_BOOTP_ID_CACHE_SIZE
+#define CFG_BOOTP_ID_CACHE_SIZE 4
 #endif
 
-#ifndef CONFIG_BOOTP_ID_CACHE_SIZE
-#define CONFIG_BOOTP_ID_CACHE_SIZE 4
-#endif
-
-u32		bootp_ids[CONFIG_BOOTP_ID_CACHE_SIZE];
+u32		bootp_ids[CFG_BOOTP_ID_CACHE_SIZE];
 unsigned int	bootp_num_ids;
 int		bootp_try;
+u32		bootp_id;
 ulong		bootp_start;
 ulong		bootp_timeout;
 char net_nis_domain[32] = {0,}; /* Our NIS domain */
 char net_hostname[32] = {0,}; /* Our hostname */
-char net_root_path[64] = {0,}; /* Our bootpath */
+char net_root_path[CONFIG_BOOTP_MAX_ROOT_PATH_LEN] = {0,}; /* Our bootpath */
+
+static ulong time_taken_max;
+static u32   retransmit_period_max_ms;
 
 #if defined(CONFIG_CMD_DHCP)
 static dhcp_state_t dhcp_state = INIT;
 static u32 dhcp_leasetime;
 static struct in_addr dhcp_server_ip;
+static u8 dhcp_option_overload;
+#define OVERLOAD_FILE 1
+#define OVERLOAD_SNAME 2
 static void dhcp_handler(uchar *pkt, unsigned dest, struct in_addr sip,
 			unsigned src, unsigned len);
-
-/* For Debug */
-#if 0
-static char *dhcpmsg2str(int type)
-{
-	switch (type) {
-	case 1:	 return "DHCPDISCOVER"; break;
-	case 2:	 return "DHCPOFFER";	break;
-	case 3:	 return "DHCPREQUEST";	break;
-	case 4:	 return "DHCPDECLINE";	break;
-	case 5:	 return "DHCPACK";	break;
-	case 6:	 return "DHCPNACK";	break;
-	case 7:	 return "DHCPRELEASE";	break;
-	default: return "UNKNOWN/INVALID MSG TYPE"; break;
-	}
-}
-#endif
 #endif
 
 static void bootp_add_id(ulong id)
@@ -109,7 +113,8 @@ static bool bootp_match_id(ulong id)
 	return false;
 }
 
-static int check_packet(uchar *pkt, unsigned dest, unsigned src, unsigned len)
+static int check_reply_packet(uchar *pkt, unsigned dest, unsigned src,
+			      unsigned len)
 {
 	struct bootp_hdr *bp = (struct bootp_hdr *)pkt;
 	int retval = 0;
@@ -118,11 +123,7 @@ static int check_packet(uchar *pkt, unsigned dest, unsigned src, unsigned len)
 		retval = -1;
 	else if (len < sizeof(struct bootp_hdr) - OPT_FIELD_SIZE)
 		retval = -2;
-	else if (bp->bp_op != OP_BOOTREQUEST &&
-			bp->bp_op != OP_BOOTREPLY &&
-			bp->bp_op != DHCP_OFFER &&
-			bp->bp_op != DHCP_ACK &&
-			bp->bp_op != DHCP_NAK)
+	else if (bp->bp_op != OP_BOOTREPLY)
 		retval = -3;
 	else if (bp->bp_htype != HWT_ETHER)
 		retval = -4;
@@ -130,28 +131,40 @@ static int check_packet(uchar *pkt, unsigned dest, unsigned src, unsigned len)
 		retval = -5;
 	else if (!bootp_match_id(net_read_u32(&bp->bp_id)))
 		retval = -6;
+	else if (memcmp(bp->bp_chaddr, net_ethaddr, HWL_ETHER) != 0)
+		retval = -7;
 
 	debug("Filtering pkt = %d\n", retval);
 
 	return retval;
 }
 
-/*
- * Copy parameters of interest from BOOTP_REPLY/DHCP_OFFER packet
- */
-static void store_net_params(struct bootp_hdr *bp)
+static void store_bootp_params(struct bootp_hdr *bp)
 {
-#if !defined(CONFIG_BOOTP_SERVERIP)
 	struct in_addr tmp_ip;
+	bool overwrite_serverip = true;
+
+	if (IS_ENABLED(CONFIG_BOOTP_SERVERIP))
+		return;
+
+#if defined(CONFIG_BOOTP_PREFER_SERVERIP)
+	overwrite_serverip = false;
+#endif
 
 	net_copy_ip(&tmp_ip, &bp->bp_siaddr);
-	if (tmp_ip.s_addr != 0)
+	if (tmp_ip.s_addr != 0 && (overwrite_serverip || !net_server_ip.s_addr))
 		net_copy_ip(&net_server_ip, &bp->bp_siaddr);
 	memcpy(net_server_ethaddr,
 	       ((struct ethernet_hdr *)net_rx_packet)->et_src, 6);
-	if (strlen(bp->bp_file) > 0)
+	if (
+#if defined(CONFIG_CMD_DHCP)
+	    !(dhcp_option_overload & OVERLOAD_FILE) &&
+#endif
+	    (strlen(bp->bp_file) > 0) &&
+	    !net_boot_file_name_explicit) {
 		copy_filename(net_boot_file_name, bp->bp_file,
 			      sizeof(net_boot_file_name));
+	}
 
 	debug("net_boot_file_name: %s\n", net_boot_file_name);
 
@@ -160,7 +173,16 @@ static void store_net_params(struct bootp_hdr *bp)
 	 * not contain a new value
 	 */
 	if (*net_boot_file_name)
-		setenv("bootfile", net_boot_file_name);
+		env_set("bootfile", net_boot_file_name);
+}
+
+/*
+ * Copy parameters of interest from BOOTP_REPLY/DHCP_OFFER packet
+ */
+static void store_net_params(struct bootp_hdr *bp)
+{
+#if !defined(CONFIG_SERVERIP_FROM_PROXYDHCP)
+	store_bootp_params(bp);
 #endif
 	net_copy_ip(&net_ip, &bp->bp_yiaddr);
 }
@@ -324,7 +346,7 @@ static void bootp_process_vendor(u8 *ext, int size)
 		debug("net_nis_domain : %s\n", net_nis_domain);
 
 #if defined(CONFIG_CMD_SNTP) && defined(CONFIG_BOOTP_NTPSERVER)
-	if (net_ntp_server)
+	if (net_ntp_server.s_addr)
 		debug("net_ntp_server : %pI4\n", &net_ntp_server);
 #endif
 }
@@ -340,24 +362,33 @@ static void bootp_handler(uchar *pkt, unsigned dest, struct in_addr sip,
 	debug("got BOOTP packet (src=%d, dst=%d, len=%d want_len=%zu)\n",
 	      src, dest, len, sizeof(struct bootp_hdr));
 
+	/* Check the minimum size of a BOOTP packet is respected.
+	 * A BOOTP packet is between 300 bytes and 576 bytes big
+	 */
+	if (len < offsetof(struct bootp_hdr, bp_vend) + 64) {
+		printf("Error: got an invalid BOOTP packet (len=%u)\n", len);
+		return;
+	}
+
 	bp = (struct bootp_hdr *)pkt;
 
 	/* Filter out pkts we don't want */
-	if (check_packet(pkt, dest, src, len))
+	if (check_reply_packet(pkt, dest, src, len))
 		return;
 
 	/*
 	 *	Got a good BOOTP reply.	 Copy the data into our variables.
 	 */
-#ifdef CONFIG_STATUS_LED
-	status_led_set(STATUS_LED_BOOT, STATUS_LED_OFF);
+#if IS_ENABLED(CONFIG_LED_BOOT)
+	led_boot_off();
 #endif
 
 	store_net_params(bp);		/* Store net parameters from reply */
 
 	/* Retrieve extended information (we must parse the vendor area) */
 	if (net_read_u32((u32 *)&bp->bp_vend[0]) == htonl(BOOTP_VENDOR_MAGIC))
-		bootp_process_vendor((uchar *)&bp->bp_vend[4], len);
+		bootp_process_vendor((uchar *)&bp->bp_vend[4], len -
+				     (offsetof(struct bootp_hdr, bp_vend) + 4));
 
 	net_set_timeout_handler(0, (thand_f *)0);
 	bootstage_mark_name(BOOTSTAGE_ID_BOOTP_STOP, "bootp_stop");
@@ -374,19 +405,36 @@ static void bootp_handler(uchar *pkt, unsigned dest, struct in_addr sip,
 static void bootp_timeout_handler(void)
 {
 	ulong time_taken = get_timer(bootp_start);
+	int rand_minus_plus_100;
 
-	if (time_taken >= TIMEOUT_MS) {
+	if (time_taken >= time_taken_max) {
 #ifdef CONFIG_BOOTP_MAY_FAIL
-		puts("\nRetry time exceeded\n");
-		net_set_state(NETLOOP_FAIL);
-#else
-		puts("\nRetry time exceeded; starting again\n");
-		net_start_again();
+		char *ethrotate;
+
+		ethrotate = env_get("ethrotate");
+		if ((ethrotate && strcmp(ethrotate, "no") == 0) ||
+		    net_restart_wrap) {
+			puts("\nRetry time exceeded\n");
+			net_set_state(NETLOOP_FAIL);
+		} else
 #endif
+		{
+			puts("\nRetry time exceeded; starting again\n");
+			net_start_again();
+		}
 	} else {
 		bootp_timeout *= 2;
-		if (bootp_timeout > 2000)
-			bootp_timeout = 2000;
+		if (bootp_timeout > retransmit_period_max_ms)
+			bootp_timeout = retransmit_period_max_ms;
+
+		/* Randomize by adding bootp_timeout*RAND, where RAND
+		 * is a randomization factor between -0.1..+0.1
+		 */
+		srand(get_ticks() + rand());
+		rand_minus_plus_100 = ((rand() % 200) - 100);
+		bootp_timeout = bootp_timeout +
+				(((int)bootp_timeout * rand_minus_plus_100) / 1000);
+
 		net_set_timeout_handler(bootp_timeout, bootp_timeout_handler);
 		bootp_request();
 	}
@@ -401,6 +449,26 @@ static void bootp_timeout_handler(void)
 		e += vci_strlen;				\
 	} while (0)
 
+static u8 *add_vci(u8 *e)
+{
+	char *vci = NULL;
+	char *env_vci = env_get("bootp_vci");
+
+#if defined(CONFIG_XPL_BUILD) && defined(CONFIG_SPL_NET_VCI_STRING)
+	vci = CONFIG_SPL_NET_VCI_STRING;
+#elif defined(CONFIG_BOOTP_VCI_STRING)
+	vci = CONFIG_BOOTP_VCI_STRING;
+#endif
+
+	if (env_vci)
+		vci = env_vci;
+
+	if (vci)
+		put_vci(e, vci);
+
+	return e;
+}
+
 /*
  *	Initialize BOOTP extension fields in the request.
  */
@@ -410,14 +478,11 @@ static int dhcp_extended(u8 *e, int message_type, struct in_addr server_ip,
 {
 	u8 *start = e;
 	u8 *cnt;
-#if defined(CONFIG_BOOTP_PXE)
+#ifdef CONFIG_LIB_UUID
 	char *uuid;
-	u16 clientarch;
 #endif
+	int clientarch = -1;
 
-#if defined(CONFIG_BOOTP_VENDOREX)
-	u8 *x;
-#endif
 #if defined(CONFIG_BOOTP_SEND_HOSTNAME)
 	char *hostname;
 #endif
@@ -458,7 +523,7 @@ static int dhcp_extended(u8 *e, int message_type, struct in_addr server_ip,
 		*e++ = tmp & 0xff;
 	}
 #if defined(CONFIG_BOOTP_SEND_HOSTNAME)
-	hostname = getenv("hostname");
+	hostname = env_get("hostname");
 	if (hostname) {
 		int hostnamelen = strlen(hostname);
 
@@ -469,12 +534,19 @@ static int dhcp_extended(u8 *e, int message_type, struct in_addr server_ip,
 	}
 #endif
 
-#if defined(CONFIG_BOOTP_PXE)
-	clientarch = CONFIG_BOOTP_PXE_CLIENTARCH;
-	*e++ = 93;	/* Client System Architecture */
-	*e++ = 2;
-	*e++ = (clientarch >> 8) & 0xff;
-	*e++ = clientarch & 0xff;
+#ifdef CONFIG_DHCP_PXE_CLIENTARCH
+	clientarch = CONFIG_DHCP_PXE_CLIENTARCH;
+#endif
+
+	if (env_get("bootp_arch"))
+		clientarch = env_get_ulong("bootp_arch", 16, clientarch);
+
+	if (clientarch != 0xff) {
+		*e++ = 93;	/* Client System Architecture */
+		*e++ = 2;
+		*e++ = (clientarch >> 8) & 0xff;
+		*e++ = clientarch & 0xff;
+	}
 
 	*e++ = 94;	/* Client Network Interface Identifier */
 	*e++ = 3;
@@ -482,7 +554,8 @@ static int dhcp_extended(u8 *e, int message_type, struct in_addr server_ip,
 	*e++ = 0;	/* major revision */
 	*e++ = 0;	/* minor revision */
 
-	uuid = getenv("pxeuuid");
+#ifdef CONFIG_LIB_UUID
+	uuid = env_get("pxeuuid");
 
 	if (uuid) {
 		if (uuid_str_valid(uuid)) {
@@ -498,15 +571,7 @@ static int dhcp_extended(u8 *e, int message_type, struct in_addr server_ip,
 	}
 #endif
 
-#ifdef CONFIG_BOOTP_VCI_STRING
-	put_vci(e, CONFIG_BOOTP_VCI_STRING);
-#endif
-
-#if defined(CONFIG_BOOTP_VENDOREX)
-	x = dhcp_vendorex_prep(e);
-	if (x)
-		return x - start;
-#endif
+	e = add_vci(e);
 
 	*e++ = 55;		/* Parameter Request List */
 	 cnt = e++;		/* Pointer to count of requested items */
@@ -547,6 +612,10 @@ static int dhcp_extended(u8 *e, int message_type, struct in_addr server_ip,
 	*e++  = 42;
 	*cnt += 1;
 #endif
+	if (IS_ENABLED(CONFIG_BOOTP_PXE_DHCP_OPTION)) {
+		*e++ = DHCP_OPTION_PXE_CONFIG_FILE;	/* PXELINUX Config File */
+		*cnt += 1;
+	}
 	/* no options, so back up to avoid sending an empty request list */
 	if (*cnt == 0)
 		e -= 2;
@@ -554,8 +623,8 @@ static int dhcp_extended(u8 *e, int message_type, struct in_addr server_ip,
 	*e++  = 255;		/* End of the list */
 
 	/* Pad to minimal length */
-#ifdef	CONFIG_DHCP_MIN_EXT_LEN
-	while ((e - start) < CONFIG_DHCP_MIN_EXT_LEN)
+#ifdef	CFG_DHCP_MIN_EXT_LEN
+	while ((e - start) < CFG_DHCP_MIN_EXT_LEN)
 		*e++ = 0;
 #endif
 
@@ -586,14 +655,7 @@ static int bootp_extended(u8 *e)
 	*e++ = (576 - 312 + OPT_FIELD_SIZE) & 0xff;
 #endif
 
-#if defined(CONFIG_BOOTP_VCI_STRING) || \
-	(defined(CONFIG_SPL_BUILD) && defined(CONFIG_SPL_NET_VCI_STRING))
-#ifdef CONFIG_SPL_BUILD
-	put_vci(e, CONFIG_SPL_NET_VCI_STRING);
-#else
-	put_vci(e, CONFIG_BOOTP_VCI_STRING);
-#endif
-#endif
+	e = add_vci(e);
 
 #if defined(CONFIG_BOOTP_SUBNETMASK)
 	*e++ = 1;		/* Subnet mask request */
@@ -644,6 +706,15 @@ static int bootp_extended(u8 *e)
 
 	*e++ = 255;		/* End of the list */
 
+	/*
+	 * If nothing in list, remove it altogether. Some DHCP servers get
+	 * upset by this minor faux pas and do not respond at all.
+	 */
+	if (e == start + 3) {
+		printf("*** Warning: no DHCP options requested\n");
+		e -= 3;
+	}
+
 	return e - start;
 }
 #endif
@@ -653,7 +724,8 @@ void bootp_reset(void)
 	bootp_num_ids = 0;
 	bootp_try = 0;
 	bootp_start = get_timer(0);
-	bootp_timeout = 250;
+
+	bootp_timeout = env_get_ulong("bootpretransmitperiodinit", 10, RETRANSMIT_PERIOD_INIT_MS);
 }
 
 void bootp_request(void)
@@ -665,14 +737,23 @@ void bootp_request(void)
 #ifdef CONFIG_BOOTP_RANDOM_DELAY
 	ulong rand_ms;
 #endif
-	u32 bootp_id;
 	struct in_addr zero_ip;
 	struct in_addr bcast_ip;
+	char *ep;  /* Environment pointer */
 
 	bootstage_mark_name(BOOTSTAGE_ID_BOOTP_START, "bootp_start");
 #if defined(CONFIG_CMD_DHCP)
 	dhcp_state = INIT;
 #endif
+
+	ep = env_get("bootpretryperiod");
+	if (ep != NULL)
+		time_taken_max = dectoul(ep, NULL);
+	else
+		time_taken_max = TIMEOUT_MS;
+
+	retransmit_period_max_ms = env_get_ulong("bootpretransmitperiodmax", 10,
+						 RETRANSMIT_PERIOD_MAX_MS);
 
 #ifdef CONFIG_BOOTP_RANDOM_DELAY		/* Random BOOTP delay */
 	if (bootp_try == 0)
@@ -712,7 +793,11 @@ void bootp_request(void)
 	bp->bp_htype = HWT_ETHER;
 	bp->bp_hlen = HWL_ETHER;
 	bp->bp_hops = 0;
-	bp->bp_secs = htons(get_timer(0) / 1000);
+	/*
+	 * according to RFC1542, should be 0 on first request, secs since
+	 * first request otherwise
+	 */
+	bp->bp_secs = htons(get_timer(bootp_start) / 1000);
 	zero_ip.s_addr = 0;
 	net_write_ip(&bp->bp_ciaddr, zero_ip);
 	net_write_ip(&bp->bp_yiaddr, zero_ip);
@@ -729,19 +814,27 @@ void bootp_request(void)
 	extlen = bootp_extended((u8 *)bp->bp_vend);
 #endif
 
-	/*
-	 *	Bootp ID is the lower 4 bytes of our ethernet address
-	 *	plus the current time in ms.
-	 */
-	bootp_id = ((u32)net_ethaddr[2] << 24)
-		| ((u32)net_ethaddr[3] << 16)
-		| ((u32)net_ethaddr[4] << 8)
-		| (u32)net_ethaddr[5];
-	bootp_id += get_timer(0);
-	bootp_id = htonl(bootp_id);
+	/* Only generate a new transaction ID for each new BOOTP request */
+	if (bootp_try == 1) {
+		if (IS_ENABLED(CONFIG_BOOTP_RANDOM_XID)) {
+			srand(get_ticks() + rand());
+			bootp_id = rand();
+		} else {
+			/*
+			 *	Bootp ID is the lower 4 bytes of our ethernet address
+			 *	plus the current time in ms.
+			 */
+			bootp_id = ((u32)net_ethaddr[2] << 24)
+				| ((u32)net_ethaddr[3] << 16)
+				| ((u32)net_ethaddr[4] << 8)
+				| (u32)net_ethaddr[5];
+			bootp_id += get_timer(0);
+			bootp_id = htonl(bootp_id);
+		}
+	}
+
 	bootp_add_id(bootp_id);
 	net_copy_u32(&bp->bp_id, &bootp_id);
-
 	/*
 	 * Calculate proper packet lengths taking into account the
 	 * variable size of the options field
@@ -762,9 +855,8 @@ void bootp_request(void)
 }
 
 #if defined(CONFIG_CMD_DHCP)
-static void dhcp_process_options(uchar *popt, struct bootp_hdr *bp)
+static void dhcp_process_options(uchar *popt, uchar *end)
 {
-	uchar *end = popt + BOOTP_HDR_SIZE;
 	int oplen, size;
 #if defined(CONFIG_CMD_SNTP) && defined(CONFIG_BOOTP_TIMEOFFSET)
 	int *to_ptr;
@@ -773,6 +865,9 @@ static void dhcp_process_options(uchar *popt, struct bootp_hdr *bp)
 	while (popt < end && *popt != 0xff) {
 		oplen = *(popt + 1);
 		switch (*popt) {
+		case 0:
+			oplen = -1; /* Pad omits len byte */
+			break;
 		case 1:
 			net_copy_ip(&net_netmask, (popt + 2));
 			break;
@@ -809,6 +904,14 @@ static void dhcp_process_options(uchar *popt, struct bootp_hdr *bp)
 			break;
 		case 28:	/* Ignore Broadcast Address Option */
 			break;
+		case 40:	/* NIS Domain name */
+			if (net_nis_domain[0] == 0) {
+				size = truncate_sz("NIS Domain Name",
+					sizeof(net_nis_domain), oplen);
+				memcpy(&net_nis_domain, popt + 2, size);
+				net_nis_domain[size] = 0;
+			}
+			break;
 #if defined(CONFIG_CMD_SNTP) && defined(CONFIG_BOOTP_NTPSERVER)
 		case 42:	/* NTP server IP */
 			net_copy_ip(&net_ntp_server, (popt + 2));
@@ -816,6 +919,9 @@ static void dhcp_process_options(uchar *popt, struct bootp_hdr *bp)
 #endif
 		case 51:
 			net_copy_u32(&dhcp_leasetime, (u32 *)(popt + 2));
+			break;
+		case 52:
+			dhcp_option_overload = popt[2];
 			break;
 		case 53:	/* Ignore Message Type Option */
 			break;
@@ -828,37 +934,32 @@ static void dhcp_process_options(uchar *popt, struct bootp_hdr *bp)
 			break;
 		case 66:	/* Ignore TFTP server name */
 			break;
-		case 67:	/* vendor opt bootfile */
-			/*
-			 * I can't use dhcp_vendorex_proc here because I need
-			 * to write into the bootp packet - even then I had to
-			 * pass the bootp packet pointer into here as the
-			 * second arg
-			 */
-			size = truncate_sz("Opt Boot File",
-					    sizeof(bp->bp_file),
-					    oplen);
-			if (bp->bp_file[0] == '\0' && size > 0) {
-				/*
-				 * only use vendor boot file if we didn't
-				 * receive a boot file in the main non-vendor
-				 * part of the packet - god only knows why
-				 * some vendors chose not to use this perfectly
-				 * good spot to store the boot file (join on
-				 * Tru64 Unix) it seems mind bogglingly crazy
-				 * to me
+		case 67:	/* Bootfile option */
+			if (!net_boot_file_name_explicit) {
+				size = truncate_sz("Bootfile",
+						   sizeof(net_boot_file_name),
+						   oplen);
+				memcpy(&net_boot_file_name, popt + 2, size);
+				net_boot_file_name[size] = 0;
+			}
+			break;
+		case DHCP_OPTION_PXE_CONFIG_FILE:	/* PXELINUX Config File */
+			if (IS_ENABLED(CONFIG_BOOTP_PXE_DHCP_OPTION)) {
+				/* In case it has already been allocated when get DHCP Offer packet,
+				 * free first to avoid memory leak.
 				 */
-				printf("*** WARNING: using vendor "
-				       "optional boot file\n");
-				memcpy(bp->bp_file, popt + 2, size);
-				bp->bp_file[size] = '\0';
+				if (pxelinux_configfile)
+					free(pxelinux_configfile);
+
+				pxelinux_configfile = (char *)malloc((oplen + 1) * sizeof(char));
+
+				if (pxelinux_configfile)
+					strlcpy(pxelinux_configfile, popt + 2, oplen + 1);
+				else
+					printf("Error: Failed to allocate pxelinux_configfile\n");
 			}
 			break;
 		default:
-#if defined(CONFIG_BOOTP_VENDOREX)
-			if (dhcp_vendorex_proc(popt))
-				break;
-#endif
 			printf("*** Unhandled DHCP Option in OFFER/ACK:"
 			       " %d\n", *popt);
 			break;
@@ -867,16 +968,51 @@ static void dhcp_process_options(uchar *popt, struct bootp_hdr *bp)
 	}
 }
 
-static int dhcp_message_type(unsigned char *popt)
+static void dhcp_packet_process_options(struct bootp_hdr *bp)
+{
+	uchar *popt = (uchar *)&bp->bp_vend[4];
+	uchar *end = popt + BOOTP_HDR_SIZE;
+
+	if (net_read_u32((u32 *)&bp->bp_vend[0]) != htonl(BOOTP_VENDOR_MAGIC))
+		return;
+
+	dhcp_option_overload = 0;
+
+	/*
+	 * The 'options' field MUST be interpreted first, 'file' next,
+	 * 'sname' last.
+	 */
+	dhcp_process_options(popt, end);
+
+	if (dhcp_option_overload & OVERLOAD_FILE) {
+		popt = (uchar *)bp->bp_file;
+		end = popt + sizeof(bp->bp_file);
+		dhcp_process_options(popt, end);
+	}
+
+	if (dhcp_option_overload & OVERLOAD_SNAME) {
+		popt = (uchar *)bp->bp_sname;
+		end = popt + sizeof(bp->bp_sname);
+		dhcp_process_options(popt, end);
+	}
+}
+
+static int dhcp_message_type(unsigned char *popt, unsigned char *end)
 {
 	if (net_read_u32((u32 *)popt) != htonl(BOOTP_VENDOR_MAGIC))
 		return -1;
 
 	popt += 4;
-	while (*popt != 0xff) {
+	while (popt < end && *popt != 0xff) {
 		if (*popt == 53)	/* DHCP Message Type */
 			return *(popt + 2);
-		popt += *(popt + 1) + 2;	/* Scan through all options */
+		if (*popt == 0)	{
+			/* Pad */
+			popt += 1;
+		} else {
+			/* Scan through all options */
+			popt += *(popt + 1) + 2;
+		}
 	}
 	return -1;
 }
@@ -906,7 +1042,7 @@ static void dhcp_send_request_packet(struct bootp_hdr *bp_offer)
 	bp->bp_htype = HWT_ETHER;
 	bp->bp_hlen = HWL_ETHER;
 	bp->bp_hops = 0;
-	bp->bp_secs = htons(get_timer(0) / 1000);
+	bp->bp_secs = htons(get_timer(bootp_start) / 1000);
 	/* Do not set the client IP, your IP, or server IP yet, since it
 	 * hasn't been ACK'ed by the server yet */
 
@@ -918,6 +1054,7 @@ static void dhcp_send_request_packet(struct bootp_hdr *bp_offer)
 	net_write_ip(&bp->bp_giaddr, zero_ip);
 
 	memcpy(bp->bp_chaddr, net_ethaddr, 6);
+	copy_filename(bp->bp_file, net_boot_file_name, sizeof(bp->bp_file));
 
 	/*
 	 * ID is the id of the OFFER packet
@@ -939,9 +1076,6 @@ static void dhcp_send_request_packet(struct bootp_hdr *bp_offer)
 	bcast_ip.s_addr = 0xFFFFFFFFL;
 	net_set_udp_header(iphdr, bcast_ip, PORT_BOOTPS, PORT_BOOTPC, iplen);
 
-#ifdef CONFIG_BOOTP_DHCP_REQUEST_DELAY
-	udelay(CONFIG_BOOTP_DHCP_REQUEST_DELAY);
-#endif	/* CONFIG_BOOTP_DHCP_REQUEST_DELAY */
 	debug("Transmitting DHCPREQUEST packet: len = %d\n", pktlen);
 	net_send_packet(net_tx_packet, pktlen);
 }
@@ -958,11 +1092,18 @@ static void dhcp_handler(uchar *pkt, unsigned dest, struct in_addr sip,
 	      src, dest, len, dhcp_state);
 
 	/* Filter out pkts we don't want */
-	if (check_packet(pkt, dest, src, len))
+	if (check_reply_packet(pkt, dest, src, len))
 		return;
 
 	debug("DHCPHandler: got DHCP packet: (src=%d, dst=%d, len=%d) state: "
 	      "%d\n", src, dest, len, dhcp_state);
+
+	if (net_read_ip(&bp->bp_yiaddr).s_addr == 0) {
+#if defined(CONFIG_SERVERIP_FROM_PROXYDHCP)
+		store_bootp_params(bp);
+#endif
+		return;
+	}
 
 	switch (dhcp_state) {
 	case SELECTING:
@@ -978,13 +1119,21 @@ static void dhcp_handler(uchar *pkt, unsigned dest, struct in_addr sip,
 			    CONFIG_SYS_BOOTFILE_PREFIX,
 			    strlen(CONFIG_SYS_BOOTFILE_PREFIX)) == 0) {
 #endif	/* CONFIG_SYS_BOOTFILE_PREFIX */
+			if (CONFIG_IS_ENABLED(UNIT_TEST) &&
+			    dhcp_message_type((u8 *)bp->bp_vend, (u8 *)pkt + len) == -1) {
+				debug("got BOOTP response; transitioning to BOUND\n");
+				goto dhcp_got_bootp;
+			}
+			dhcp_packet_process_options(bp);
+
+#if defined(CONFIG_SERVERIP_FROM_PROXYDHCP)
+			if (!net_server_ip.s_addr)
+				udelay(CONFIG_SERVERIP_FROM_PROXYDHCP_DELAY_MS *
+					1000);
+#endif	/* CONFIG_SERVERIP_FROM_PROXYDHCP */
 
 			debug("TRANSITIONING TO REQUESTING STATE\n");
 			dhcp_state = REQUESTING;
-
-			if (net_read_u32((u32 *)&bp->bp_vend[0]) ==
-						htonl(BOOTP_VENDOR_MAGIC))
-				dhcp_process_options((u8 *)&bp->bp_vend[4], bp);
 
 			net_set_timeout_handler(5000, bootp_timeout_handler);
 			dhcp_send_request_packet(bp);
@@ -997,15 +1146,18 @@ static void dhcp_handler(uchar *pkt, unsigned dest, struct in_addr sip,
 	case REQUESTING:
 		debug("DHCP State: REQUESTING\n");
 
-		if (dhcp_message_type((u8 *)bp->bp_vend) == DHCP_ACK) {
-			if (net_read_u32((u32 *)&bp->bp_vend[0]) ==
-						htonl(BOOTP_VENDOR_MAGIC))
-				dhcp_process_options((u8 *)&bp->bp_vend[4], bp);
+		if (dhcp_message_type((u8 *)bp->bp_vend, (u8 *)pkt + len) == DHCP_ACK) {
+dhcp_got_bootp:
+			dhcp_packet_process_options(bp);
 			/* Store net params from reply */
 			store_net_params(bp);
 			dhcp_state = BOUND;
+			if (CONFIG_IS_ENABLED(EFI_LOADER) &&
+			    IS_ENABLED(CONFIG_NETDEVICES))
+				efi_net_set_dhcp_ack(pkt, len, NULL, 0);
 			printf("DHCP client bound to address %pI4 (%lu ms)\n",
 			       &net_ip, get_timer(bootp_start));
+			net_set_timeout_handler(0, (thand_f *)0);
 			bootstage_mark_name(BOOTSTAGE_ID_BOOTP_STOP,
 					    "bootp_stop");
 

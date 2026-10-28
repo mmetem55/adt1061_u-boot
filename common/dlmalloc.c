@@ -1,940 +1,25 @@
-#include <common.h>
+// SPDX-License-Identifier: GPL-2.0+
+/*
+ * This code is based on a version (aka dlmalloc) of malloc/free/realloc written
+ * by Doug Lea and released to the public domain, as explained at
+ * http://creativecommons.org/publicdomain/zero/1.0/-
+ *
+ * The original code is available at http://gee.cs.oswego.edu/pub/misc/
+ * as file malloc-2.6.6.c.
+ */
 
-#ifdef CONFIG_SANDBOX
+#if CONFIG_IS_ENABLED(UNIT_TEST)
 #define DEBUG
 #endif
 
-#if 0	/* Moved to malloc.h */
-/* ---------- To make a malloc.h, start cutting here ------------ */
-
-/*
-  A version of malloc/free/realloc written by Doug Lea and released to the
-  public domain.  Send questions/comments/complaints/performance data
-  to dl@cs.oswego.edu
-
-* VERSION 2.6.6  Sun Mar  5 19:10:03 2000  Doug Lea  (dl at gee)
-
-   Note: There may be an updated version of this malloc obtainable at
-	   ftp://g.oswego.edu/pub/misc/malloc.c
-	 Check before installing!
-
-* Why use this malloc?
-
-  This is not the fastest, most space-conserving, most portable, or
-  most tunable malloc ever written. However it is among the fastest
-  while also being among the most space-conserving, portable and tunable.
-  Consistent balance across these factors results in a good general-purpose
-  allocator. For a high-level description, see
-     http://g.oswego.edu/dl/html/malloc.html
-
-* Synopsis of public routines
-
-  (Much fuller descriptions are contained in the program documentation below.)
-
-  malloc(size_t n);
-     Return a pointer to a newly allocated chunk of at least n bytes, or null
-     if no space is available.
-  free(Void_t* p);
-     Release the chunk of memory pointed to by p, or no effect if p is null.
-  realloc(Void_t* p, size_t n);
-     Return a pointer to a chunk of size n that contains the same data
-     as does chunk p up to the minimum of (n, p's size) bytes, or null
-     if no space is available. The returned pointer may or may not be
-     the same as p. If p is null, equivalent to malloc.  Unless the
-     #define REALLOC_ZERO_BYTES_FREES below is set, realloc with a
-     size argument of zero (re)allocates a minimum-sized chunk.
-  memalign(size_t alignment, size_t n);
-     Return a pointer to a newly allocated chunk of n bytes, aligned
-     in accord with the alignment argument, which must be a power of
-     two.
-  valloc(size_t n);
-     Equivalent to memalign(pagesize, n), where pagesize is the page
-     size of the system (or as near to this as can be figured out from
-     all the includes/defines below.)
-  pvalloc(size_t n);
-     Equivalent to valloc(minimum-page-that-holds(n)), that is,
-     round up n to nearest pagesize.
-  calloc(size_t unit, size_t quantity);
-     Returns a pointer to quantity * unit bytes, with all locations
-     set to zero.
-  cfree(Void_t* p);
-     Equivalent to free(p).
-  malloc_trim(size_t pad);
-     Release all but pad bytes of freed top-most memory back
-     to the system. Return 1 if successful, else 0.
-  malloc_usable_size(Void_t* p);
-     Report the number usable allocated bytes associated with allocated
-     chunk p. This may or may not report more bytes than were requested,
-     due to alignment and minimum size constraints.
-  malloc_stats();
-     Prints brief summary statistics.
-  mallinfo()
-     Returns (by copy) a struct containing various summary statistics.
-  mallopt(int parameter_number, int parameter_value)
-     Changes one of the tunable parameters described below. Returns
-     1 if successful in changing the parameter, else 0.
-
-* Vital statistics:
-
-  Alignment:                            8-byte
-       8 byte alignment is currently hardwired into the design.  This
-       seems to suffice for all current machines and C compilers.
-
-  Assumed pointer representation:       4 or 8 bytes
-       Code for 8-byte pointers is untested by me but has worked
-       reliably by Wolfram Gloger, who contributed most of the
-       changes supporting this.
-
-  Assumed size_t  representation:       4 or 8 bytes
-       Note that size_t is allowed to be 4 bytes even if pointers are 8.
-
-  Minimum overhead per allocated chunk: 4 or 8 bytes
-       Each malloced chunk has a hidden overhead of 4 bytes holding size
-       and status information.
-
-  Minimum allocated size: 4-byte ptrs:  16 bytes    (including 4 overhead)
-			  8-byte ptrs:  24/32 bytes (including, 4/8 overhead)
-
-       When a chunk is freed, 12 (for 4byte ptrs) or 20 (for 8 byte
-       ptrs but 4 byte size) or 24 (for 8/8) additional bytes are
-       needed; 4 (8) for a trailing size field
-       and 8 (16) bytes for free list pointers. Thus, the minimum
-       allocatable size is 16/24/32 bytes.
-
-       Even a request for zero bytes (i.e., malloc(0)) returns a
-       pointer to something of the minimum allocatable size.
-
-  Maximum allocated size: 4-byte size_t: 2^31 -  8 bytes
-			  8-byte size_t: 2^63 - 16 bytes
-
-       It is assumed that (possibly signed) size_t bit values suffice to
-       represent chunk sizes. `Possibly signed' is due to the fact
-       that `size_t' may be defined on a system as either a signed or
-       an unsigned type. To be conservative, values that would appear
-       as negative numbers are avoided.
-       Requests for sizes with a negative sign bit when the request
-       size is treaded as a long will return null.
-
-  Maximum overhead wastage per allocated chunk: normally 15 bytes
-
-       Alignnment demands, plus the minimum allocatable size restriction
-       make the normal worst-case wastage 15 bytes (i.e., up to 15
-       more bytes will be allocated than were requested in malloc), with
-       two exceptions:
-	 1. Because requests for zero bytes allocate non-zero space,
-	    the worst case wastage for a request of zero bytes is 24 bytes.
-	 2. For requests >= mmap_threshold that are serviced via
-	    mmap(), the worst case wastage is 8 bytes plus the remainder
-	    from a system page (the minimal mmap unit); typically 4096 bytes.
-
-* Limitations
-
-    Here are some features that are NOT currently supported
-
-    * No user-definable hooks for callbacks and the like.
-    * No automated mechanism for fully checking that all accesses
-      to malloced memory stay within their bounds.
-    * No support for compaction.
-
-* Synopsis of compile-time options:
-
-    People have reported using previous versions of this malloc on all
-    versions of Unix, sometimes by tweaking some of the defines
-    below. It has been tested most extensively on Solaris and
-    Linux. It is also reported to work on WIN32 platforms.
-    People have also reported adapting this malloc for use in
-    stand-alone embedded systems.
-
-    The implementation is in straight, hand-tuned ANSI C.  Among other
-    consequences, it uses a lot of macros.  Because of this, to be at
-    all usable, this code should be compiled using an optimizing compiler
-    (for example gcc -O2) that can simplify expressions and control
-    paths.
-
-  __STD_C                  (default: derived from C compiler defines)
-     Nonzero if using ANSI-standard C compiler, a C++ compiler, or
-     a C compiler sufficiently close to ANSI to get away with it.
-  DEBUG                    (default: NOT defined)
-     Define to enable debugging. Adds fairly extensive assertion-based
-     checking to help track down memory errors, but noticeably slows down
-     execution.
-  REALLOC_ZERO_BYTES_FREES (default: NOT defined)
-     Define this if you think that realloc(p, 0) should be equivalent
-     to free(p). Otherwise, since malloc returns a unique pointer for
-     malloc(0), so does realloc(p, 0).
-  HAVE_MEMCPY               (default: defined)
-     Define if you are not otherwise using ANSI STD C, but still
-     have memcpy and memset in your C library and want to use them.
-     Otherwise, simple internal versions are supplied.
-  USE_MEMCPY               (default: 1 if HAVE_MEMCPY is defined, 0 otherwise)
-     Define as 1 if you want the C library versions of memset and
-     memcpy called in realloc and calloc (otherwise macro versions are used).
-     At least on some platforms, the simple macro versions usually
-     outperform libc versions.
-  HAVE_MMAP                 (default: defined as 1)
-     Define to non-zero to optionally make malloc() use mmap() to
-     allocate very large blocks.
-  HAVE_MREMAP                 (default: defined as 0 unless Linux libc set)
-     Define to non-zero to optionally make realloc() use mremap() to
-     reallocate very large blocks.
-  malloc_getpagesize        (default: derived from system #includes)
-     Either a constant or routine call returning the system page size.
-  HAVE_USR_INCLUDE_MALLOC_H (default: NOT defined)
-     Optionally define if you are on a system with a /usr/include/malloc.h
-     that declares struct mallinfo. It is not at all necessary to
-     define this even if you do, but will ensure consistency.
-  INTERNAL_SIZE_T           (default: size_t)
-     Define to a 32-bit type (probably `unsigned int') if you are on a
-     64-bit machine, yet do not want or need to allow malloc requests of
-     greater than 2^31 to be handled. This saves space, especially for
-     very small chunks.
-  INTERNAL_LINUX_C_LIB      (default: NOT defined)
-     Defined only when compiled as part of Linux libc.
-     Also note that there is some odd internal name-mangling via defines
-     (for example, internally, `malloc' is named `mALLOc') needed
-     when compiling in this case. These look funny but don't otherwise
-     affect anything.
-  WIN32                     (default: undefined)
-     Define this on MS win (95, nt) platforms to compile in sbrk emulation.
-  LACKS_UNISTD_H            (default: undefined if not WIN32)
-     Define this if your system does not have a <unistd.h>.
-  LACKS_SYS_PARAM_H         (default: undefined if not WIN32)
-     Define this if your system does not have a <sys/param.h>.
-  MORECORE                  (default: sbrk)
-     The name of the routine to call to obtain more memory from the system.
-  MORECORE_FAILURE          (default: -1)
-     The value returned upon failure of MORECORE.
-  MORECORE_CLEARS           (default 1)
-     true (1) if the routine mapped to MORECORE zeroes out memory (which
-     holds for sbrk).
-  DEFAULT_TRIM_THRESHOLD
-  DEFAULT_TOP_PAD
-  DEFAULT_MMAP_THRESHOLD
-  DEFAULT_MMAP_MAX
-     Default values of tunable parameters (described in detail below)
-     controlling interaction with host system routines (sbrk, mmap, etc).
-     These values may also be changed dynamically via mallopt(). The
-     preset defaults are those that give best performance for typical
-     programs/systems.
-  USE_DL_PREFIX             (default: undefined)
-     Prefix all public routines with the string 'dl'.  Useful to
-     quickly avoid procedure declaration conflicts and linker symbol
-     conflicts with existing memory allocation routines.
-
-
-*/
-
-
-
-/* Preliminaries */
-
-#ifndef __STD_C
-#ifdef __STDC__
-#define __STD_C     1
-#else
-#if __cplusplus
-#define __STD_C     1
-#else
-#define __STD_C     0
-#endif /*__cplusplus*/
-#endif /*__STDC__*/
-#endif /*__STD_C*/
-
-#ifndef Void_t
-#if (__STD_C || defined(WIN32))
-#define Void_t      void
-#else
-#define Void_t      char
-#endif
-#endif /*Void_t*/
-
-#if __STD_C
-#include <stddef.h>   /* for size_t */
-#else
-#include <sys/types.h>
-#endif
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#include <stdio.h>    /* needed for malloc_stats */
-
-
-/*
-  Compile-time options
-*/
-
-
-/*
-    Debugging:
-
-    Because freed chunks may be overwritten with link fields, this
-    malloc will often die when freed memory is overwritten by user
-    programs.  This can be very effective (albeit in an annoying way)
-    in helping track down dangling pointers.
-
-    If you compile with -DDEBUG, a number of assertion checks are
-    enabled that will catch more memory errors. You probably won't be
-    able to make much sense of the actual assertion errors, but they
-    should help you locate incorrectly overwritten memory.  The
-    checking is fairly extensive, and will slow down execution
-    noticeably. Calling malloc_stats or mallinfo with DEBUG set will
-    attempt to check every non-mmapped allocated and free chunk in the
-    course of computing the summmaries. (By nature, mmapped regions
-    cannot be checked very much automatically.)
-
-    Setting DEBUG may also be helpful if you are trying to modify
-    this code. The assertions in the check routines spell out in more
-    detail the assumptions and invariants underlying the algorithms.
-
-*/
-
-/*
-  INTERNAL_SIZE_T is the word-size used for internal bookkeeping
-  of chunk sizes. On a 64-bit machine, you can reduce malloc
-  overhead by defining INTERNAL_SIZE_T to be a 32 bit `unsigned int'
-  at the expense of not being able to handle requests greater than
-  2^31. This limitation is hardly ever a concern; you are encouraged
-  to set this. However, the default version is the same as size_t.
-*/
-
-#ifndef INTERNAL_SIZE_T
-#define INTERNAL_SIZE_T size_t
-#endif
-
-/*
-  REALLOC_ZERO_BYTES_FREES should be set if a call to
-  realloc with zero bytes should be the same as a call to free.
-  Some people think it should. Otherwise, since this malloc
-  returns a unique pointer for malloc(0), so does realloc(p, 0).
-*/
-
-
-/*   #define REALLOC_ZERO_BYTES_FREES */
-
-
-/*
-  WIN32 causes an emulation of sbrk to be compiled in
-  mmap-based options are not currently supported in WIN32.
-*/
-
-/* #define WIN32 */
-#ifdef WIN32
-#define MORECORE wsbrk
-#define HAVE_MMAP 0
-
-#define LACKS_UNISTD_H
-#define LACKS_SYS_PARAM_H
-
-/*
-  Include 'windows.h' to get the necessary declarations for the
-  Microsoft Visual C++ data structures and routines used in the 'sbrk'
-  emulation.
-
-  Define WIN32_LEAN_AND_MEAN so that only the essential Microsoft
-  Visual C++ header files are included.
-*/
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#endif
-
-
-/*
-  HAVE_MEMCPY should be defined if you are not otherwise using
-  ANSI STD C, but still have memcpy and memset in your C library
-  and want to use them in calloc and realloc. Otherwise simple
-  macro versions are defined here.
-
-  USE_MEMCPY should be defined as 1 if you actually want to
-  have memset and memcpy called. People report that the macro
-  versions are often enough faster than libc versions on many
-  systems that it is better to use them.
-
-*/
-
-#define HAVE_MEMCPY
-
-#ifndef USE_MEMCPY
-#ifdef HAVE_MEMCPY
-#define USE_MEMCPY 1
-#else
-#define USE_MEMCPY 0
-#endif
-#endif
-
-#if (__STD_C || defined(HAVE_MEMCPY))
-
-#if __STD_C
-void* memset(void*, int, size_t);
-void* memcpy(void*, const void*, size_t);
-#else
-#ifdef WIN32
-/* On Win32 platforms, 'memset()' and 'memcpy()' are already declared in */
-/* 'windows.h' */
-#else
-Void_t* memset();
-Void_t* memcpy();
-#endif
-#endif
-#endif
-
-#if USE_MEMCPY
-
-/* The following macros are only invoked with (2n+1)-multiples of
-   INTERNAL_SIZE_T units, with a positive integer n. This is exploited
-   for fast inline execution when n is small. */
-
-#define MALLOC_ZERO(charp, nbytes)                                            \
-do {                                                                          \
-  INTERNAL_SIZE_T mzsz = (nbytes);                                            \
-  if(mzsz <= 9*sizeof(mzsz)) {                                                \
-    INTERNAL_SIZE_T* mz = (INTERNAL_SIZE_T*) (charp);                         \
-    if(mzsz >= 5*sizeof(mzsz)) {     *mz++ = 0;                               \
-				     *mz++ = 0;                               \
-      if(mzsz >= 7*sizeof(mzsz)) {   *mz++ = 0;                               \
-				     *mz++ = 0;                               \
-	if(mzsz >= 9*sizeof(mzsz)) { *mz++ = 0;                               \
-				     *mz++ = 0; }}}                           \
-				     *mz++ = 0;                               \
-				     *mz++ = 0;                               \
-				     *mz   = 0;                               \
-  } else memset((charp), 0, mzsz);                                            \
-} while(0)
-
-#define MALLOC_COPY(dest,src,nbytes)                                          \
-do {                                                                          \
-  INTERNAL_SIZE_T mcsz = (nbytes);                                            \
-  if(mcsz <= 9*sizeof(mcsz)) {                                                \
-    INTERNAL_SIZE_T* mcsrc = (INTERNAL_SIZE_T*) (src);                        \
-    INTERNAL_SIZE_T* mcdst = (INTERNAL_SIZE_T*) (dest);                       \
-    if(mcsz >= 5*sizeof(mcsz)) {     *mcdst++ = *mcsrc++;                     \
-				     *mcdst++ = *mcsrc++;                     \
-      if(mcsz >= 7*sizeof(mcsz)) {   *mcdst++ = *mcsrc++;                     \
-				     *mcdst++ = *mcsrc++;                     \
-	if(mcsz >= 9*sizeof(mcsz)) { *mcdst++ = *mcsrc++;                     \
-				     *mcdst++ = *mcsrc++; }}}                 \
-				     *mcdst++ = *mcsrc++;                     \
-				     *mcdst++ = *mcsrc++;                     \
-				     *mcdst   = *mcsrc  ;                     \
-  } else memcpy(dest, src, mcsz);                                             \
-} while(0)
-
-#else /* !USE_MEMCPY */
-
-/* Use Duff's device for good zeroing/copying performance. */
-
-#define MALLOC_ZERO(charp, nbytes)                                            \
-do {                                                                          \
-  INTERNAL_SIZE_T* mzp = (INTERNAL_SIZE_T*)(charp);                           \
-  long mctmp = (nbytes)/sizeof(INTERNAL_SIZE_T), mcn;                         \
-  if (mctmp < 8) mcn = 0; else { mcn = (mctmp-1)/8; mctmp %= 8; }             \
-  switch (mctmp) {                                                            \
-    case 0: for(;;) { *mzp++ = 0;                                             \
-    case 7:           *mzp++ = 0;                                             \
-    case 6:           *mzp++ = 0;                                             \
-    case 5:           *mzp++ = 0;                                             \
-    case 4:           *mzp++ = 0;                                             \
-    case 3:           *mzp++ = 0;                                             \
-    case 2:           *mzp++ = 0;                                             \
-    case 1:           *mzp++ = 0; if(mcn <= 0) break; mcn--; }                \
-  }                                                                           \
-} while(0)
-
-#define MALLOC_COPY(dest,src,nbytes)                                          \
-do {                                                                          \
-  INTERNAL_SIZE_T* mcsrc = (INTERNAL_SIZE_T*) src;                            \
-  INTERNAL_SIZE_T* mcdst = (INTERNAL_SIZE_T*) dest;                           \
-  long mctmp = (nbytes)/sizeof(INTERNAL_SIZE_T), mcn;                         \
-  if (mctmp < 8) mcn = 0; else { mcn = (mctmp-1)/8; mctmp %= 8; }             \
-  switch (mctmp) {                                                            \
-    case 0: for(;;) { *mcdst++ = *mcsrc++;                                    \
-    case 7:           *mcdst++ = *mcsrc++;                                    \
-    case 6:           *mcdst++ = *mcsrc++;                                    \
-    case 5:           *mcdst++ = *mcsrc++;                                    \
-    case 4:           *mcdst++ = *mcsrc++;                                    \
-    case 3:           *mcdst++ = *mcsrc++;                                    \
-    case 2:           *mcdst++ = *mcsrc++;                                    \
-    case 1:           *mcdst++ = *mcsrc++; if(mcn <= 0) break; mcn--; }       \
-  }                                                                           \
-} while(0)
-
-#endif
-
-
-/*
-  Define HAVE_MMAP to optionally make malloc() use mmap() to
-  allocate very large blocks.  These will be returned to the
-  operating system immediately after a free().
-*/
-
-#ifndef HAVE_MMAP
-#define HAVE_MMAP 1
-#endif
-
-/*
-  Define HAVE_MREMAP to make realloc() use mremap() to re-allocate
-  large blocks.  This is currently only possible on Linux with
-  kernel versions newer than 1.3.77.
-*/
-
-#ifndef HAVE_MREMAP
-#ifdef INTERNAL_LINUX_C_LIB
-#define HAVE_MREMAP 1
-#else
-#define HAVE_MREMAP 0
-#endif
-#endif
-
-#if HAVE_MMAP
-
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/mman.h>
-
-#if !defined(MAP_ANONYMOUS) && defined(MAP_ANON)
-#define MAP_ANONYMOUS MAP_ANON
-#endif
-
-#endif /* HAVE_MMAP */
-
-/*
-  Access to system page size. To the extent possible, this malloc
-  manages memory from the system in page-size units.
-
-  The following mechanics for getpagesize were adapted from
-  bsd/gnu getpagesize.h
-*/
-
-#ifndef LACKS_UNISTD_H
-#  include <unistd.h>
-#endif
-
-#ifndef malloc_getpagesize
-#  ifdef _SC_PAGESIZE         /* some SVR4 systems omit an underscore */
-#    ifndef _SC_PAGE_SIZE
-#      define _SC_PAGE_SIZE _SC_PAGESIZE
-#    endif
-#  endif
-#  ifdef _SC_PAGE_SIZE
-#    define malloc_getpagesize sysconf(_SC_PAGE_SIZE)
-#  else
-#    if defined(BSD) || defined(DGUX) || defined(HAVE_GETPAGESIZE)
-       extern size_t getpagesize();
-#      define malloc_getpagesize getpagesize()
-#    else
-#      ifdef WIN32
-#        define malloc_getpagesize (4096) /* TBD: Use 'GetSystemInfo' instead */
-#      else
-#        ifndef LACKS_SYS_PARAM_H
-#          include <sys/param.h>
-#        endif
-#        ifdef EXEC_PAGESIZE
-#          define malloc_getpagesize EXEC_PAGESIZE
-#        else
-#          ifdef NBPG
-#            ifndef CLSIZE
-#              define malloc_getpagesize NBPG
-#            else
-#              define malloc_getpagesize (NBPG * CLSIZE)
-#            endif
-#          else
-#            ifdef NBPC
-#              define malloc_getpagesize NBPC
-#            else
-#              ifdef PAGESIZE
-#                define malloc_getpagesize PAGESIZE
-#              else
-#                define malloc_getpagesize (4096) /* just guess */
-#              endif
-#            endif
-#          endif
-#        endif
-#      endif
-#    endif
-#  endif
-#endif
-
-
-/*
-
-  This version of malloc supports the standard SVID/XPG mallinfo
-  routine that returns a struct containing the same kind of
-  information you can get from malloc_stats. It should work on
-  any SVID/XPG compliant system that has a /usr/include/malloc.h
-  defining struct mallinfo. (If you'd like to install such a thing
-  yourself, cut out the preliminary declarations as described above
-  and below and save them in a malloc.h file. But there's no
-  compelling reason to bother to do this.)
-
-  The main declaration needed is the mallinfo struct that is returned
-  (by-copy) by mallinfo().  The SVID/XPG malloinfo struct contains a
-  bunch of fields, most of which are not even meaningful in this
-  version of malloc. Some of these fields are are instead filled by
-  mallinfo() with other numbers that might possibly be of interest.
-
-  HAVE_USR_INCLUDE_MALLOC_H should be set if you have a
-  /usr/include/malloc.h file that includes a declaration of struct
-  mallinfo.  If so, it is included; else an SVID2/XPG2 compliant
-  version is declared below.  These must be precisely the same for
-  mallinfo() to work.
-
-*/
-
-/* #define HAVE_USR_INCLUDE_MALLOC_H */
-
-#if HAVE_USR_INCLUDE_MALLOC_H
-#include "/usr/include/malloc.h"
-#else
-
-/* SVID2/XPG mallinfo structure */
-
-struct mallinfo {
-  int arena;    /* total space allocated from system */
-  int ordblks;  /* number of non-inuse chunks */
-  int smblks;   /* unused -- always zero */
-  int hblks;    /* number of mmapped regions */
-  int hblkhd;   /* total space in mmapped regions */
-  int usmblks;  /* unused -- always zero */
-  int fsmblks;  /* unused -- always zero */
-  int uordblks; /* total allocated space */
-  int fordblks; /* total non-inuse space */
-  int keepcost; /* top-most, releasable (via malloc_trim) space */
-};
-
-/* SVID2/XPG mallopt options */
-
-#define M_MXFAST  1    /* UNUSED in this malloc */
-#define M_NLBLKS  2    /* UNUSED in this malloc */
-#define M_GRAIN   3    /* UNUSED in this malloc */
-#define M_KEEP    4    /* UNUSED in this malloc */
-
-#endif
-
-/* mallopt options that actually do something */
-
-#define M_TRIM_THRESHOLD    -1
-#define M_TOP_PAD           -2
-#define M_MMAP_THRESHOLD    -3
-#define M_MMAP_MAX          -4
-
-
-#ifndef DEFAULT_TRIM_THRESHOLD
-#define DEFAULT_TRIM_THRESHOLD (128 * 1024)
-#endif
-
-/*
-    M_TRIM_THRESHOLD is the maximum amount of unused top-most memory
-      to keep before releasing via malloc_trim in free().
-
-      Automatic trimming is mainly useful in long-lived programs.
-      Because trimming via sbrk can be slow on some systems, and can
-      sometimes be wasteful (in cases where programs immediately
-      afterward allocate more large chunks) the value should be high
-      enough so that your overall system performance would improve by
-      releasing.
-
-      The trim threshold and the mmap control parameters (see below)
-      can be traded off with one another. Trimming and mmapping are
-      two different ways of releasing unused memory back to the
-      system. Between these two, it is often possible to keep
-      system-level demands of a long-lived program down to a bare
-      minimum. For example, in one test suite of sessions measuring
-      the XF86 X server on Linux, using a trim threshold of 128K and a
-      mmap threshold of 192K led to near-minimal long term resource
-      consumption.
-
-      If you are using this malloc in a long-lived program, it should
-      pay to experiment with these values.  As a rough guide, you
-      might set to a value close to the average size of a process
-      (program) running on your system.  Releasing this much memory
-      would allow such a process to run in memory.  Generally, it's
-      worth it to tune for trimming rather tham memory mapping when a
-      program undergoes phases where several large chunks are
-      allocated and released in ways that can reuse each other's
-      storage, perhaps mixed with phases where there are no such
-      chunks at all.  And in well-behaved long-lived programs,
-      controlling release of large blocks via trimming versus mapping
-      is usually faster.
-
-      However, in most programs, these parameters serve mainly as
-      protection against the system-level effects of carrying around
-      massive amounts of unneeded memory. Since frequent calls to
-      sbrk, mmap, and munmap otherwise degrade performance, the default
-      parameters are set to relatively high values that serve only as
-      safeguards.
-
-      The default trim value is high enough to cause trimming only in
-      fairly extreme (by current memory consumption standards) cases.
-      It must be greater than page size to have any useful effect.  To
-      disable trimming completely, you can set to (unsigned long)(-1);
-
-
-*/
-
-
-#ifndef DEFAULT_TOP_PAD
-#define DEFAULT_TOP_PAD        (0)
-#endif
-
-/*
-    M_TOP_PAD is the amount of extra `padding' space to allocate or
-      retain whenever sbrk is called. It is used in two ways internally:
-
-      * When sbrk is called to extend the top of the arena to satisfy
-	a new malloc request, this much padding is added to the sbrk
-	request.
-
-      * When malloc_trim is called automatically from free(),
-	it is used as the `pad' argument.
-
-      In both cases, the actual amount of padding is rounded
-      so that the end of the arena is always a system page boundary.
-
-      The main reason for using padding is to avoid calling sbrk so
-      often. Having even a small pad greatly reduces the likelihood
-      that nearly every malloc request during program start-up (or
-      after trimming) will invoke sbrk, which needlessly wastes
-      time.
-
-      Automatic rounding-up to page-size units is normally sufficient
-      to avoid measurable overhead, so the default is 0.  However, in
-      systems where sbrk is relatively slow, it can pay to increase
-      this value, at the expense of carrying around more memory than
-      the program needs.
-
-*/
-
-
-#ifndef DEFAULT_MMAP_THRESHOLD
-#define DEFAULT_MMAP_THRESHOLD (128 * 1024)
-#endif
-
-/*
-
-    M_MMAP_THRESHOLD is the request size threshold for using mmap()
-      to service a request. Requests of at least this size that cannot
-      be allocated using already-existing space will be serviced via mmap.
-      (If enough normal freed space already exists it is used instead.)
-
-      Using mmap segregates relatively large chunks of memory so that
-      they can be individually obtained and released from the host
-      system. A request serviced through mmap is never reused by any
-      other request (at least not directly; the system may just so
-      happen to remap successive requests to the same locations).
-
-      Segregating space in this way has the benefit that mmapped space
-      can ALWAYS be individually released back to the system, which
-      helps keep the system level memory demands of a long-lived
-      program low. Mapped memory can never become `locked' between
-      other chunks, as can happen with normally allocated chunks, which
-      menas that even trimming via malloc_trim would not release them.
-
-      However, it has the disadvantages that:
-
-	 1. The space cannot be reclaimed, consolidated, and then
-	    used to service later requests, as happens with normal chunks.
-	 2. It can lead to more wastage because of mmap page alignment
-	    requirements
-	 3. It causes malloc performance to be more dependent on host
-	    system memory management support routines which may vary in
-	    implementation quality and may impose arbitrary
-	    limitations. Generally, servicing a request via normal
-	    malloc steps is faster than going through a system's mmap.
-
-      All together, these considerations should lead you to use mmap
-      only for relatively large requests.
-
-
-*/
-
-
-#ifndef DEFAULT_MMAP_MAX
-#if HAVE_MMAP
-#define DEFAULT_MMAP_MAX       (64)
-#else
-#define DEFAULT_MMAP_MAX       (0)
-#endif
-#endif
-
-/*
-    M_MMAP_MAX is the maximum number of requests to simultaneously
-      service using mmap. This parameter exists because:
-
-	 1. Some systems have a limited number of internal tables for
-	    use by mmap.
-	 2. In most systems, overreliance on mmap can degrade overall
-	    performance.
-	 3. If a program allocates many large regions, it is probably
-	    better off using normal sbrk-based allocation routines that
-	    can reclaim and reallocate normal heap memory. Using a
-	    small value allows transition into this mode after the
-	    first few allocations.
-
-      Setting to 0 disables all use of mmap.  If HAVE_MMAP is not set,
-      the default value is 0, and attempts to set it to non-zero values
-      in mallopt will fail.
-*/
-
-
-/*
-    USE_DL_PREFIX will prefix all public routines with the string 'dl'.
-      Useful to quickly avoid procedure declaration conflicts and linker
-      symbol conflicts with existing memory allocation routines.
-
-*/
-
-/* #define USE_DL_PREFIX */
-
-
-/*
-
-  Special defines for linux libc
-
-  Except when compiled using these special defines for Linux libc
-  using weak aliases, this malloc is NOT designed to work in
-  multithreaded applications.  No semaphores or other concurrency
-  control are provided to ensure that multiple malloc or free calls
-  don't run at the same time, which could be disasterous. A single
-  semaphore could be used across malloc, realloc, and free (which is
-  essentially the effect of the linux weak alias approach). It would
-  be hard to obtain finer granularity.
-
-*/
-
-
-#ifdef INTERNAL_LINUX_C_LIB
-
-#if __STD_C
-
-Void_t * __default_morecore_init (ptrdiff_t);
-Void_t *(*__morecore)(ptrdiff_t) = __default_morecore_init;
-
-#else
-
-Void_t * __default_morecore_init ();
-Void_t *(*__morecore)() = __default_morecore_init;
-
-#endif
-
-#define MORECORE (*__morecore)
-#define MORECORE_FAILURE 0
-#define MORECORE_CLEARS 1
-
-#else /* INTERNAL_LINUX_C_LIB */
-
-#if __STD_C
-extern Void_t*     sbrk(ptrdiff_t);
-#else
-extern Void_t*     sbrk();
-#endif
-
-#ifndef MORECORE
-#define MORECORE sbrk
-#endif
-
-#ifndef MORECORE_FAILURE
-#define MORECORE_FAILURE -1
-#endif
-
-#ifndef MORECORE_CLEARS
-#define MORECORE_CLEARS 1
-#endif
-
-#endif /* INTERNAL_LINUX_C_LIB */
-
-#if defined(INTERNAL_LINUX_C_LIB) && defined(__ELF__)
-
-#define cALLOc		__libc_calloc
-#define fREe		__libc_free
-#define mALLOc		__libc_malloc
-#define mEMALIGn	__libc_memalign
-#define rEALLOc		__libc_realloc
-#define vALLOc		__libc_valloc
-#define pvALLOc		__libc_pvalloc
-#define mALLINFo	__libc_mallinfo
-#define mALLOPt		__libc_mallopt
-
-#pragma weak calloc = __libc_calloc
-#pragma weak free = __libc_free
-#pragma weak cfree = __libc_free
-#pragma weak malloc = __libc_malloc
-#pragma weak memalign = __libc_memalign
-#pragma weak realloc = __libc_realloc
-#pragma weak valloc = __libc_valloc
-#pragma weak pvalloc = __libc_pvalloc
-#pragma weak mallinfo = __libc_mallinfo
-#pragma weak mallopt = __libc_mallopt
-
-#else
-
-#ifdef USE_DL_PREFIX
-#define cALLOc		dlcalloc
-#define fREe		dlfree
-#define mALLOc		dlmalloc
-#define mEMALIGn	dlmemalign
-#define rEALLOc		dlrealloc
-#define vALLOc		dlvalloc
-#define pvALLOc		dlpvalloc
-#define mALLINFo	dlmallinfo
-#define mALLOPt		dlmallopt
-#else /* USE_DL_PREFIX */
-#define cALLOc		calloc
-#define fREe		free
-#define mALLOc		malloc
-#define mEMALIGn	memalign
-#define rEALLOc		realloc
-#define vALLOc		valloc
-#define pvALLOc		pvalloc
-#define mALLINFo	mallinfo
-#define mALLOPt		mallopt
-#endif /* USE_DL_PREFIX */
-
-#endif
-
-/* Public routines */
-
-#if __STD_C
-
-Void_t* mALLOc(size_t);
-void    fREe(Void_t*);
-Void_t* rEALLOc(Void_t*, size_t);
-Void_t* mEMALIGn(size_t, size_t);
-Void_t* vALLOc(size_t);
-Void_t* pvALLOc(size_t);
-Void_t* cALLOc(size_t, size_t);
-void    cfree(Void_t*);
-int     malloc_trim(size_t);
-size_t  malloc_usable_size(Void_t*);
-void    malloc_stats();
-int     mALLOPt(int, int);
-struct mallinfo mALLINFo(void);
-#else
-Void_t* mALLOc();
-void    fREe();
-Void_t* rEALLOc();
-Void_t* mEMALIGn();
-Void_t* vALLOc();
-Void_t* pvALLOc();
-Void_t* cALLOc();
-void    cfree();
-int     malloc_trim();
-size_t  malloc_usable_size();
-void    malloc_stats();
-int     mALLOPt();
-struct mallinfo mALLINFo();
-#endif
-
-
-#ifdef __cplusplus
-};  /* end of extern "C" */
-#endif
-
-/* ---------- To make a malloc.h, end cutting here ------------ */
-#endif	/* 0 */			/* Moved to malloc.h */
+#include <log.h>
+#include <asm/global_data.h>
 
 #include <malloc.h>
+#include <mapmem.h>
+#include <string.h>
 #include <asm/io.h>
+#include <valgrind/memcheck.h>
 
 #ifdef DEBUG
 #if __STD_C
@@ -948,13 +33,27 @@ void malloc_stats();
 
 DECLARE_GLOBAL_DATA_PTR;
 
+#ifdef MCHECK_HEAP_PROTECTION
+ #define STATIC_IF_MCHECK static
+ #undef MALLOC_COPY
+ #undef MALLOC_ZERO
+static inline void MALLOC_ZERO(void *p, size_t sz) { memset(p, 0, sz); }
+static inline void MALLOC_COPY(void *dest, const void *src, size_t sz) { memcpy(dest, src, sz); }
+#else
+ #define STATIC_IF_MCHECK
+ #define mALLOc_impl mALLOc
+ #define fREe_impl fREe
+ #define rEALLOc_impl rEALLOc
+ #define mEMALIGn_impl mEMALIGn
+ #define cALLOc_impl cALLOc
+#endif
+
 /*
   Emulation of sbrk for WIN32
   All code within the ifdef WIN32 is untested by me.
 
   Thanks to Martin Fong and others for supplying this.
 */
-
 
 #ifdef WIN32
 
@@ -996,7 +95,7 @@ GmListElement* makeGmListElement (void* bas)
 	return this;
 }
 
-void gcleanup ()
+void gcleanup (void)
 {
 	BOOL rval;
 	assert ( (head == NULL) || (head->base == (void*)gAddressBase));
@@ -1057,7 +156,6 @@ void* findRegion (void* start_address, unsigned long size)
 
 }
 
-
 void* wsbrk (long size)
 {
 	void* tmp;
@@ -1078,7 +176,7 @@ gAllocatedSize))
 			{
 				new_address = findRegion (new_address, new_size);
 
-				if (new_address == 0)
+				if (!new_address)
 					return (void*)-1;
 
 				gAddressBase = gNextAddress =
@@ -1104,7 +202,7 @@ gAllocatedSize))
 								(size + gNextAddress -
 								 AlignPage (gNextAddress)),
 								MEM_COMMIT, PAGE_READWRITE);
-			if (res == 0)
+			if (!res)
 				return (void*)-1;
 		}
 		tmp = (void*)gNextAddress;
@@ -1138,12 +236,9 @@ gAllocatedSize))
 
 #endif
 
-
-
 /*
   Type declarations
 */
-
 
 struct malloc_chunk
 {
@@ -1172,7 +267,6 @@ typedef struct malloc_chunk* mchunkptr;
 
     An allocated chunk looks like this:
 
-
     chunk-> +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 	    |             Size of previous chunk, if allocated            | |
 	    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -1185,7 +279,6 @@ typedef struct malloc_chunk* mchunkptr;
 nextchunk-> +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 	    |             Size of chunk                                     |
 	    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-
 
     Where "chunk" is the front of the chunk for the purpose of most of
     the malloc code, but "mem" is the pointer that is returned to the
@@ -1209,6 +302,7 @@ nextchunk-> +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 	    |             Unused space (may be 0 bytes long)                .
 	    .                                                               .
 	    .                                                               |
+
 nextchunk-> +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
     `foot:' |             Size of chunk, in bytes                           |
 	    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -1294,21 +388,17 @@ nextchunk-> +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 /* pad request bytes into a usable size */
 
 #define request2size(req) \
- (((long)((req) + (SIZE_SZ + MALLOC_ALIGN_MASK)) < \
-  (long)(MINSIZE + MALLOC_ALIGN_MASK)) ? MINSIZE : \
+ ((((req) + (SIZE_SZ + MALLOC_ALIGN_MASK)) < \
+  (MINSIZE + MALLOC_ALIGN_MASK)) ? MINSIZE : \
    (((req) + (SIZE_SZ + MALLOC_ALIGN_MASK)) & ~(MALLOC_ALIGN_MASK)))
 
 /* Check if m has acceptable alignment */
 
 #define aligned_OK(m)    (((unsigned long)((m)) & (MALLOC_ALIGN_MASK)) == 0)
 
-
-
-
 /*
   Physical chunk operations
 */
-
 
 /* size field is or'ed with PREV_INUSE when previous adjacent chunk in use */
 
@@ -1322,7 +412,6 @@ nextchunk-> +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
 #define SIZE_BITS (PREV_INUSE|IS_MMAPPED)
 
-
 /* Ptr to next physical malloc_chunk. */
 
 #define next_chunk(p) ((mchunkptr)( ((char*)(p)) + ((p)->size & ~PREV_INUSE) ))
@@ -1332,13 +421,9 @@ nextchunk-> +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 #define prev_chunk(p)\
    ((mchunkptr)( ((char*)(p)) - ((p)->prev_size) ))
 
-
 /* Treat space at ptr + offset as a chunk */
 
 #define chunk_at_offset(p, s)  ((mchunkptr)(((char*)(p)) + (s)))
-
-
-
 
 /*
   Dealing with use bits
@@ -1376,9 +461,6 @@ nextchunk-> +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 #define clear_inuse_bit_at_offset(p, s)\
  (((mchunkptr)(((char*)(p)) + (s)))->size &= ~(PREV_INUSE))
 
-
-
-
 /*
   Dealing with size fields
 */
@@ -1398,10 +480,6 @@ nextchunk-> +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 /* Set size at footer (only when chunk is not in use) */
 
 #define set_foot(p, s)   (((mchunkptr)((char*)(p) + (s)))->prev_size = (s))
-
-
-
-
 
 /*
    Bins
@@ -1456,7 +534,6 @@ typedef struct malloc_chunk* mbinptr;
 #define top            (av_[2])          /* The topmost chunk */
 #define last_remainder (bin_at(1))       /* remainder from last split */
 
-
 /*
    Because top initially points to its own bin with initial
    zero size, thus forcing extension on the first malloc request,
@@ -1490,27 +567,24 @@ static mbinptr av_[NAV * 2 + 2] = {
  IAV(120), IAV(121), IAV(122), IAV(123), IAV(124), IAV(125), IAV(126), IAV(127)
 };
 
-#ifdef CONFIG_NEEDS_MANUAL_RELOC
-static void malloc_bin_reloc(void)
-{
-	mbinptr *p = &av_[2];
-	size_t i;
-
-	for (i = 2; i < ARRAY_SIZE(av_); ++i, ++p)
-		*p = (mbinptr)((ulong)*p + gd->reloc_off);
-}
-#else
-static inline void malloc_bin_reloc(void) {}
+#ifdef CONFIG_SYS_MALLOC_DEFAULT_TO_INIT
+static void malloc_init(void);
 #endif
 
 ulong mem_malloc_start = 0;
 ulong mem_malloc_end = 0;
 ulong mem_malloc_brk = 0;
 
+static bool malloc_testing;	/* enable test mode */
+static int malloc_max_allocs;	/* return NULL after this many calls to malloc() */
+
 void *sbrk(ptrdiff_t increment)
 {
 	ulong old = mem_malloc_brk;
 	ulong new = old + increment;
+
+	if ((new < mem_malloc_start) || (new > mem_malloc_end))
+		return (void *)MORECORE_FAILURE;
 
 	/*
 	 * if we are giving memory back make sure we clear it out since
@@ -1519,9 +593,6 @@ void *sbrk(ptrdiff_t increment)
 	if (increment < 0)
 		memset((void *)new, 0, -increment);
 
-	if ((new < mem_malloc_start) || (new > mem_malloc_end))
-		return (void *)MORECORE_FAILURE;
-
 	mem_malloc_brk = new;
 
 	return (void *)old;
@@ -1529,16 +600,19 @@ void *sbrk(ptrdiff_t increment)
 
 void mem_malloc_init(ulong start, ulong size)
 {
-	mem_malloc_start = start;
-	mem_malloc_end = start + size;
-	mem_malloc_brk = start;
+	mem_malloc_start = (ulong)map_sysmem(start, size);
+	mem_malloc_end = mem_malloc_start + size;
+	mem_malloc_brk = mem_malloc_start;
+
+#ifdef CONFIG_SYS_MALLOC_DEFAULT_TO_INIT
+	malloc_init();
+#endif
 
 	debug("using memory %#lx-%#lx for malloc()\n", mem_malloc_start,
 	      mem_malloc_end);
-#ifdef CONFIG_SYS_MALLOC_CLEAR_ON_INIT
+#if CONFIG_IS_ENABLED(SYS_MALLOC_CLEAR_ON_INIT)
 	memset((void *)mem_malloc_start, 0x0, size);
 #endif
-	malloc_bin_reloc();
 }
 
 /* field-extraction macros */
@@ -1575,8 +649,6 @@ void mem_malloc_init(ulong start, ulong size)
 
 #define is_small_request(nb) (nb < MAX_SMALLBIN_SIZE - SMALLBIN_WIDTH)
 
-
-
 /*
     To help compensate for the large number of bins, a one-level index
     structure is used for bin-by-bin searching.  `binblocks' is a
@@ -1597,10 +669,6 @@ void mem_malloc_init(ulong start, ulong size)
 #define idx2binblock(ix)    ((unsigned)1 << (ix / BINBLOCKWIDTH))
 #define mark_binblock(ii)   (binblocks_w = (mbinptr)(binblocks_r | idx2binblock(ii)))
 #define clear_binblock(ii)  (binblocks_w = (mbinptr)(binblocks_r & ~(idx2binblock(ii))))
-
-
-
-
 
 /*  Other static bookkeeping data */
 
@@ -1637,14 +705,42 @@ static unsigned int max_n_mmaps = 0;
 static unsigned long max_mmapped_mem = 0;
 #endif
 
+#ifdef CONFIG_SYS_MALLOC_DEFAULT_TO_INIT
+static void malloc_init(void)
+{
+	int i, j;
 
+	debug("bins (av_ array) are at %p\n", (void *)av_);
+
+	av_[0] = NULL; av_[1] = NULL;
+	for (i = 2, j = 2; i < NAV * 2 + 2; i += 2, j++) {
+		av_[i] = bin_at(j - 2);
+		av_[i + 1] = bin_at(j - 2);
+
+		/* Just print the first few bins so that
+		 * we can see there are alright.
+		 */
+		if (i < 10)
+			debug("av_[%d]=%lx av_[%d]=%lx\n",
+			      i, (ulong)av_[i],
+			      i + 1, (ulong)av_[i + 1]);
+	}
+
+	/* Init the static bookkeeping as well */
+	sbrk_base = (char *)(-1);
+	max_sbrked_mem = 0;
+	max_total_mem = 0;
+#ifdef DEBUG
+	memset((void *)&current_mallinfo, 0, sizeof(struct mallinfo));
+#endif
+}
+#endif
 
 /*
   Debugging support
 */
 
 #ifdef DEBUG
-
 
 /*
   These routines make a number of assertions about the states
@@ -1673,7 +769,6 @@ static void do_check_chunk(p) mchunkptr p;
     assert((char*)p + sz <= sbrk_base + sbrked_mem);
 
 }
-
 
 #if __STD_C
 static void do_check_free_chunk(mchunkptr p)
@@ -1760,12 +855,10 @@ static void do_check_malloced_chunk(p, s) mchunkptr p; INTERNAL_SIZE_T s;
   /* ... and alignment */
   assert(aligned_OK(chunk2mem(p)));
 
-
   /* ... and was allocated at front of an available chunk */
   assert(prev_inuse(p));
 
 }
-
 
 #define check_free_chunk(P)  do_check_free_chunk(P)
 #define check_inuse_chunk(P) do_check_inuse_chunk(P)
@@ -1778,12 +871,9 @@ static void do_check_malloced_chunk(p, s) mchunkptr p; INTERNAL_SIZE_T s;
 #define check_malloced_chunk(P,N)
 #endif
 
-
-
 /*
   Macro-based internal utilities
 */
-
 
 /*
   Linking chunks in bin lists.
@@ -1794,7 +884,6 @@ static void do_check_malloced_chunk(p, s) mchunkptr p; INTERNAL_SIZE_T s;
   Place chunk p of size s in its bin, in size order,
   putting it ahead of others of same size.
 */
-
 
 #define frontlink(P, S, IDX, BK, FD)                                          \
 {                                                                             \
@@ -1825,7 +914,6 @@ static void do_check_malloced_chunk(p, s) mchunkptr p; INTERNAL_SIZE_T s;
   }                                                                           \
 }
 
-
 /* take a chunk off a list */
 
 #define unlink(P, BK, FD)                                                     \
@@ -1848,10 +936,6 @@ static void do_check_malloced_chunk(p, s) mchunkptr p; INTERNAL_SIZE_T s;
 
 #define clear_last_remainder \
   (last_remainder->fd = last_remainder->bk = last_remainder)
-
-
-
-
 
 /* Routines dealing with mmap(). */
 
@@ -1980,9 +1064,6 @@ static mchunkptr mremap_chunk(p, new_size) mchunkptr p; size_t new_size;
 
 #endif /* HAVE_MMAP */
 
-
-
-
 /*
   Extend the top-most chunk by obtaining memory from system.
   Main interface to sbrk (but see also malloc_trim).
@@ -2097,11 +1178,7 @@ static void malloc_extend_top(nb) INTERNAL_SIZE_T nb;
   assert(((unsigned long)((char*)top + top_size) & (pagesz - 1)) == 0);
 }
 
-
-
-
 /* Main public routines */
-
 
 /*
   Malloc Algorthim:
@@ -2153,7 +1230,6 @@ static void malloc_extend_top(nb) INTERNAL_SIZE_T nb;
 	 contiguous memory. Thus, it should be safe to intersperse
 	 mallocs with other sbrk calls.
 
-
       All allocations are made from the the `lowest' part of any found
       chunk. (The implementation invariant is that prev_inuse is
       always true of any allocated chunk; i.e., that each allocated
@@ -2162,10 +1238,11 @@ static void malloc_extend_top(nb) INTERNAL_SIZE_T nb;
 
 */
 
+STATIC_IF_MCHECK
 #if __STD_C
-Void_t* mALLOc(size_t bytes)
+Void_t* mALLOc_impl(size_t bytes)
 #else
-Void_t* mALLOc(bytes) size_t bytes;
+Void_t* mALLOc_impl(bytes) size_t bytes;
 #endif
 {
   mchunkptr victim;                  /* inspected/selected chunk */
@@ -2183,10 +1260,15 @@ Void_t* mALLOc(bytes) size_t bytes;
 
   INTERNAL_SIZE_T nb;
 
-#ifdef CONFIG_SYS_MALLOC_F_LEN
-	if (gd && !(gd->flags & GD_FLG_FULL_MALLOC_INIT))
+#if CONFIG_IS_ENABLED(SYS_MALLOC_F)
+	if (!(gd->flags & GD_FLG_FULL_MALLOC_INIT))
 		return malloc_simple(bytes);
 #endif
+
+  if (CONFIG_IS_ENABLED(UNIT_TEST) && malloc_testing) {
+    if (--malloc_max_allocs < 0)
+      return NULL;
+  }
 
   /* check if mem_malloc_init() was run */
   if ((mem_malloc_start == 0) && (mem_malloc_end == 0)) {
@@ -2194,7 +1276,8 @@ Void_t* mALLOc(bytes) size_t bytes;
     return NULL;
   }
 
-  if ((long)bytes < 0) return NULL;
+  if (bytes > CONFIG_SYS_MALLOC_LEN || (long)bytes < 0)
+     return NULL;
 
   nb = request2size(bytes);  /* padded request size; */
 
@@ -2221,6 +1304,7 @@ Void_t* mALLOc(bytes) size_t bytes;
       unlink(victim, bck, fwd);
       set_inuse_bit_at_offset(victim, victim_size);
       check_malloced_chunk(victim, nb);
+      VALGRIND_MALLOCLIKE_BLOCK(chunk2mem(victim), bytes, SIZE_SZ, false);
       return chunk2mem(victim);
     }
 
@@ -2248,6 +1332,7 @@ Void_t* mALLOc(bytes) size_t bytes;
 	unlink(victim, bck, fwd);
 	set_inuse_bit_at_offset(victim, victim_size);
 	check_malloced_chunk(victim, nb);
+        VALGRIND_MALLOCLIKE_BLOCK(chunk2mem(victim), bytes, SIZE_SZ, false);
 	return chunk2mem(victim);
       }
     }
@@ -2271,6 +1356,7 @@ Void_t* mALLOc(bytes) size_t bytes;
       set_head(remainder, remainder_size | PREV_INUSE);
       set_foot(remainder, remainder_size);
       check_malloced_chunk(victim, nb);
+      VALGRIND_MALLOCLIKE_BLOCK(chunk2mem(victim), bytes, SIZE_SZ, false);
       return chunk2mem(victim);
     }
 
@@ -2280,6 +1366,7 @@ Void_t* mALLOc(bytes) size_t bytes;
     {
       set_inuse_bit_at_offset(victim, victim_size);
       check_malloced_chunk(victim, nb);
+      VALGRIND_MALLOCLIKE_BLOCK(chunk2mem(victim), bytes, SIZE_SZ, false);
       return chunk2mem(victim);
     }
 
@@ -2335,6 +1422,7 @@ Void_t* mALLOc(bytes) size_t bytes;
 	    set_head(remainder, remainder_size | PREV_INUSE);
 	    set_foot(remainder, remainder_size);
 	    check_malloced_chunk(victim, nb);
+	    VALGRIND_MALLOCLIKE_BLOCK(chunk2mem(victim), bytes, SIZE_SZ, false);
 	    return chunk2mem(victim);
 	  }
 
@@ -2343,6 +1431,7 @@ Void_t* mALLOc(bytes) size_t bytes;
 	    set_inuse_bit_at_offset(victim, victim_size);
 	    unlink(victim, bck, fwd);
 	    check_malloced_chunk(victim, nb);
+	    VALGRIND_MALLOCLIKE_BLOCK(chunk2mem(victim), bytes, SIZE_SZ, false);
 	    return chunk2mem(victim);
 	  }
 
@@ -2380,7 +1469,6 @@ Void_t* mALLOc(bytes) size_t bytes;
     }
   }
 
-
   /* Try to use top chunk */
 
   /* Require that there be a remainder, ensuring top always exists  */
@@ -2390,7 +1478,8 @@ Void_t* mALLOc(bytes) size_t bytes;
 #if HAVE_MMAP
     /* If big and would otherwise need to extend, try to use mmap instead */
     if ((unsigned long)nb >= (unsigned long)mmap_threshold &&
-	(victim = mmap_chunk(nb)) != 0)
+	(victim = mmap_chunk(nb)))
+      VALGRIND_MALLOCLIKE_BLOCK(chunk2mem(victim), bytes, SIZE_SZ, false);
       return chunk2mem(victim);
 #endif
 
@@ -2405,12 +1494,10 @@ Void_t* mALLOc(bytes) size_t bytes;
   top = chunk_at_offset(victim, nb);
   set_head(top, remainder_size | PREV_INUSE);
   check_malloced_chunk(victim, nb);
+  VALGRIND_MALLOCLIKE_BLOCK(chunk2mem(victim), bytes, SIZE_SZ, false);
   return chunk2mem(victim);
 
 }
-
-
-
 
 /*
 
@@ -2433,11 +1520,11 @@ Void_t* mALLOc(bytes) size_t bytes;
 
 */
 
-
+STATIC_IF_MCHECK
 #if __STD_C
-void fREe(Void_t* mem)
+void fREe_impl(Void_t* mem)
 #else
-void fREe(mem) Void_t* mem;
+void fREe_impl(mem) Void_t* mem;
 #endif
 {
   mchunkptr p;         /* chunk corresponding to mem */
@@ -2451,10 +1538,12 @@ void fREe(mem) Void_t* mem;
   mchunkptr fwd;       /* misc temp for linking */
   int       islr;      /* track whether merging with last_remainder */
 
-#ifdef CONFIG_SYS_MALLOC_F_LEN
+#if CONFIG_IS_ENABLED(SYS_MALLOC_F)
 	/* free() is a no-op - all the memory will be freed on relocation */
-	if (!(gd->flags & GD_FLG_FULL_MALLOC_INIT))
+	if (!(gd->flags & GD_FLG_FULL_MALLOC_INIT)) {
+		VALGRIND_FREELIKE_BLOCK(mem, SIZE_SZ);
 		return;
+	}
 #endif
 
   if (mem == NULL)                              /* free(0) has no effect */
@@ -2476,6 +1565,7 @@ void fREe(mem) Void_t* mem;
   sz = hd & ~PREV_INUSE;
   next = chunk_at_offset(p, sz);
   nextsz = chunksize(next);
+  VALGRIND_FREELIKE_BLOCK(mem, SIZE_SZ);
 
   if (next == top)                            /* merge with top */
   {
@@ -2525,16 +1615,11 @@ void fREe(mem) Void_t* mem;
       unlink(next, bck, fwd);
   }
 
-
   set_head(p, sz | PREV_INUSE);
   set_foot(p, sz);
   if (!islr)
     frontlink(p, sz, idx, bck, fwd);
 }
-
-
-
-
 
 /*
 
@@ -2568,14 +1653,13 @@ void fREe(mem) Void_t* mem;
     and allowing it would also allow too many other incorrect
     usages of realloc to be sensible.
 
-
 */
 
-
+STATIC_IF_MCHECK
 #if __STD_C
-Void_t* rEALLOc(Void_t* oldmem, size_t bytes)
+Void_t* rEALLOc_impl(Void_t* oldmem, size_t bytes)
 #else
-Void_t* rEALLOc(oldmem, bytes) Void_t* oldmem; size_t bytes;
+Void_t* rEALLOc_impl(oldmem, bytes) Void_t* oldmem; size_t bytes;
 #endif
 {
   INTERNAL_SIZE_T    nb;      /* padded request size */
@@ -2600,24 +1684,31 @@ Void_t* rEALLOc(oldmem, bytes) Void_t* oldmem; size_t bytes;
   mchunkptr fwd;              /* misc temp for linking */
 
 #ifdef REALLOC_ZERO_BYTES_FREES
-  if (bytes == 0) { fREe(oldmem); return 0; }
+  if (!bytes) {
+	fREe_impl(oldmem);
+	return NULL;
+  }
 #endif
 
-  if ((long)bytes < 0) return NULL;
+  if (bytes > CONFIG_SYS_MALLOC_LEN || (long)bytes < 0)
+     return NULL;
 
   /* realloc of null is supposed to be same as malloc */
-  if (oldmem == NULL) return mALLOc(bytes);
+  if (oldmem == NULL) return mALLOc_impl(bytes);
 
-#ifdef CONFIG_SYS_MALLOC_F_LEN
+#if CONFIG_IS_ENABLED(SYS_MALLOC_F)
 	if (!(gd->flags & GD_FLG_FULL_MALLOC_INIT)) {
 		/* This is harder to support and should not be needed */
 		panic("pre-reloc realloc() is not supported");
 	}
 #endif
+  if (CONFIG_IS_ENABLED(UNIT_TEST) && malloc_testing) {
+    if (--malloc_max_allocs < 0)
+      return NULL;
+  }
 
   newp    = oldp    = mem2chunk(oldmem);
   newsize = oldsize = chunksize(oldp);
-
 
   nb = request2size(bytes);
 
@@ -2631,8 +1722,9 @@ Void_t* rEALLOc(oldmem, bytes) Void_t* oldmem; size_t bytes;
     /* Note the extra SIZE_SZ overhead. */
     if(oldsize - SIZE_SZ >= nb) return oldmem; /* do nothing */
     /* Must alloc, copy, free. */
-    newmem = mALLOc(bytes);
-    if (newmem == 0) return 0; /* propagate failure */
+    newmem = mALLOc_impl(bytes);
+    if (!newmem)
+	return NULL; /* propagate failure */
     MALLOC_COPY(newmem, oldmem, oldsize - 2*SIZE_SZ);
     munmap_chunk(oldp);
     return newmem;
@@ -2660,6 +1752,8 @@ Void_t* rEALLOc(oldmem, bytes) Void_t* oldmem; size_t bytes;
 	  top = chunk_at_offset(oldp, nb);
 	  set_head(top, (newsize - nb) | PREV_INUSE);
 	  set_head_size(oldp, nb);
+	  VALGRIND_RESIZEINPLACE_BLOCK(chunk2mem(oldp), 0, bytes, SIZE_SZ);
+	  VALGRIND_MAKE_MEM_DEFINED(chunk2mem(oldp), bytes);
 	  return chunk2mem(oldp);
 	}
       }
@@ -2669,6 +1763,8 @@ Void_t* rEALLOc(oldmem, bytes) Void_t* oldmem; size_t bytes;
       {
 	unlink(next, bck, fwd);
 	newsize  += nextsize;
+	VALGRIND_RESIZEINPLACE_BLOCK(chunk2mem(oldp), 0, bytes, SIZE_SZ);
+	VALGRIND_MAKE_MEM_DEFINED(chunk2mem(oldp), bytes);
 	goto split;
       }
     }
@@ -2698,10 +1794,12 @@ Void_t* rEALLOc(oldmem, bytes) Void_t* oldmem; size_t bytes;
 	    newp = prev;
 	    newsize += prevsize + nextsize;
 	    newmem = chunk2mem(newp);
+	    VALGRIND_MALLOCLIKE_BLOCK(newmem, bytes, SIZE_SZ, false);
 	    MALLOC_COPY(newmem, oldmem, oldsize - SIZE_SZ);
 	    top = chunk_at_offset(newp, nb);
 	    set_head(top, (newsize - nb) | PREV_INUSE);
 	    set_head_size(newp, nb);
+	    VALGRIND_FREELIKE_BLOCK(oldmem, SIZE_SZ);
 	    return newmem;
 	  }
 	}
@@ -2714,6 +1812,7 @@ Void_t* rEALLOc(oldmem, bytes) Void_t* oldmem; size_t bytes;
 	  newp = prev;
 	  newsize += nextsize + prevsize;
 	  newmem = chunk2mem(newp);
+	  VALGRIND_MALLOCLIKE_BLOCK(newmem, bytes, SIZE_SZ, false);
 	  MALLOC_COPY(newmem, oldmem, oldsize - SIZE_SZ);
 	  goto split;
 	}
@@ -2726,6 +1825,7 @@ Void_t* rEALLOc(oldmem, bytes) Void_t* oldmem; size_t bytes;
 	newp = prev;
 	newsize += prevsize;
 	newmem = chunk2mem(newp);
+	VALGRIND_MALLOCLIKE_BLOCK(newmem, bytes, SIZE_SZ, false);
 	MALLOC_COPY(newmem, oldmem, oldsize - SIZE_SZ);
 	goto split;
       }
@@ -2733,7 +1833,7 @@ Void_t* rEALLOc(oldmem, bytes) Void_t* oldmem; size_t bytes;
 
     /* Must allocate */
 
-    newmem = mALLOc (bytes);
+    newmem = mALLOc_impl (bytes);
 
     if (newmem == NULL)  /* propagate failure */
       return NULL;
@@ -2750,10 +1850,12 @@ Void_t* rEALLOc(oldmem, bytes) Void_t* oldmem; size_t bytes;
 
     /* Otherwise copy, free, and exit */
     MALLOC_COPY(newmem, oldmem, oldsize - SIZE_SZ);
-    fREe(oldmem);
+    fREe_impl(oldmem);
     return newmem;
+  } else {
+    VALGRIND_RESIZEINPLACE_BLOCK(oldmem, 0, bytes, SIZE_SZ);
+    VALGRIND_MAKE_MEM_DEFINED(oldmem, bytes);
   }
-
 
  split:  /* split off extra room in old or expanded chunk */
 
@@ -2764,7 +1866,9 @@ Void_t* rEALLOc(oldmem, bytes) Void_t* oldmem; size_t bytes;
     set_head_size(newp, nb);
     set_head(remainder, remainder_size | PREV_INUSE);
     set_inuse_bit_at_offset(remainder, remainder_size);
-    fREe(chunk2mem(remainder)); /* let free() deal with it */
+    VALGRIND_MALLOCLIKE_BLOCK(chunk2mem(remainder), remainder_size, SIZE_SZ,
+			      false);
+    fREe_impl(chunk2mem(remainder)); /* let free() deal with it */
   }
   else
   {
@@ -2775,9 +1879,6 @@ Void_t* rEALLOc(oldmem, bytes) Void_t* oldmem; size_t bytes;
   check_inuse_chunk(newp);
   return chunk2mem(newp);
 }
-
-
-
 
 /*
 
@@ -2797,11 +1898,11 @@ Void_t* rEALLOc(oldmem, bytes) Void_t* oldmem; size_t bytes;
 
 */
 
-
+STATIC_IF_MCHECK
 #if __STD_C
-Void_t* mEMALIGn(size_t alignment, size_t bytes)
+Void_t* mEMALIGn_impl(size_t alignment, size_t bytes)
 #else
-Void_t* mEMALIGn(alignment, bytes) size_t alignment; size_t bytes;
+Void_t* mEMALIGn_impl(alignment, bytes) size_t alignment; size_t bytes;
 #endif
 {
   INTERNAL_SIZE_T    nb;      /* padded  request size */
@@ -2814,11 +1915,18 @@ Void_t* mEMALIGn(alignment, bytes) size_t alignment; size_t bytes;
   mchunkptr remainder;        /* spare room at end to split off */
   long      remainder_size;   /* its size */
 
-  if ((long)bytes < 0) return NULL;
+  if (bytes > CONFIG_SYS_MALLOC_LEN || (long)bytes < 0)
+     return NULL;
+
+#if CONFIG_IS_ENABLED(SYS_MALLOC_F)
+	if (!(gd->flags & GD_FLG_FULL_MALLOC_INIT)) {
+		return memalign_simple(alignment, bytes);
+	}
+#endif
 
   /* If need less alignment than we give anyway, just relay to malloc */
 
-  if (alignment <= MALLOC_ALIGNMENT) return mALLOc(bytes);
+  if (alignment <= MALLOC_ALIGNMENT) return mALLOc_impl(bytes);
 
   /* Otherwise, ensure that it is at least a minimum chunk size */
 
@@ -2827,7 +1935,48 @@ Void_t* mEMALIGn(alignment, bytes) size_t alignment; size_t bytes;
   /* Call malloc with worst case padding to hit alignment. */
 
   nb = request2size(bytes);
-  m  = (char*)(mALLOc(nb + alignment + MINSIZE));
+  m  = (char*)(mALLOc_impl(nb + alignment + MINSIZE));
+
+  /*
+  * The attempt to over-allocate (with a size large enough to guarantee the
+  * ability to find an aligned region within allocated memory) failed.
+  *
+  * Try again, this time only allocating exactly the size the user wants. If
+  * the allocation now succeeds and just happens to be aligned, we can still
+  * fulfill the user's request.
+  */
+  if (m == NULL) {
+    size_t extra, extra2;
+    /*
+     * Use bytes not nb, since mALLOc internally calls request2size too, and
+     * each call increases the size to allocate, to account for the header.
+     */
+    m  = (char*)(mALLOc_impl(bytes));
+    /* Aligned -> return it */
+    if ((((unsigned long)(m)) % alignment) == 0)
+      return m;
+    /*
+     * Otherwise, try again, requesting enough extra space to be able to
+     * acquire alignment.
+     */
+    fREe_impl(m);
+    /* Add in extra bytes to match misalignment of unexpanded allocation */
+    extra = alignment - (((unsigned long)(m)) % alignment);
+    m  = (char*)(mALLOc_impl(bytes + extra));
+    /*
+     * m might not be the same as before. Validate that the previous value of
+     * extra still works for the current value of m.
+     * If (!m), extra2=alignment so 
+     */
+    if (m) {
+      extra2 = alignment - (((unsigned long)(m)) % alignment);
+      if (extra2 > extra) {
+        fREe_impl(m);
+        m = NULL;
+      }
+    }
+    /* Fall through to original NULL check and chunk splitting logic */
+  }
 
   if (m == NULL) return NULL; /* propagate failure */
 
@@ -2872,8 +2021,9 @@ Void_t* mEMALIGn(alignment, bytes) size_t alignment; size_t bytes;
     set_head(newp, newsize | PREV_INUSE);
     set_inuse_bit_at_offset(newp, newsize);
     set_head_size(p, leadsize);
-    fREe(chunk2mem(p));
+    fREe_impl(chunk2mem(p));
     p = newp;
+    VALGRIND_MALLOCLIKE_BLOCK(chunk2mem(p), bytes, SIZE_SZ, false);
 
     assert (newsize >= nb && (((unsigned long)(chunk2mem(p))) % alignment) == 0);
   }
@@ -2887,16 +2037,15 @@ Void_t* mEMALIGn(alignment, bytes) size_t alignment; size_t bytes;
     remainder = chunk_at_offset(p, nb);
     set_head(remainder, remainder_size | PREV_INUSE);
     set_head_size(p, nb);
-    fREe(chunk2mem(remainder));
+    VALGRIND_MALLOCLIKE_BLOCK(chunk2mem(remainder), remainder_size, SIZE_SZ,
+			      false);
+    fREe_impl(chunk2mem(remainder));
   }
 
   check_inuse_chunk(p);
   return chunk2mem(p);
 
 }
-
-
-
 
 /*
     valloc just invokes memalign with alignment argument equal
@@ -2918,7 +2067,6 @@ Void_t* vALLOc(bytes) size_t bytes;
   that will accommodate request
 */
 
-
 #if __STD_C
 Void_t* pvALLOc(size_t bytes)
 #else
@@ -2935,10 +2083,11 @@ Void_t* pvALLOc(bytes) size_t bytes;
 
 */
 
+STATIC_IF_MCHECK
 #if __STD_C
-Void_t* cALLOc(size_t n, size_t elem_size)
+Void_t* cALLOc_impl(size_t n, size_t elem_size)
 #else
-Void_t* cALLOc(n, elem_size) size_t n; size_t elem_size;
+Void_t* cALLOc_impl(n, elem_size) size_t n; size_t elem_size;
 #endif
 {
   mchunkptr p;
@@ -2946,15 +2095,14 @@ Void_t* cALLOc(n, elem_size) size_t n; size_t elem_size;
 
   INTERNAL_SIZE_T sz = n * elem_size;
 
-
   /* check if expand_top called, in which case don't need to clear */
-#ifdef CONFIG_SYS_MALLOC_CLEAR_ON_INIT
+#if CONFIG_IS_ENABLED(SYS_MALLOC_CLEAR_ON_INIT)
 #if MORECORE_CLEARS
   mchunkptr oldtop = top;
   INTERNAL_SIZE_T oldtopsize = chunksize(top);
 #endif
 #endif
-  Void_t* mem = mALLOc (sz);
+  Void_t* mem = mALLOc_impl (sz);
 
   if ((long)n < 0) return NULL;
 
@@ -2962,9 +2110,9 @@ Void_t* cALLOc(n, elem_size) size_t n; size_t elem_size;
     return NULL;
   else
   {
-#ifdef CONFIG_SYS_MALLOC_F_LEN
+#if CONFIG_IS_ENABLED(SYS_MALLOC_F)
 	if (!(gd->flags & GD_FLG_FULL_MALLOC_INIT)) {
-		MALLOC_ZERO(mem, sz);
+		memset(mem, 0, sz);
 		return mem;
 	}
 #endif
@@ -2972,14 +2120,13 @@ Void_t* cALLOc(n, elem_size) size_t n; size_t elem_size;
 
     /* Two optional cases in which clearing not necessary */
 
-
 #if HAVE_MMAP
     if (chunk_is_mmapped(p)) return mem;
 #endif
 
     csz = chunksize(p);
 
-#ifdef CONFIG_SYS_MALLOC_CLEAR_ON_INIT
+#if CONFIG_IS_ENABLED(SYS_MALLOC_CLEAR_ON_INIT)
 #if MORECORE_CLEARS
     if (p == oldtop && csz > oldtopsize)
     {
@@ -2990,6 +2137,7 @@ Void_t* cALLOc(n, elem_size) size_t n; size_t elem_size;
 #endif
 
     MALLOC_ZERO(mem, csz - SIZE_SZ);
+    VALGRIND_MAKE_MEM_DEFINED(mem, sz);
     return mem;
   }
 }
@@ -3012,7 +2160,89 @@ void cfree(mem) Void_t *mem;
 }
 #endif
 
+#ifdef MCHECK_HEAP_PROTECTION
+ #include "mcheck_core.inc.h"
+ #if !__STD_C
+  #error "must have __STD_C"
+ #endif
 
+Void_t *mALLOc(size_t bytes)
+{
+	mcheck_pedantic_prehook();
+	size_t fullsz = mcheck_alloc_prehook(bytes);
+	void *p = mALLOc_impl(fullsz);
+
+	if (!p)
+		return p;
+	return mcheck_alloc_posthook(p, bytes);
+}
+
+void fREe(Void_t *mem) { fREe_impl(mcheck_free_prehook(mem)); }
+
+Void_t *rEALLOc(Void_t *oldmem, size_t bytes)
+{
+	mcheck_pedantic_prehook();
+	if (bytes == 0) {
+		if (oldmem)
+			fREe(oldmem);
+		return NULL;
+	}
+
+	if (oldmem == NULL)
+		return mALLOc(bytes);
+
+	void *p = mcheck_reallocfree_prehook(oldmem);
+	size_t newsz = mcheck_alloc_prehook(bytes);
+
+	p = rEALLOc_impl(p, newsz);
+	if (!p)
+		return p;
+	return mcheck_alloc_noclean_posthook(p, bytes);
+}
+
+Void_t *mEMALIGn(size_t alignment, size_t bytes)
+{
+	mcheck_pedantic_prehook();
+	size_t fullsz = mcheck_memalign_prehook(alignment, bytes);
+	void *p = mEMALIGn_impl(alignment, fullsz);
+
+	if (!p)
+		return p;
+	return mcheck_memalign_posthook(alignment, p, bytes);
+}
+
+// pvALLOc, vALLOc - redirect to mEMALIGn, defined here, so they need no wrapping.
+
+Void_t *cALLOc(size_t n, size_t elem_size)
+{
+	mcheck_pedantic_prehook();
+	// NB: here is no overflow check.
+	size_t fullsz = mcheck_alloc_prehook(n * elem_size);
+	void *p = cALLOc_impl(1, fullsz);
+
+	if (!p)
+		return p;
+	return mcheck_alloc_noclean_posthook(p, n * elem_size);
+}
+
+// mcheck API {
+int mcheck_pedantic(mcheck_abortfunc_t f)
+{
+	mcheck_initialize(f, 1);
+	return 0;
+}
+
+int mcheck(mcheck_abortfunc_t f)
+{
+	mcheck_initialize(f, 0);
+	return 0;
+}
+
+void mcheck_check_all(void) { mcheck_pedantic_check(); }
+
+enum mcheck_status mprobe(void *__ptr) { return mcheck_mprobe(__ptr); }
+// mcheck API }
+#endif
 
 /*
 
@@ -3093,8 +2323,6 @@ int malloc_trim(pad) size_t pad;
   }
 }
 
-
-
 /*
   malloc_usable_size:
 
@@ -3128,13 +2356,10 @@ size_t malloc_usable_size(mem) Void_t* mem;
   }
 }
 
-
-
-
 /* Utility to update current_mallinfo for malloc_stats and mallinfo() */
 
 #ifdef DEBUG
-static void malloc_update_mallinfo()
+static void malloc_update_mallinfo(void)
 {
   int i;
   mbinptr b;
@@ -3173,8 +2398,6 @@ static void malloc_update_mallinfo()
 }
 #endif	/* DEBUG */
 
-
-
 /*
 
   malloc_stats:
@@ -3191,7 +2414,7 @@ static void malloc_update_mallinfo()
 */
 
 #ifdef DEBUG
-void malloc_stats()
+void malloc_stats(void)
 {
   malloc_update_mallinfo();
   printf("max system bytes = %10u\n",
@@ -3212,15 +2435,12 @@ void malloc_stats()
 */
 
 #ifdef DEBUG
-struct mallinfo mALLINFo()
+struct mallinfo mALLINFo(void)
 {
   malloc_update_mallinfo();
   return current_mallinfo;
 }
 #endif	/* DEBUG */
-
-
-
 
 /*
   mallopt:
@@ -3263,13 +2483,24 @@ int mALLOPt(param_number, value) int param_number; int value;
 
 int initf_malloc(void)
 {
-#ifdef CONFIG_SYS_MALLOC_F_LEN
+#if CONFIG_IS_ENABLED(SYS_MALLOC_F)
 	assert(gd->malloc_base);	/* Set up by crt0.S */
-	gd->malloc_limit = CONFIG_SYS_MALLOC_F_LEN;
+	gd->malloc_limit = CONFIG_VAL(SYS_MALLOC_F_LEN);
 	gd->malloc_ptr = 0;
 #endif
 
 	return 0;
+}
+
+void malloc_enable_testing(int max_allocs)
+{
+	malloc_testing = true;
+	malloc_max_allocs = max_allocs;
+}
+
+void malloc_disable_testing(void)
+{
+	malloc_testing = false;
 }
 
 /*

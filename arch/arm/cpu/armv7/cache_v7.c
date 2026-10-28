@@ -1,21 +1,20 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * (C) Copyright 2010
  * Texas Instruments, <www.ti.com>
  * Aneesh V <aneesh@ti.com>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
+#include <cpu_func.h>
+#include <asm/cache.h>
+#include <linux/errno.h>
 #include <linux/types.h>
-#include <common.h>
 #include <asm/armv7.h>
 #include <asm/utils.h>
 
-#define ARMV7_DCACHE_INVAL_ALL		1
-#define ARMV7_DCACHE_CLEAN_INVAL_ALL	2
-#define ARMV7_DCACHE_INVAL_RANGE	3
-#define ARMV7_DCACHE_CLEAN_INVAL_RANGE	4
+#define ARMV7_DCACHE_INVAL_RANGE	1
+#define ARMV7_DCACHE_CLEAN_INVAL_RANGE	2
 
-#ifndef CONFIG_SYS_DCACHE_OFF
+#if !CONFIG_IS_ENABLED(SYS_DCACHE_OFF)
 
 /* Asm functions from cache_v7_asm.S */
 void v7_flush_dcache_all(void);
@@ -46,27 +45,8 @@ static void v7_dcache_inval_range(u32 start, u32 stop, u32 line_len)
 {
 	u32 mva;
 
-	/*
-	 * If start address is not aligned to cache-line do not
-	 * invalidate the first cache-line
-	 */
-	if (start & (line_len - 1)) {
-		printf("ERROR: %s - start address is not aligned - 0x%08x\n",
-			__func__, start);
-		/* move to next cache line */
-		start = (start + line_len - 1) & ~(line_len - 1);
-	}
-
-	/*
-	 * If stop address is not aligned to cache-line do not
-	 * invalidate the last cache-line
-	 */
-	if (stop & (line_len - 1)) {
-		printf("ERROR: %s - stop address is not aligned - 0x%08x\n",
-			__func__, stop);
-		/* align to the beginning of this cache line */
-		stop &= ~(line_len - 1);
-	}
+	if (!check_cache_range(start, stop))
+		return;
 
 	for (mva = start; mva < stop; mva = mva + line_len) {
 		/* DCIMVAC - Invalidate data cache by MVA to PoC */
@@ -96,7 +76,7 @@ static void v7_dcache_maint_range(u32 start, u32 stop, u32 range_op)
 	}
 
 	/* DSB to make sure the operation is complete */
-	DSB;
+	dsb();
 }
 
 /* Invalidate TLB */
@@ -109,9 +89,9 @@ static void v7_inval_tlb(void)
 	/* Invalidate entire instruction TLB */
 	asm volatile ("mcr p15, 0, %0, c8, c5, 0" : : "r" (0));
 	/* Full system DSB - make sure that the invalidation is complete */
-	DSB;
+	dsb();
 	/* Full system ISB - make sure the instruction stream sees it */
-	ISB;
+	isb();
 }
 
 void invalidate_dcache_all(void)
@@ -138,6 +118,8 @@ void flush_dcache_all(void)
  */
 void invalidate_dcache_range(unsigned long start, unsigned long stop)
 {
+	check_cache_range(start, stop);
+
 	v7_dcache_maint_range(start, stop, ARMV7_DCACHE_INVAL_RANGE);
 
 	v7_outer_cache_inval_range(start, stop);
@@ -150,6 +132,8 @@ void invalidate_dcache_range(unsigned long start, unsigned long stop)
  */
 void flush_dcache_range(unsigned long start, unsigned long stop)
 {
+	check_cache_range(start, stop);
+
 	v7_dcache_maint_range(start, stop, ARMV7_DCACHE_CLEAN_INVAL_RANGE);
 
 	v7_outer_cache_flush_range(start, stop);
@@ -167,16 +151,7 @@ void mmu_page_table_flush(unsigned long start, unsigned long stop)
 	flush_dcache_range(start, stop);
 	v7_inval_tlb();
 }
-
-/*
- * Flush range from all levels of d-cache/unified-cache used:
- * Affects the range [start, start + size - 1]
- */
-void  flush_cache(unsigned long start, unsigned long size)
-{
-	flush_dcache_range(start, start + size);
-}
-#else /* #ifndef CONFIG_SYS_DCACHE_OFF */
+#else /* #if !CONFIG_IS_ENABLED(SYS_DCACHE_OFF) */
 void invalidate_dcache_all(void)
 {
 }
@@ -197,20 +172,13 @@ void arm_init_before_mmu(void)
 {
 }
 
-void  flush_cache(unsigned long start, unsigned long size)
-{
-}
-
 void mmu_page_table_flush(unsigned long start, unsigned long stop)
 {
 }
 
-void arm_init_domains(void)
-{
-}
-#endif /* #ifndef CONFIG_SYS_DCACHE_OFF */
+#endif /* #if !CONFIG_IS_ENABLED(SYS_DCACHE_OFF) */
 
-#ifndef CONFIG_SYS_ICACHE_OFF
+#if !CONFIG_IS_ENABLED(SYS_ICACHE_OFF)
 /* Invalidate entire I-cache and branch predictor array */
 void invalidate_icache_all(void)
 {
@@ -224,10 +192,10 @@ void invalidate_icache_all(void)
 	asm volatile ("mcr p15, 0, %0, c7, c5, 6" : : "r" (0));
 
 	/* Full system DSB - make sure that the invalidation is complete */
-	DSB;
+	dsb();
 
 	/* ISB - make sure the instruction stream sees it */
-	ISB;
+	isb();
 }
 #else
 void invalidate_icache_all(void)
@@ -242,3 +210,8 @@ __weak void v7_outer_cache_flush_all(void) {}
 __weak void v7_outer_cache_inval_all(void) {}
 __weak void v7_outer_cache_flush_range(u32 start, u32 end) {}
 __weak void v7_outer_cache_inval_range(u32 start, u32 end) {}
+
+int __weak pgprot_set_attrs(phys_addr_t addr, size_t size, enum pgprot_attrs perm)
+{
+	return -ENOSYS;
+}

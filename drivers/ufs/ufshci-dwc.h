@@ -24,10 +24,9 @@ enum clk_div_values {
 
 /* Selector Index */
 enum selector_index {
-	SELIND_LN0_TX		= 0x00,
-	SELIND_LN1_TX		= 0x01,
-	SELIND_LN0_RX		= 0x04,
-	SELIND_LN1_RX		= 0x05,
+	SELIND_LN0_TX	= 0x00,
+	SELIND_LN1_TX	= 0x01,
+	SELIND_LN0_RX	= 0x04,
+	SELIND_LN1_RX	= 0x05,
 };
-
-#endif /* End of Header */
+#endif

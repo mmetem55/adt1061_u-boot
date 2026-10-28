@@ -1,14 +1,11 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * (C) Copyright 2012
  * Valentin Lontgchamp, Keymile AG, valentin.longchamp@keymile.com
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #ifndef __MV886352_H
 #define __MV886352_H
-
-#include <common.h>
 
 /* PHY registers */
 #define PHY(itf)	(itf)

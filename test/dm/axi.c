@@ -4,12 +4,13 @@
  * Mario Six, Guntermann & Drunck GmbH, mario.six@gdsys.cc
  */
 
-#include <common.h>
 #include <axi.h>
 #include <dm.h>
-#include <dm/test.h>
-#include <test/ut.h>
+#include <log.h>
 #include <asm/axi.h>
+#include <dm/test.h>
+#include <test/test.h>
+#include <test/ut.h>
 
 /* Test that sandbox AXI works correctly */
 static int dm_test_axi_base(struct unit_test_state *uts)
@@ -20,8 +21,7 @@ static int dm_test_axi_base(struct unit_test_state *uts)
 
 	return 0;
 }
-
-DM_TEST(dm_test_axi_base, DM_TESTF_SCAN_PDATA | DM_TESTF_SCAN_FDT);
+DM_TEST(dm_test_axi_base, UTF_SCAN_PDATA | UTF_SCAN_FDT);
 
 /* Test that sandbox PCI bus numbering works correctly */
 static int dm_test_axi_busnum(struct unit_test_state *uts)
@@ -32,8 +32,7 @@ static int dm_test_axi_busnum(struct unit_test_state *uts)
 
 	return 0;
 }
-
-DM_TEST(dm_test_axi_busnum, DM_TESTF_SCAN_PDATA | DM_TESTF_SCAN_FDT);
+DM_TEST(dm_test_axi_busnum, UTF_SCAN_PDATA | UTF_SCAN_FDT);
 
 /* Test that we can use the store device correctly */
 static int dm_test_axi_store(struct unit_test_state *uts)
@@ -65,13 +64,12 @@ static int dm_test_axi_store(struct unit_test_state *uts)
 	/* Test writing */
 	val = 0x55667788;
 	axi_write(store, 0, &val, AXI_SIZE_32);
-	ut_asserteq(0, memcmp(data, tdata1, ARRAY_SIZE(tdata1)));
+	ut_asserteq_mem(data, tdata1, ARRAY_SIZE(tdata1));
 
 	val = 0xaabbccdd;
 	axi_write(store, 3, &val, AXI_SIZE_32);
-	ut_asserteq(0, memcmp(data + 3, tdata2, ARRAY_SIZE(tdata1)));
+	ut_asserteq_mem(data + 3, tdata2, ARRAY_SIZE(tdata1));
 
 	return 0;
 }
-
-DM_TEST(dm_test_axi_store, DM_TESTF_SCAN_PDATA | DM_TESTF_SCAN_FDT);
+DM_TEST(dm_test_axi_store, UTF_SCAN_PDATA | UTF_SCAN_FDT);

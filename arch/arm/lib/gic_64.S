@@ -1,10 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * GIC Initialization Routines.
  *
  * (C) Copyright 2013
  * David Feng <fenghua@phytium.com.cn>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #include <asm-offsets.h>
@@ -14,7 +13,6 @@
 #include <asm/macro.h>
 
 
-#if defined(CONFIG_USE_IRQ)
 /*************************************************************************
  *
  * void gic_init_secure(DistributorBase);
@@ -27,8 +25,6 @@ ENTRY(gic_init_secure)
 	 * Initialize Distributor
 	 * x0: Distributor Base
 	 */
-	switch_el x9, 3f,2f,1f
-3:
 #if defined(CONFIG_GICV3)
 	mov	w9, #0x37		/* EnableGrp0 | EnableGrp1NS */
 					/* EnableGrp1S | ARE_S | ARE_NS */
@@ -43,40 +39,31 @@ ENTRY(gic_init_secure)
 	str	wzr, [x12], #0x4	/* Config SPIs as Group1NS */
 	sub	w10, w10, #0x1
 	cbnz	w10, 0b
-	b exit
-2:
-	mov w9,#0x37
-	str     w9, [x0, GICD_CTLR]     /* Secure GICD_CTLR */
-	ldr     w9, [x0, GICD_TYPER]
-	and     w10, w9, #0x1f          /* ITLinesNumber */
-	cbz     w10, 1f
-	add     x11, x0, (GICD_IGROUPRn + 4)
-	add     x12, x0, (GICD_IGROUPMODRn + 4)
-	mov     w9, #~0
-0:      str     w9, [x11], #0x4
-	str     wzr, [x12], #0x4
-	sub     w10, w10, #0x1
-	cbnz    w10, 0b
-
 #elif defined(CONFIG_GICV2)
+	switch_el x1, 2f, 1f, 1f
+2:
 	mov	w9, #0x3		/* EnableGrp0 | EnableGrp1 */
 	str	w9, [x0, GICD_CTLR]	/* Secure GICD_CTLR */
 	ldr	w9, [x0, GICD_TYPER]
 	and	w10, w9, #0x1f		/* ITLinesNumber */
 	cbz	w10, 1f			/* No SPIs */
-	add	x11, x0, (GICD_IGROUPRn + 4)
+	add	x11, x0, GICD_IGROUPRn
 	mov	w9, #~0			/* Config SPIs as Grp1 */
+	str	w9, [x11], #0x4
 0:	str	w9, [x11], #0x4
 	sub	w10, w10, #0x1
 	cbnz	w10, 0b
-	b exit
-2:
+
+	ldr	x1, =GICC_BASE		/* GICC_CTLR */
+	mov	w0, #3			/* EnableGrp0 | EnableGrp1 */
+	str	w0, [x1]
+
+	mov	w0, #1 << 7		/* allow NS access to GICC_PMR */
+	str	w0, [x1, #4]		/* GICC_PMR */
 #endif
 1:
-exit:
 	ret
 ENDPROC(gic_init_secure)
-#endif
 
 
 /*************************************************************************
@@ -89,8 +76,6 @@ ENDPROC(gic_init_secure)
  *
  *************************************************************************/
 ENTRY(gic_init_secure_percpu)
-	switch_el x9 ,0f,5f,4f
-0:
 #if defined(CONFIG_GICV3)
 	/*
 	 * Initialize ReDistributor
@@ -107,13 +92,15 @@ ENTRY(gic_init_secure_percpu)
 	add	x9, x9, #(2 << 16)
 	b	1b
 
-	/* x9: ReDistributor Base Address of Current CPU */
 2:
-	mov     w10, #2
-	str     w11, [x9, #0x24]
-	dsb     st
-	isb
+#if defined(CONFIG_GICV3_SUPPORT_GIC600)
+        mov     w10, #0x0               /* Power on redistributor */
+        str     w10, [x9, GICR_PWRR]
+5:      ldr     w10, [x9, GICR_PWRR]    /* Wait until the power on state is reflected */
+        tbnz    w10, #1, 5b             /* If RDPD == 0 then powered on */
+#endif
 
+	/* x9: ReDistributor Base Address of Current CPU */
 	mov	w10, #~0x2
 	ldr	w11, [x9, GICR_WAKER]
 	and	w11, w11, w10		/* Clear ProcessorSleep */
@@ -130,17 +117,13 @@ ENTRY(gic_init_secure_percpu)
 	mov	w11, #0x1		/* Enable SGI 0 */
 	str	w11, [x10, GICR_ISENABLERn]
 
+	switch_el x10, 3f, 2f, 1f
+3:
 	/* Initialize Cpu Interface */
 	mrs	x10, ICC_SRE_EL3
 	orr	x10, x10, #0xf		/* SRE & Disable IRQ/FIQ Bypass & */
 					/* Allow EL2 access to ICC_SRE_EL2 */
 	msr	ICC_SRE_EL3, x10
-	isb
-
-	mrs	x10, ICC_SRE_EL2
-	orr	x10, x10, #0xf		/* SRE & Disable IRQ/FIQ Bypass & */
-					/* Allow EL1 access to ICC_SRE_EL1 */
-	msr	ICC_SRE_EL2, x10
 	isb
 
 	mov	x10, #0x3		/* EnableGrp1NS | EnableGrp1S */
@@ -149,76 +132,27 @@ ENTRY(gic_init_secure_percpu)
 
 	msr	ICC_CTLR_EL3, xzr
 	isb
-
+2:
+	mrs	x10, ICC_SRE_EL2
+	orr	x10, x10, #0xf		/* SRE & Disable IRQ/FIQ Bypass & */
+					/* Allow EL1 access to ICC_SRE_EL1 */
+	msr	ICC_SRE_EL2, x10
+	isb
+1:
 	msr	ICC_CTLR_EL1, xzr	/* NonSecure ICC_CTLR_EL1 */
 	isb
 
 	mov	x10, #0x1 << 7		/* Non-Secure access to ICC_PMR_EL1 */
 	msr	ICC_PMR_EL1, x10
 	isb
-	b exit1
-5://el2 config
-	mrs	x10,hcr_el2
-	orr	x10,x10,0x10
-	msr	hcr_el2,x10
-	mrs     x10, mpidr_el1
-	lsr     x9, x10, #32
-	bfi     x10, x9, #24, #8
-	mov     x9, x0
-
-1:      ldr     x11, [x9, GICR_TYPER]
-        lsr     x11, x11, #32           /* w11 is aff3:aff2:aff1:aff0 */
-	cmp     w10, w11
-	b.eq    2f
-	add     x9, x9, #(2 << 16)
-	b       1b
-
-        /* x9: ReDistributor Base Address of Current CPU */
-2:
-	mov     w10, #2
-	str     w11, [x9, #0x24]
-	dsb     st
-	isb
-	mov     w10, #~0x2
-        ldr     w11, [x9, GICR_WAKER]
-        and     w11, w11, w10           /* Clear ProcessorSleep */
-        str     w11, [x9, GICR_WAKER]
-        dsb     st
-        isb
-
-3:      ldr     w10, [x9, GICR_WAKER]
-        tbnz    w10, #2, 3b             /* Wait Children be Alive */
-
-	add     x10, x9, #(1 << 16)     /* SGI_Base */
-	mov     w11, #~0
-	str     w11, [x10, GICR_IGROUPRn]
-	str     wzr, [x10, GICR_IGROUPMODRn]    /* SGIs|*/
-	mov     w11, #0x1               /* Enable SGI 0
-	str     w11, [x10, GICR_ISENABLERn]
-
-	mrs	x10, ICC_SRE_EL2
-        orr     x10, x10, #0xf          /* SRE & Disable*/
-                                        /* Allow EL1 acc*/
-	msr     ICC_SRE_EL2, x10
-	isb
-
-	mov     x10, #0x3               /* EnableGrp1NS */
-	msr     ICC_IGRPEN1_EL1, x10
-	isb
-
-	msr     ICC_CTLR_EL1, xzr       /* NonSecure ICC*/
-	isb
-
-	mov     x10, #0x1 << 7
-	msr     ICC_PMR_EL1, x10
-	isb
-
 #elif defined(CONFIG_GICV2)
 	/*
 	 * Initialize SGIs and PPIs
 	 * x0: Distributor Base
 	 * x1: Cpu Interface Base
 	 */
+	switch_el x2, 4f, 5f, 5f
+4:
 	mov	w9, #~0			/* Config SGIs and PPIs as Grp1 */
 	str	w9, [x0, GICD_IGROUPRn]	/* GICD_IGROUPR0 */
 	mov	w9, #0x1		/* Enable SGI 0 */
@@ -232,10 +166,8 @@ ENTRY(gic_init_secure_percpu)
 
 	mov	w9, #0x1 << 7		/* Non-Secure access to GICC_PMR */
 	str	w9, [x1, GICC_PMR]
-5:
 #endif
-4:
-exit1:
+5:
 	ret
 ENDPROC(gic_init_secure_percpu)
 

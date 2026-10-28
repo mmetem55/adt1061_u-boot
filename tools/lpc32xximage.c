@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Image manipulator for LPC32XX SoCs
  *
@@ -17,8 +18,6 @@
  * (C) Copyright 2008
  * Marvell Semiconductor <www.marvell.com>
  * Written-by: Prafulla Wadaskar <prafulla@marvell.com>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #include "imagetool.h"
@@ -126,7 +125,7 @@ static void print_hdr_byte(struct nand_page_0_boot_header *hdr, int ofs)
 	printf("header[%d] = %02x\n", ofs, hdr->data[ofs]);
 }
 
-static void lpc32xximage_print_header(const void *ptr)
+static void lpc32xximage_print_header(const void *ptr, struct image_tool_params *params)
 {
 	struct nand_page_0_boot_header *hdr =
 		(struct nand_page_0_boot_header *)ptr;

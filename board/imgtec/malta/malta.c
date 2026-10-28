@@ -1,24 +1,31 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2013 Gabor Juhos <juhosg@openwrt.org>
  * Copyright (C) 2013 Imagination Technologies
- *
- * SPDX-License-Identifier:	GPL-2.0
  */
 
-#include <common.h>
-#include <ide.h>
+#include <config.h>
+#include <fdt_support.h>
+#include <init.h>
+#include <net.h>
 #include <netdev.h>
 #include <pci.h>
 #include <pci_gt64120.h>
 #include <pci_msc01.h>
 #include <rtc.h>
-#include <serial.h>
+#include <asm/global_data.h>
+#include <linux/delay.h>
 
 #include <asm/addrspace.h>
 #include <asm/io.h>
 #include <asm/malta.h>
 
 #include "superio.h"
+
+DECLARE_GLOBAL_DATA_PTR;
+
+#define MALTA_GT_PATH	 "/pci0@1be00000"
+#define MALTA_MSC_PATH	 "/pci0@1bd00000"
 
 enum core_card {
 	CORE_UNKNOWN,
@@ -53,8 +60,9 @@ static void malta_lcd_puts(const char *str)
 static enum core_card malta_core_card(void)
 {
 	u32 corid, rev;
+	const void *reg = (const void *)CKSEG1ADDR(MALTA_REVISION);
 
-	rev = __raw_readl(CKSEG1ADDR(MALTA_REVISION));
+	rev = __raw_readl(reg);
 	corid = (rev & MALTA_REVISION_CORID_MSK) >> MALTA_REVISION_CORID_SHF;
 
 	switch (corid) {
@@ -83,16 +91,18 @@ static enum sys_con malta_sys_con(void)
 	}
 }
 
-phys_size_t initdram(int board_type)
+int dram_init(void)
 {
-	return CONFIG_SYS_MEM_SIZE;
+	gd->ram_size = CFG_SYS_SDRAM_SIZE;
+
+	return 0;
 }
 
 int checkboard(void)
 {
 	enum core_card core;
 
-	malta_lcd_puts("U-boot");
+	malta_lcd_puts("U-Boot");
 	puts("Board: MIPS Malta");
 
 	core = malta_core_card();
@@ -113,10 +123,12 @@ int checkboard(void)
 	return 0;
 }
 
-int board_eth_init(bd_t *bis)
+#if !IS_ENABLED(CONFIG_DM_ETH)
+int board_eth_init(struct bd_info *bis)
 {
 	return pci_eth_init(bis);
 }
+#endif
 
 void _machine_restart(void)
 {
@@ -129,24 +141,26 @@ void _machine_restart(void)
 
 int board_early_init_f(void)
 {
-	void *io_base;
+	ulong io_base;
 
 	/* choose correct PCI I/O base */
 	switch (malta_sys_con()) {
 	case SYSCON_GT64120:
-		io_base = (void *)CKSEG1ADDR(MALTA_GT_PCIIO_BASE);
+		io_base = CKSEG1ADDR(MALTA_GT_PCIIO_BASE);
 		break;
 
 	case SYSCON_MSC01:
-		io_base = (void *)CKSEG1ADDR(MALTA_MSC01_PCIIO_BASE);
+		io_base = CKSEG1ADDR(MALTA_MSC01_PCIIO_BASE);
 		break;
 
 	default:
 		return -1;
 	}
 
+	set_io_port_base(io_base);
+
 	/* setup FDC37M817 super I/O controller */
-	malta_superio_init(io_base);
+	malta_superio_init();
 
 	return 0;
 }
@@ -158,83 +172,72 @@ int misc_init_r(void)
 	return 0;
 }
 
-struct serial_device *default_serial_console(void)
+#if IS_ENABLED(CONFIG_OF_BOARD_FIXUP)
+/*
+ * TODO: currently doesn't work because rw_fdt_blob points to a
+ * NOR flash address. This needs some changes in board_init_f.
+ */
+int board_fix_fdt(void *rw_fdt_blob)
 {
+	int node = -1;
+
 	switch (malta_sys_con()) {
 	case SYSCON_GT64120:
-		return &eserial1_device;
-
+		node =  fdt_path_offset(rw_fdt_blob, MALTA_GT_PATH);
+		break;
 	default:
 	case SYSCON_MSC01:
-		return &eserial2_device;
+		node =  fdt_path_offset(rw_fdt_blob, MALTA_MSC_PATH);
+		break;
 	}
+
+	return fdt_status_okay(rw_fdt_blob, node);
 }
+#endif
 
-void pci_init_board(void)
+int board_early_init_r(void)
 {
-	pci_dev_t bdf;
-	u32 val32;
-	u8 val8;
+	struct udevice *dev;
+	int ret;
 
-	switch (malta_sys_con()) {
-	case SYSCON_GT64120:
-		set_io_port_base(CKSEG1ADDR(MALTA_GT_PCIIO_BASE));
+	pci_init();
 
-		gt64120_pci_init((void *)CKSEG1ADDR(MALTA_GT_BASE),
-				 0x00000000, 0x00000000, CONFIG_SYS_MEM_SIZE,
-				 0x10000000, 0x10000000, 128 * 1024 * 1024,
-				 0x00000000, 0x00000000, 0x20000);
-		break;
-
-	default:
-	case SYSCON_MSC01:
-		set_io_port_base(CKSEG1ADDR(MALTA_MSC01_PCIIO_BASE));
-
-		msc01_pci_init((void *)CKSEG1ADDR(MALTA_MSC01_PCI_BASE),
-			       0x00000000, 0x00000000, CONFIG_SYS_MEM_SIZE,
-			       MALTA_MSC01_PCIMEM_MAP,
-			       CKSEG1ADDR(MALTA_MSC01_PCIMEM_BASE),
-			       MALTA_MSC01_PCIMEM_SIZE, MALTA_MSC01_PCIIO_MAP,
-			       0x00000000, MALTA_MSC01_PCIIO_SIZE);
-		break;
-	}
-
-	bdf = pci_find_device(PCI_VENDOR_ID_INTEL,
-			      PCI_DEVICE_ID_INTEL_82371AB_0, 0);
-	if (bdf == -1)
+	ret = dm_pci_find_device(PCI_VENDOR_ID_INTEL,
+				 PCI_DEVICE_ID_INTEL_82371AB_0, 0, &dev);
+	if (ret)
 		panic("Failed to find PIIX4 PCI bridge\n");
 
 	/* setup PCI interrupt routing */
-	pci_write_config_byte(bdf, PCI_CFG_PIIX4_PIRQRCA, 10);
-	pci_write_config_byte(bdf, PCI_CFG_PIIX4_PIRQRCB, 10);
-	pci_write_config_byte(bdf, PCI_CFG_PIIX4_PIRQRCC, 11);
-	pci_write_config_byte(bdf, PCI_CFG_PIIX4_PIRQRCD, 11);
+	dm_pci_write_config8(dev, PCI_CFG_PIIX4_PIRQRCA, 10);
+	dm_pci_write_config8(dev, PCI_CFG_PIIX4_PIRQRCB, 10);
+	dm_pci_write_config8(dev, PCI_CFG_PIIX4_PIRQRCC, 11);
+	dm_pci_write_config8(dev, PCI_CFG_PIIX4_PIRQRCD, 11);
 
 	/* mux SERIRQ onto SERIRQ pin */
-	pci_read_config_dword(bdf, PCI_CFG_PIIX4_GENCFG, &val32);
-	val32 |= PCI_CFG_PIIX4_GENCFG_SERIRQ;
-	pci_write_config_dword(bdf, PCI_CFG_PIIX4_GENCFG, val32);
+	dm_pci_clrset_config32(dev, PCI_CFG_PIIX4_GENCFG, 0,
+			       PCI_CFG_PIIX4_GENCFG_SERIRQ);
 
 	/* enable SERIRQ - Linux currently depends upon this */
-	pci_read_config_byte(bdf, PCI_CFG_PIIX4_SERIRQC, &val8);
-	val8 |= PCI_CFG_PIIX4_SERIRQC_EN | PCI_CFG_PIIX4_SERIRQC_CONT;
-	pci_write_config_byte(bdf, PCI_CFG_PIIX4_SERIRQC, val8);
+	dm_pci_clrset_config8(dev, PCI_CFG_PIIX4_SERIRQC, 0,
+			      PCI_CFG_PIIX4_SERIRQC_EN | PCI_CFG_PIIX4_SERIRQC_CONT);
 
-	bdf = pci_find_device(PCI_VENDOR_ID_INTEL,
-			      PCI_DEVICE_ID_INTEL_82371AB, 0);
-	if (bdf == -1)
+	ret = dm_pci_find_device(PCI_VENDOR_ID_INTEL,
+				 PCI_DEVICE_ID_INTEL_82371AB, 0, &dev);
+	if (ret)
 		panic("Failed to find PIIX4 IDE controller\n");
 
 	/* enable bus master & IO access */
-	val32 |= PCI_COMMAND_MASTER | PCI_COMMAND_IO;
-	pci_write_config_dword(bdf, PCI_COMMAND, val32);
+	dm_pci_clrset_config32(dev, PCI_COMMAND, 0,
+			       PCI_COMMAND_MASTER | PCI_COMMAND_IO);
 
 	/* set latency */
-	pci_write_config_byte(bdf, PCI_LATENCY_TIMER, 0x40);
+	dm_pci_write_config8(dev, PCI_LATENCY_TIMER, 0x40);
 
 	/* enable IDE/ATA */
-	pci_write_config_dword(bdf, PCI_CFG_PIIX4_IDETIM_PRI,
-			       PCI_CFG_PIIX4_IDETIM_IDE);
-	pci_write_config_dword(bdf, PCI_CFG_PIIX4_IDETIM_SEC,
-			       PCI_CFG_PIIX4_IDETIM_IDE);
+	dm_pci_write_config32(dev, PCI_CFG_PIIX4_IDETIM_PRI,
+			      PCI_CFG_PIIX4_IDETIM_IDE);
+	dm_pci_write_config32(dev, PCI_CFG_PIIX4_IDETIM_SEC,
+			      PCI_CFG_PIIX4_IDETIM_IDE);
+
+	return 0;
 }

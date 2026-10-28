@@ -1,8 +1,13 @@
-#
-#
-# SPDX-License-Identifier:	GPL-2.0+
+# SPDX-License-Identifier: GPL-2.0+
 #
 
-obj-$(CONFIG_FS_FAT)	:= exfat.o
-obj-$(CONFIG_FAT_WRITE):= exfat_write.o
-obj-$(CONFIG_FAT_WRITE)+= exfat_format.o exfat_check.o
+obj-$(CONFIG_FS_EXFAT) += \
+	cluster.o \
+	io.o \
+	lookup.o \
+	mount.o \
+	node.o \
+	repair.o \
+	time.o \
+	utf.o \
+	utils.o

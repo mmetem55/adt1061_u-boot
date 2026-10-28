@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * (C) Copyright 2002
  * Gary Jennejohn, DENX Software Engineering, <garyj@denx.de>
@@ -5,12 +6,10 @@
  * (C) Copyright 2010
  * Texas Instruments, <www.ti.com>
  *	Aneesh V <aneesh@ti.com>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
-MEMORY { .sram : ORIGIN = CONFIG_SPL_TEXT_BASE,\
-		LENGTH = CONFIG_SPL_MAX_SIZE }
+MEMORY { .sram : ORIGIN = IMAGE_TEXT_BASE,\
+		LENGTH = IMAGE_MAX_SIZE }
 MEMORY { .sdram : ORIGIN = CONFIG_SPL_BSS_START_ADDR, \
 		LENGTH = CONFIG_SPL_BSS_MAX_SIZE }
 
@@ -31,14 +30,12 @@ SECTIONS
 	.rodata : { *(SORT_BY_ALIGNMENT(.rodata*)) } >.sram
 
 	. = ALIGN(4);
-	.data : { *(SORT_BY_ALIGNMENT(.data*)) } >.sram
-	. = ALIGN(4);
+	.data : {
+		*(SORT_BY_ALIGNMENT(.data*))
+		. = ALIGN(8);
+	} >.sram
 	__image_copy_end = .;
-
-	.end :
-	{
-		*(.__end)
-	}
+	_end = .;
 
 	.bss :
 	{
@@ -49,3 +46,5 @@ SECTIONS
 		__bss_end = .;
 	} >.sdram
 }
+
+ASSERT(_end % 8 == 0, "_end must be 8-byte aligned for device tree");

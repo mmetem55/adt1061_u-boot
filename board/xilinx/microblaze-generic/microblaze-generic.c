@@ -1,161 +1,78 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
- * (C) Copyright 2007 Michal Simek
+ * (C) Copyright 2007-2018 Michal Simek
  *
- * Michal  SIMEK <monstr@monstr.eu>
- *
- * SPDX-License-Identifier:	GPL-2.0+
+ * Michal SIMEK <monstr@monstr.eu>
  */
 
-/* This is a board specific file.  It's OK to include board specific
- * header files */
+/*
+ * This is a board specific file.  It's OK to include board specific
+ * header files
+ */
 
-#include <common.h>
 #include <config.h>
+#include <env.h>
+#include <init.h>
+#include <log.h>
+#include <asm/global_data.h>
+#include <dm/lists.h>
 #include <fdtdec.h>
-#include <netdev.h>
-#include <asm/processor.h>
-#include <asm/microblaze_intc.h>
-#include <asm/asm.h>
-#include <asm/gpio.h>
+#include <linux/sizes.h>
+#include "../common/board.h"
 
 DECLARE_GLOBAL_DATA_PTR;
 
-#ifdef CONFIG_XILINX_GPIO
-static int reset_pin = -1;
-#endif
-
-#ifdef CONFIG_OF_CONTROL
-ulong ram_base;
-
-void dram_init_banksize(void)
+int dram_init_banksize(void)
 {
-	gd->bd->bi_dram[0].start = ram_base;
-	gd->bd->bi_dram[0].size = get_effective_memsize();
+	return fdtdec_setup_memory_banksize();
 }
 
 int dram_init(void)
 {
-	int node;
-	fdt_addr_t addr;
-	fdt_size_t size;
-	const void *blob = gd->fdt_blob;
-
-	node = fdt_node_offset_by_prop_value(blob, -1, "device_type",
-					     "memory", 7);
-	if (node == -FDT_ERR_NOTFOUND) {
-		debug("DRAM: Can't get memory node\n");
-		return 1;
-	}
-	addr = fdtdec_get_addr_size(blob, node, "reg", &size);
-	if (addr == FDT_ADDR_T_NONE || size == 0) {
-		debug("DRAM: Can't get base address or size\n");
-		return 1;
-	}
-	ram_base = addr;
-
-	gd->ram_top = addr; /* In setup_dest_addr() is done +ram_size */
-	gd->ram_size = size;
+	if (fdtdec_setup_mem_size_base() != 0)
+		return -EINVAL;
 
 	return 0;
 };
-#else
-int dram_init(void)
+
+int board_late_init(void)
 {
-	gd->ram_size = CONFIG_SYS_SDRAM_SIZE;
+	ulong max_size;
+	u32 status = 0;
 
-	return 0;
-}
+#if !defined(CONFIG_XPL_BUILD) && defined(CONFIG_SYSRESET_MICROBLAZE)
+	int ret;
+
+	ret = device_bind_driver(gd->dm_root, "mb_soft_reset",
+				 "reset_soft", NULL);
+	if (ret)
+		printf("Warning: No reset driver: ret=%d\n", ret);
 #endif
 
-int do_reset(cmd_tbl_t *cmdtp, int flag, int argc, char * const argv[])
-{
-#ifdef CONFIG_XILINX_GPIO
-	if (reset_pin != -1)
-		gpio_direction_output(reset_pin, 1);
-#endif
+	if (!(gd->flags & GD_FLG_ENV_DEFAULT)) {
+		debug("Saved variables - Skipping\n");
+		return 0;
+	}
 
-#ifdef CONFIG_XILINX_TB_WATCHDOG
-	hw_watchdog_disable();
-#endif
+	max_size = gd->start_addr_sp - CONFIG_STACK_SIZE;
+	max_size = round_down(max_size, SZ_16M);
 
-	puts ("Reseting board\n");
-	__asm__ __volatile__ ("	mts rmsr, r0;" \
-				"bra r0");
+	status |= env_set_hex("scriptaddr", (max_size - gd->ram_base) + SZ_2M);
 
-	return 0;
-}
+	status |= env_set_hex("pxefile_addr_r", max_size + SZ_1M);
 
-int gpio_init (void)
-{
-#ifdef CONFIG_XILINX_GPIO
-	reset_pin = gpio_alloc(CONFIG_SYS_GPIO_0_ADDR, "reset", 1);
-	if (reset_pin != -1)
-		gpio_request(reset_pin, "reset_pin");
-#endif
-	return 0;
-}
+	status |= env_set_hex("kernel_addr_r", gd->ram_base + SZ_32M);
 
-void board_init(void)
-{
-	gpio_init();
-}
+	status |= env_set_hex("fdt_addr_r", gd->ram_base + SZ_32M - SZ_1M);
 
-int board_eth_init(bd_t *bis)
-{
-	int ret = 0;
+	status |= env_set_hex("ramdisk_addr_r",
+			       gd->ram_base + SZ_32M + SZ_4M + SZ_2M);
+	if (IS_ENABLED(CONFIG_MTD_NOR_FLASH))
+		status |= env_set_hex("script_offset_nor",
+				       gd->bd->bi_flashstart +
+				       CONFIG_BOOT_SCRIPT_OFFSET);
+	if (status)
+		printf("%s: Saving run time variables FAILED\n", __func__);
 
-#ifdef CONFIG_XILINX_AXIEMAC
-	ret |= xilinx_axiemac_initialize(bis, XILINX_AXIEMAC_BASEADDR,
-						XILINX_AXIDMA_BASEADDR);
-#endif
-
-#if defined(CONFIG_XILINX_EMACLITE) && defined(XILINX_EMACLITE_BASEADDR)
-	u32 txpp = 0;
-	u32 rxpp = 0;
-# ifdef CONFIG_XILINX_EMACLITE_TX_PING_PONG
-	txpp = 1;
-# endif
-# ifdef CONFIG_XILINX_EMACLITE_RX_PING_PONG
-	rxpp = 1;
-# endif
-	ret |= xilinx_emaclite_initialize(bis, XILINX_EMACLITE_BASEADDR,
-			txpp, rxpp);
-#endif
-
-#ifdef CONFIG_XILINX_LL_TEMAC
-# ifdef XILINX_LLTEMAC_BASEADDR
-#  ifdef XILINX_LLTEMAC_FIFO_BASEADDR
-	ret |= xilinx_ll_temac_eth_init(bis, XILINX_LLTEMAC_BASEADDR,
-			XILINX_LL_TEMAC_M_FIFO, XILINX_LLTEMAC_FIFO_BASEADDR);
-#  elif XILINX_LLTEMAC_SDMA_CTRL_BASEADDR
-#   if XILINX_LLTEMAC_SDMA_USE_DCR == 1
-	ret |= xilinx_ll_temac_eth_init(bis, XILINX_LLTEMAC_BASEADDR,
-			XILINX_LL_TEMAC_M_SDMA_DCR,
-			XILINX_LLTEMAC_SDMA_CTRL_BASEADDR);
-#   else
-	ret |= xilinx_ll_temac_eth_init(bis, XILINX_LLTEMAC_BASEADDR,
-			XILINX_LL_TEMAC_M_SDMA_PLB,
-			XILINX_LLTEMAC_SDMA_CTRL_BASEADDR);
-#   endif
-#  endif
-# endif
-# ifdef XILINX_LLTEMAC_BASEADDR1
-#  ifdef XILINX_LLTEMAC_FIFO_BASEADDR1
-	ret |= xilinx_ll_temac_eth_init(bis, XILINX_LLTEMAC_BASEADDR1,
-			XILINX_LL_TEMAC_M_FIFO, XILINX_LLTEMAC_FIFO_BASEADDR1);
-#  elif XILINX_LLTEMAC_SDMA_CTRL_BASEADDR1
-#   if XILINX_LLTEMAC_SDMA_USE_DCR == 1
-	ret |= xilinx_ll_temac_eth_init(bis, XILINX_LLTEMAC_BASEADDR1,
-			XILINX_LL_TEMAC_M_SDMA_DCR,
-			XILINX_LLTEMAC_SDMA_CTRL_BASEADDR1);
-#   else
-	ret |= xilinx_ll_temac_eth_init(bis, XILINX_LLTEMAC_BASEADDR1,
-			XILINX_LL_TEMAC_M_SDMA_PLB,
-			XILINX_LLTEMAC_SDMA_CTRL_BASEADDR1);
-#   endif
-#  endif
-# endif
-#endif
-
-	return ret;
+	return board_late_init_xilinx();
 }

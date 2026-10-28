@@ -1,7 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * Copyright (C) 2013-2015 Synopsys, Inc. All rights reserved.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #include <linux/linkage.h>
@@ -77,13 +76,8 @@
 .endm
 
 .macro SAVE_EXCEPTION_SOURCE
-#ifdef CONFIG_MMU
-	/* If MMU exists exception faulting address is loaded in EFA reg */
-	lr	%r0, [%efa]
-#else
 	/* Otherwise in ERET (exception return) reg */
 	lr	%r0, [%eret]
-#endif
 .endm
 
 ENTRY(memory_error)
@@ -149,3 +143,31 @@ ENTRY(EV_Extension)
 	mov	%r0, %sp
 	j	do_extension
 ENDPROC(EV_Extension)
+
+#ifdef CONFIG_ISA_ARCV2
+ENTRY(EV_SWI)
+	SAVE_ALL_SYS
+	mov	%r0, %sp
+	j	do_swi
+ENDPROC(EV_SWI)
+
+ENTRY(EV_DivZero)
+	SAVE_ALL_SYS
+	SAVE_EXCEPTION_SOURCE
+	mov	%r1, %sp
+	j	do_divzero
+ENDPROC(EV_DivZero)
+
+ENTRY(EV_DCError)
+	SAVE_ALL_SYS
+	mov	%r0, %sp
+	j	do_dcerror
+ENDPROC(EV_DCError)
+
+ENTRY(EV_Maligned)
+	SAVE_ALL_SYS
+	SAVE_EXCEPTION_SOURCE
+	mov	%r1, %sp
+	j	do_maligned
+ENDPROC(EV_Maligned)
+#endif

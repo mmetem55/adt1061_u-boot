@@ -1,16 +1,16 @@
+// SPDX-License-Identifier: GPL-2.0
 /**
  * samsung_usb_phy.c - DesignWare USB3 (DWC3) PHY handling file
  *
  * Copyright (C) 2015 Samsung Electronics
  *
  * Author: Joonyoung Shim <jy0922.shim@samsung.com>
- *
- * SPDX-License-Identifier:     GPL-2.0
  */
 
-#include <common.h>
+#include <asm/io.h>
 #include <asm/arch/power.h>
 #include <asm/arch/xhci-exynos.h>
+#include <linux/delay.h>
 
 void exynos5_usb3_phy_init(struct exynos_usb3_phy *phy)
 {
@@ -25,7 +25,6 @@ void exynos5_usb3_phy_init(struct exynos_usb3_phy *phy)
 			/* Set Loss-of-Signal Detector sensitivity */
 			PHYPARAM0_REF_LOSLEVEL_MASK);
 	setbits_le32(&phy->phy_param0, PHYPARAM0_REF_LOSLEVEL);
-
 
 	writel(0x0, &phy->phy_resume);
 

@@ -1,8 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  *  GRUB  --  GRand Unified Bootloader
  *  Copyright (C) 1999,2000,2001,2002,2003,2004  Free Software Foundation, Inc.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 /*
  * Copyright (c) 2007, 2011, Oracle and/or its affiliates. All rights reserved.
@@ -11,11 +10,11 @@
 #ifndef	GRUB_ZFS_HEADER
 #define	GRUB_ZFS_HEADER 1
 
-
 /*
  * On-disk version number.
  */
 #define	SPA_VERSION			28ULL
+#define	FEATURES_SUPPORTED_SPA_VERSION	5000ULL
 
 /*
  * The following are configuration names used in the nvlist describing a pool's

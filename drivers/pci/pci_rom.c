@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2014 Google, Inc
  *
@@ -19,40 +20,47 @@
  * David Mosberger-Tang
  *
  * Copyright 1997 -- 1999 Martin Mares <mj@atrey.karlin.mff.cuni.cz>
-
- * SPDX-License-Identifier:	GPL-2.0
  */
 
-#include <common.h>
+#define LOG_CATEGORY UCLASS_PCI
+
 #include <bios_emul.h>
+#include <bloblist.h>
+#include <bootstage.h>
+#include <dm.h>
 #include <errno.h>
+#include <init.h>
+#include <log.h>
 #include <malloc.h>
 #include <pci.h>
 #include <pci_rom.h>
-#include <vbe.h>
-#include <video_fb.h>
+#include <spl.h>
+#include <time.h>
+#include <vesa.h>
+#include <video.h>
+#include <acpi/acpi_s3.h>
+#include <asm/global_data.h>
+#include <linux/screen_info.h>
 
-#ifdef CONFIG_HAVE_ACPI_RESUME
-#include <asm/acpi.h>
+DECLARE_GLOBAL_DATA_PTR;
+
+__weak bool board_should_run_oprom(struct udevice *dev)
+{
+#if defined(CONFIG_X86) && defined(CONFIG_HAVE_ACPI_RESUME)
+	if (gd->arch.prev_sleep_state == ACPI_S3) {
+		if (IS_ENABLED(CONFIG_S3_VGA_ROM_RUN))
+			return true;
+		else
+			return false;
+	}
 #endif
 
-__weak bool board_should_run_oprom(pci_dev_t dev)
-{
 	return true;
 }
 
-static bool should_load_oprom(pci_dev_t dev)
+__weak bool board_should_load_oprom(struct udevice *dev)
 {
-#ifdef CONFIG_HAVE_ACPI_RESUME
-	if (acpi_get_slp_type() == 3)
-		return false;
-#endif
-	if (IS_ENABLED(CONFIG_ALWAYS_LOAD_OPROM))
-		return 1;
-	if (board_should_run_oprom(dev))
-		return 1;
-
-	return 0;
+	return true;
 }
 
 __weak uint32_t board_map_oprom_vendev(uint32_t vendev)
@@ -60,43 +68,36 @@ __weak uint32_t board_map_oprom_vendev(uint32_t vendev)
 	return vendev;
 }
 
-static int pci_rom_probe(pci_dev_t dev, uint class,
-			 struct pci_rom_header **hdrp)
+static int pci_rom_probe(struct udevice *dev, struct pci_rom_header **hdrp)
 {
+	struct pci_child_plat *pplat = dev_get_parent_plat(dev);
 	struct pci_rom_header *rom_header;
 	struct pci_rom_data *rom_data;
-	u16 vendor, device;
 	u16 rom_vendor, rom_device;
 	u32 rom_class;
 	u32 vendev;
 	u32 mapped_vendev;
 	u32 rom_address;
 
-	pci_read_config_word(dev, PCI_VENDOR_ID, &vendor);
-	pci_read_config_word(dev, PCI_DEVICE_ID, &device);
-	vendev = vendor << 16 | device;
+	vendev = pplat->vendor << 16 | pplat->device;
 	mapped_vendev = board_map_oprom_vendev(vendev);
 	if (vendev != mapped_vendev)
 		debug("Device ID mapped to %#08x\n", mapped_vendev);
 
-#ifdef CONFIG_X86_OPTION_ROM_ADDR
-	rom_address = CONFIG_X86_OPTION_ROM_ADDR;
+#ifdef CONFIG_VGA_BIOS_ADDR
+	rom_address = CONFIG_VGA_BIOS_ADDR;
 #else
 
-	if (pciauto_setup_rom(pci_bus_to_hose(PCI_BUS(dev)), dev)) {
-		debug("Cannot find option ROM\n");
-		return -ENOENT;
-	}
-
-	pci_read_config_dword(dev, PCI_ROM_ADDRESS, &rom_address);
+	dm_pci_read_config32(dev, PCI_ROM_ADDRESS, &rom_address);
 	if (rom_address == 0x00000000 || rom_address == 0xffffffff) {
 		debug("%s: rom_address=%x\n", __func__, rom_address);
 		return -ENOENT;
 	}
+	rom_address &= PCI_ROM_ADDRESS_MASK;
 
 	/* Enable expansion ROM address decoding. */
-	pci_write_config_dword(dev, PCI_ROM_ADDRESS,
-			       rom_address | PCI_ROM_ADDRESS_ENABLE);
+	dm_pci_write_config32(dev, PCI_ROM_ADDRESS,
+			      rom_address | PCI_ROM_ADDRESS_ENABLE);
 #endif
 	debug("Option ROM address %x\n", rom_address);
 	rom_header = (struct pci_rom_header *)(unsigned long)rom_address;
@@ -108,6 +109,10 @@ static int pci_rom_probe(pci_dev_t dev, uint class,
 	if (le16_to_cpu(rom_header->signature) != PCI_ROM_HDR) {
 		printf("Incorrect expansion ROM header signature %04x\n",
 		       le16_to_cpu(rom_header->signature));
+#ifndef CONFIG_VGA_BIOS_ADDR
+		/* Disable expansion ROM address decoding */
+		dm_pci_write_config32(dev, PCI_ROM_ADDRESS, rom_address);
+#endif
 		return -EINVAL;
 	}
 
@@ -119,7 +124,7 @@ static int pci_rom_probe(pci_dev_t dev, uint class,
 	      rom_vendor, rom_device);
 
 	/* If the device id is mapped, a mismatch is expected */
-	if ((vendor != rom_vendor || device != rom_device) &&
+	if ((pplat->vendor != rom_vendor || pplat->device != rom_device) &&
 	    (vendev == mapped_vendev)) {
 		printf("ID mismatch: vendor ID %04x, device ID %04x\n",
 		       rom_vendor, rom_device);
@@ -130,23 +135,35 @@ static int pci_rom_probe(pci_dev_t dev, uint class,
 	debug("PCI ROM image, Class Code %06x, Code Type %02x\n",
 	      rom_class, rom_data->type);
 
-	if (class != rom_class) {
+	if (pplat->class != rom_class) {
 		debug("Class Code mismatch ROM %06x, dev %06x\n",
-		      rom_class, class);
+		      rom_class, pplat->class);
 	}
 	*hdrp = rom_header;
 
 	return 0;
 }
 
-int pci_rom_load(struct pci_rom_header *rom_header,
-		 struct pci_rom_header **ram_headerp)
+/**
+ * pci_rom_load() - Load a ROM image and return a pointer to it
+ *
+ * @rom_header:		Pointer to ROM image
+ * @ram_headerp:	Returns a pointer to the image in RAM
+ * @allocedp:		Returns true if @ram_headerp was allocated and needs
+ *			to be freed
+ * Return: 0 if OK, -ve on error. Note that @allocedp is set up regardless of
+ * the error state. Even if this function returns an error, it may have
+ * allocated memory.
+ */
+static int pci_rom_load(struct pci_rom_header *rom_header,
+			struct pci_rom_header **ram_headerp, bool *allocedp)
 {
 	struct pci_rom_data *rom_data;
 	unsigned int rom_size;
 	unsigned int image_size = 0;
 	void *target;
 
+	*allocedp = false;
 	do {
 		/* Get next image, until we see an x86 version */
 		rom_header = (struct pci_rom_header *)((void *)rom_header +
@@ -169,6 +186,7 @@ int pci_rom_load(struct pci_rom_header *rom_header,
 	target = (void *)malloc(rom_size);
 	if (!target)
 		return -ENOMEM;
+	*allocedp = true;
 #endif
 	if (target != rom_header) {
 		ulong start = get_timer(0);
@@ -187,84 +205,76 @@ int pci_rom_load(struct pci_rom_header *rom_header,
 	return 0;
 }
 
-static struct vbe_mode_info mode_info;
+struct vesa_state mode_info;
 
-int vbe_get_video_info(struct graphic_device *gdev)
+void setup_video(struct screen_info *screen_info)
 {
-#ifdef CONFIG_FRAMEBUFFER_SET_VESA_MODE
 	struct vesa_mode_info *vesa = &mode_info.vesa;
 
-	gdev->winSizeX = vesa->x_resolution;
-	gdev->winSizeY = vesa->y_resolution;
+	/* Sanity test on VESA parameters */
+	if (!vesa->x_resolution || !vesa->y_resolution)
+		return;
 
-	gdev->plnSizeX = vesa->x_resolution;
-	gdev->plnSizeY = vesa->y_resolution;
+	screen_info->orig_video_isVGA = VIDEO_TYPE_VLFB;
 
-	gdev->gdfBytesPP = vesa->bits_per_pixel / 8;
-
-	switch (vesa->bits_per_pixel) {
-	case 24:
-		gdev->gdfIndex = GDF_32BIT_X888RGB;
-		break;
-	case 16:
-		gdev->gdfIndex = GDF_16BIT_565RGB;
-		break;
-	default:
-		gdev->gdfIndex = GDF__8BIT_INDEX;
-		break;
-	}
-
-	gdev->isaBase = CONFIG_SYS_ISA_IO_BASE_ADDRESS;
-	gdev->pciBase = vesa->phys_base_ptr;
-
-	gdev->frameAdrs = vesa->phys_base_ptr;
-	gdev->memSize = vesa->bytes_per_scanline * vesa->y_resolution;
-
-	gdev->vprBase = vesa->phys_base_ptr;
-	gdev->cprBase = vesa->phys_base_ptr;
-
-	return gdev->winSizeX ? 0 : -ENOSYS;
-#else
-	return -ENOSYS;
-#endif
+	screen_info->lfb_width = vesa->x_resolution;
+	screen_info->lfb_height = vesa->y_resolution;
+	screen_info->lfb_depth = vesa->bits_per_pixel;
+	screen_info->lfb_linelength = vesa->bytes_per_scanline;
+	screen_info->lfb_base = vesa->phys_base_ptr;
+	screen_info->lfb_size =
+		ALIGN(screen_info->lfb_linelength * screen_info->lfb_height,
+		      65536);
+	screen_info->lfb_size >>= 16;
+	screen_info->red_size = vesa->red_mask_size;
+	screen_info->red_pos = vesa->red_mask_pos;
+	screen_info->green_size = vesa->green_mask_size;
+	screen_info->green_pos = vesa->green_mask_pos;
+	screen_info->blue_size = vesa->blue_mask_size;
+	screen_info->blue_pos = vesa->blue_mask_pos;
+	screen_info->rsvd_size = vesa->reserved_mask_size;
+	screen_info->rsvd_pos = vesa->reserved_mask_pos;
 }
 
-int pci_run_vga_bios(pci_dev_t dev, int (*int15_handler)(void), int exec_method)
+int dm_pci_run_vga_bios(struct udevice *dev, int (*int15_handler)(void),
+			int exec_method)
 {
-	struct pci_rom_header *rom, *ram;
+	struct pci_child_plat *pplat = dev_get_parent_plat(dev);
+	struct pci_rom_header *rom = NULL, *ram = NULL;
 	int vesa_mode = -1;
-	uint class;
-	bool emulate;
+	bool emulate, alloced;
 	int ret;
 
 	/* Only execute VGA ROMs */
-	pci_read_config_dword(dev, PCI_REVISION_ID, &class);
-	if (((class >> 16) ^ PCI_CLASS_DISPLAY_VGA) & 0xff00) {
-		debug("%s: Class %#x, should be %#x\n", __func__, class,
+	if (((pplat->class >> 8) ^ PCI_CLASS_DISPLAY_VGA) & 0xff00) {
+		debug("%s: Class %#x, should be %#x\n", __func__, pplat->class,
 		      PCI_CLASS_DISPLAY_VGA);
 		return -ENODEV;
 	}
-	class >>= 8;
 
-	if (!should_load_oprom(dev))
-		return -ENXIO;
+	if (!board_should_load_oprom(dev))
+		return log_msg_ret("Should not load OPROM", -ENXIO);
 
-	ret = pci_rom_probe(dev, class, &rom);
+	ret = pci_rom_probe(dev, &rom);
 	if (ret)
-		return ret;
+		return log_msg_ret("pro", ret);
 
-	ret = pci_rom_load(rom, &ram);
-	if (ret)
-		return ret;
+	ret = pci_rom_load(rom, &ram, &alloced);
+	if (ret) {
+		ret = log_msg_ret("ld", ret);
+		goto err;
+	}
 
-	if (!board_should_run_oprom(dev))
-		return -ENXIO;
+	if (!board_should_run_oprom(dev)) {
+		ret = log_msg_ret("run", -ENXIO);
+		goto err;
+	}
 
 #if defined(CONFIG_FRAMEBUFFER_SET_VESA_MODE) && \
 		defined(CONFIG_FRAMEBUFFER_VESA_MODE)
 	vesa_mode = CONFIG_FRAMEBUFFER_VESA_MODE;
 #endif
-	debug("Selected vesa mode %#x\n", vesa_mode);
+	debug("Selected vesa mode 0x%x\n", vesa_mode);
 
 	if (exec_method & PCI_ROM_USE_NATIVE) {
 #ifdef CONFIG_X86
@@ -272,7 +282,8 @@ int pci_run_vga_bios(pci_dev_t dev, int (*int15_handler)(void), int exec_method)
 #else
 		if (!(exec_method & PCI_ROM_ALLOW_FALLBACK)) {
 			printf("BIOS native execution is only available on x86\n");
-			return -ENOSYS;
+			ret = -ENOSYS;
+			goto err;
 		}
 		emulate = true;
 #endif
@@ -282,34 +293,155 @@ int pci_run_vga_bios(pci_dev_t dev, int (*int15_handler)(void), int exec_method)
 #else
 		if (!(exec_method & PCI_ROM_ALLOW_FALLBACK)) {
 			printf("BIOS emulation not available - see CONFIG_BIOSEMU\n");
-			return -ENOSYS;
+			ret = -ENOSYS;
+			goto err;
 		}
 		emulate = false;
 #endif
 	}
 
 	if (emulate) {
-#ifdef CONFIG_BIOSEMU
-		BE_VGAInfo *info;
+		if (CONFIG_IS_ENABLED(BIOSEMU)) {
+			BE_VGAInfo *info;
 
-		ret = biosemu_setup(dev, &info);
-		if (ret)
-			return ret;
-		biosemu_set_interrupt_handler(0x15, int15_handler);
-		ret = biosemu_run(dev, (uchar *)ram, 1 << 16, info, true,
-				  vesa_mode, &mode_info);
-		if (ret)
-			return ret;
-#endif
+			log_debug("Running video BIOS with emulator...");
+			ret = biosemu_setup(dev, &info);
+			if (ret)
+				goto err;
+			biosemu_set_interrupt_handler(0x15, int15_handler);
+			ret = biosemu_run(dev, (uchar *)ram, 1 << 16, info,
+					  true, vesa_mode, &mode_info);
+			log_debug("done\n");
+			if (ret)
+				goto err;
+		}
 	} else {
-#ifdef CONFIG_X86
+#if defined(CONFIG_X86) && (CONFIG_IS_ENABLED(X86_32BIT_INIT) || CONFIG_TPL)
+		log_debug("Running video BIOS...");
 		bios_set_interrupt_handler(0x15, int15_handler);
 
 		bios_run_on_x86(dev, (unsigned long)ram, vesa_mode,
 				&mode_info);
+		log_debug("done\n");
 #endif
 	}
-	debug("Final vesa mode %#x\n", mode_info.video_mode);
+	debug("Final vesa mode %x\n", mode_info.video_mode);
+	ret = 0;
+
+err:
+	if (alloced)
+		free(ram);
+	return ret;
+}
+
+int vesa_setup_video_priv(struct vesa_mode_info *vesa, u64 fb,
+			  struct video_priv *uc_priv,
+			  struct video_uc_plat *plat)
+{
+	if (!vesa->x_resolution)
+		return log_msg_ret("No x resolution", -ENXIO);
+	uc_priv->xsize = vesa->x_resolution;
+	uc_priv->ysize = vesa->y_resolution;
+	uc_priv->line_length = vesa->bytes_per_scanline;
+	switch (vesa->bits_per_pixel) {
+	case 32:
+	case 24:
+		uc_priv->bpix = VIDEO_BPP32;
+		uc_priv->format = VIDEO_X8B8G8R8;
+		break;
+	case 16:
+		uc_priv->bpix = VIDEO_BPP16;
+		break;
+	default:
+		return -EPROTONOSUPPORT;
+	}
+
+	/* Use double buffering if enabled */
+	if (IS_ENABLED(CONFIG_VIDEO_COPY) && plat->base)
+		plat->copy_base = fb;
+	else
+		plat->base = fb;
+	log_debug("base = %lx, copy_base = %lx\n", plat->base, plat->copy_base);
+	plat->size = vesa->bytes_per_scanline * vesa->y_resolution;
+
+	return 0;
+}
+
+int vesa_setup_video(struct udevice *dev, int (*int15_handler)(void))
+{
+	struct video_uc_plat *plat = dev_get_uclass_plat(dev);
+	struct video_priv *uc_priv = dev_get_uclass_priv(dev);
+	int ret;
+
+	/* If we are running from EFI or coreboot, this can't work */
+	if (!ll_boot_init()) {
+		printf("Not available (previous bootloader prevents it)\n");
+		return -EPERM;
+	}
+
+	/* In U-Boot proper, collect the information added by SPL (see below) */
+	if (IS_ENABLED(CONFIG_SPL_VIDEO) && xpl_phase() > PHASE_SPL &&
+	    CONFIG_IS_ENABLED(BLOBLIST)) {
+		struct video_handoff *ho;
+
+		ho = bloblist_find(BLOBLISTT_U_BOOT_VIDEO, sizeof(*ho));
+		if (!ho)
+			return log_msg_ret("blf", -ENOENT);
+		plat->base = ho->fb;
+		plat->size = ho->size;
+		uc_priv->xsize = ho->xsize;
+		uc_priv->ysize = ho->ysize;
+		uc_priv->line_length = ho->line_length;
+		uc_priv->bpix = ho->bpix;
+		uc_priv->format = ho->format;
+	} else {
+		bootstage_start(BOOTSTAGE_ID_ACCUM_LCD, "vesa display");
+		ret = dm_pci_run_vga_bios(dev, int15_handler,
+					  PCI_ROM_USE_NATIVE |
+					  PCI_ROM_ALLOW_FALLBACK);
+		bootstage_accum(BOOTSTAGE_ID_ACCUM_LCD);
+		if (ret) {
+			debug("failed to run video BIOS: %d\n", ret);
+			return ret;
+		}
+
+		ret = vesa_setup_video_priv(&mode_info.vesa,
+					    mode_info.vesa.phys_base_ptr,
+					    uc_priv, plat);
+		if (ret) {
+			if (ret == -ENFILE) {
+				/*
+				 * See video-uclass.c for how to set up reserved
+				 * memory in your video driver
+				 */
+				log_err("CONFIG_VIDEO_COPY enabled but driver '%s' set up no reserved memory\n",
+					dev->driver->name);
+			}
+
+			debug("No video mode configured\n");
+			return ret;
+		}
+	}
+
+	printf("Video: %dx%dx%d\n", uc_priv->xsize, uc_priv->ysize,
+	       mode_info.vesa.bits_per_pixel);
+
+	/* In SPL, store the information for use by U-Boot proper */
+	if (xpl_phase() == PHASE_SPL && CONFIG_IS_ENABLED(BLOBLIST)) {
+		struct video_handoff *ho;
+
+		ho = bloblist_add(BLOBLISTT_U_BOOT_VIDEO, sizeof(*ho), 0);
+		if (!ho)
+			return log_msg_ret("blc", -ENOMEM);
+
+		ho->fb = plat->base;
+		ho->size = plat->size;
+		ho->xsize = uc_priv->xsize;
+		ho->ysize = uc_priv->ysize;
+		ho->line_length = uc_priv->line_length;
+		ho->bpix = uc_priv->bpix;
+		ho->format = uc_priv->format;
+	}
 
 	return 0;
 }

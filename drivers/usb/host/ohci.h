@@ -10,21 +10,25 @@
 /*
  * e.g. PCI controllers need this
  */
+
+#include <asm/cache.h>
+#include <asm/io.h>
+
 #ifdef CONFIG_SYS_OHCI_SWAP_REG_ACCESS
-# define ohci_readl(a) __swap_32(*((volatile u32 *)(a)))
-# define ohci_writel(a, b) (*((volatile u32 *)(b)) = __swap_32((volatile u32)a))
+# define ohci_readl(a) __swap_32(in_be32((u32 *)a))
+# define ohci_writel(a, b) out_be32((u32 *)b, __swap_32(a))
 #else
-# define ohci_readl(a) (*((volatile u32 *)(a)))
-# define ohci_writel(a, b) (*((volatile u32 *)(b)) = ((volatile u32)a))
+# define ohci_readl(a) readl(a)
+# define ohci_writel(v, a) writel(v, a)
 #endif /* CONFIG_SYS_OHCI_SWAP_REG_ACCESS */
 
-#if defined CONFIG_DM_USB && ARCH_DMA_MINALIGN > 16
+#if ARCH_DMA_MINALIGN > 16
 #define ED_ALIGNMENT ARCH_DMA_MINALIGN
 #else
 #define ED_ALIGNMENT 16
 #endif
 
-#if defined CONFIG_DM_USB && ARCH_DMA_MINALIGN > 32
+#if CONFIG_IS_ENABLED(DM_USB) && ARCH_DMA_MINALIGN > 32
 #define TD_ALIGNMENT ARCH_DMA_MINALIGN
 #else
 #define TD_ALIGNMENT 32
@@ -67,7 +71,6 @@ struct ed {
 } __attribute__((aligned(ED_ALIGNMENT)));
 typedef struct ed ed_t;
 
-
 /* TD info field */
 #define TD_CC	    0xf0000000
 #define TD_CC_GET(td_p) ((td_p >>28) & 0x0f)
@@ -103,7 +106,6 @@ typedef struct ed ed_t;
 #define TD_BUFFERUNDERRUN  0x0D
 #define TD_NOTACCESSED	   0x0F
 
-
 #define MAXPSW 1
 
 struct td {
@@ -112,9 +114,7 @@ struct td {
 	__u32 hwNextTD;		/* Next TD Pointer */
 	__u32 hwBE;		/* Memory Buffer End Pointer */
 
-/* #ifndef CONFIG_MPC5200 /\* this seems wrong *\/ */
 	__u16 hwPSW[MAXPSW];
-/* #endif */
 	__u8 unused;
 	__u8 index;
 	struct ed *ed;
@@ -138,24 +138,11 @@ typedef struct td td_t;
 #define NUM_INTS 32	/* part of the OHCI standard */
 struct ohci_hcca {
 	__u32	int_table[NUM_INTS];	/* Interrupt ED table */
-#if defined(CONFIG_MPC5200)
-	__u16	pad1;			/* set to 0 on each frame_no change */
-	__u16	frame_no;		/* current frame number */
-#else
 	__u16	frame_no;		/* current frame number */
 	__u16	pad1;			/* set to 0 on each frame_no change */
-#endif
 	__u32	done_head;		/* info returned for an interrupt */
 	u8		reserved_for_hc[116];
 } __attribute__((aligned(256)));
-
-
-/*
- * Maximum number of root hub ports.
- */
-#ifndef CONFIG_SYS_USB_OHCI_MAX_ROOT_PORTS
-# error "CONFIG_SYS_USB_OHCI_MAX_ROOT_PORTS undefined!"
-#endif
 
 /*
  * This is the structure of the OHCI controller's memory mapped I/O
@@ -189,7 +176,7 @@ struct ohci_regs {
 		__u32	a;
 		__u32	b;
 		__u32	status;
-		__u32	portstatus[CONFIG_SYS_USB_OHCI_MAX_ROOT_PORTS];
+		__u32	portstatus[];
 	} roothub;
 } __attribute__((aligned(32)));
 
@@ -243,7 +230,6 @@ struct ohci_regs {
 #define OHCI_INTR_OC	(1 << 30)	/* ownership change */
 #define OHCI_INTR_MIE	(1 << 31)	/* master interrupt enable */
 
-
 /* Virtual Root HUB */
 struct virt_root_hub {
 	int devnum; /* Address of Root Hub endpoint */
@@ -279,7 +265,6 @@ struct virt_root_hub {
 /* Our Vendor Specific Request */
 #define RH_SET_EP		0x2000
 
-
 /* Hub port features */
 #define RH_PORT_CONNECTION	   0x00
 #define RH_PORT_ENABLE		   0x01
@@ -305,7 +290,6 @@ struct virt_root_hub {
 #define RH_ACK			   0x01
 #define RH_REQ_ERR		   -1
 #define RH_NACK			   0x00
-
 
 /* OHCI ROOT HUB REGISTER MASKS */
 
@@ -363,7 +347,7 @@ typedef struct
 } urb_priv_t;
 #define URB_DEL 1
 
-#define NUM_EDS 8		/* num of preallocated endpoint descriptors */
+#define NUM_EDS 32		/* num of preallocated endpoint descriptors */
 
 #define NUM_TD 64		/* we need more TDs than EDs */
 
@@ -382,7 +366,6 @@ typedef struct ohci_device {
  * Note how the "proper" USB information is just
  * a subset of what the full implementation needs. (Linus)
  */
-
 
 typedef struct ohci {
 	/* this allocates EDs for all possible endpoints */
@@ -410,7 +393,7 @@ typedef struct ohci {
 	const char	*slot_name;
 } ohci_t;
 
-#ifdef CONFIG_DM_USB
+#if CONFIG_IS_ENABLED(DM_USB)
 extern struct dm_usb_ops ohci_usb_ops;
 
 int ohci_register(struct udevice *dev, struct ohci_regs *regs);

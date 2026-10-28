@@ -1,9 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * (C) Copyright 2003, 2004
  * ARM Ltd.
  * Philippe Robin, <philippe.robin@arm.com>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 /*
@@ -27,18 +26,32 @@ struct pl01x_regs {
 	u32	pl010_lcrl;	/* 0x10 Line control register, low byte */
 	u32	pl010_cr;	/* 0x14 Control register */
 	u32	fr;		/* 0x18 Flag register (Read only) */
-#ifdef CONFIG_PL011_SERIAL_RLCR
-	u32	pl011_rlcr;	/* 0x1c Receive line control register */
-#else
 	u32	reserved;
-#endif
 	u32	ilpr;		/* 0x20 IrDA low-power counter register */
 	u32	pl011_ibrd;	/* 0x24 Integer baud rate register */
 	u32	pl011_fbrd;	/* 0x28 Fractional baud rate register */
 	u32	pl011_lcrh;	/* 0x2C Line control register */
 	u32	pl011_cr;	/* 0x30 Control register */
 };
-#endif
+
+#if CONFIG_IS_ENABLED(DM_SERIAL)
+
+int pl01x_serial_of_to_plat(struct udevice *dev);
+int pl01x_serial_probe(struct udevice *dev);
+
+/* Needed for external pl01x_serial_ops drivers */
+int pl01x_serial_putc(struct udevice *dev, const char ch);
+int pl01x_serial_pending(struct udevice *dev, bool input);
+int pl01x_serial_getc(struct udevice *dev);
+int pl01x_serial_setbrg(struct udevice *dev, int baudrate);
+
+struct pl01x_priv {
+	struct pl01x_regs *regs;
+	enum pl01x_type type;
+};
+
+#endif /* CONFIG_DM_SERIAL */
+#endif /* !__ASSEMBLY__ */
 
 #define UART_PL01x_RSR_OE               0x08
 #define UART_PL01x_RSR_BE               0x04
@@ -74,7 +87,6 @@ struct pl01x_regs {
 #define UART_PL010_LCRH_EPS             (1 << 2)
 #define UART_PL010_LCRH_PEN             (1 << 1)
 #define UART_PL010_LCRH_BRK             (1 << 0)
-
 
 #define UART_PL010_BAUD_460800            1
 #define UART_PL010_BAUD_230400            3

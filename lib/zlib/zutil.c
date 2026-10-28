@@ -6,6 +6,7 @@
 /* @(#) $Id$ */
 
 #include "zutil.h"
+#include <hang.h>
 
 #ifndef NO_DUMMY_DECL
 struct internal_state      {int dummy;}; /* for buggy compilers */
@@ -20,7 +21,6 @@ const char * const z_errmsg[10] = {
 "data error",          /* Z_DATA_ERROR    (-3) */
 "insufficient memory", /* Z_MEM_ERROR     (-4) */
 "buffer error",        /* Z_BUF_ERROR     (-5) */
-"incompatible version",/* Z_VERSION_ERROR (-6) */
 ""};
 
 #ifdef DEBUG
@@ -34,7 +34,7 @@ void z_error (m)
     char *m;
 {
 	fprintf(stderr, "%s\n", m);
-	hang ();
+	hang();
 }
 #endif
 
@@ -43,10 +43,14 @@ void z_error (m)
  */
 #ifndef MY_ZCALLOC /* Any system without a special alloc function */
 
+#ifdef __UBOOT__
+#include <malloc.h>
+#else
 #ifndef STDC
 extern voidp    malloc OF((uInt size));
 extern voidp    calloc OF((uInt items, uInt size));
 extern void     free   OF((voidpf ptr));
+#endif
 #endif
 
 voidpf zcalloc(voidpf opaque, unsigned items, unsigned size)

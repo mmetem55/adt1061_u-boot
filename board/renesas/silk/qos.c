@@ -1,20 +1,18 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * board/renesas/silk/qos.c
  *
  * Copyright (C) 2015 Renesas Electronics Corporation
  * Copyright (C) 2015 Cogent Embedded, Inc.
  *
- * SPDX-License-Identifier: GPL-2.0
- *
  */
 
-#include <common.h>
 #include <asm/processor.h>
 #include <asm/mach-types.h>
 #include <asm/io.h>
-#include <asm/arch/rmobile.h>
+#include <asm/arch/renesas.h>
 
-#if defined(CONFIG_RMOBILE_EXTRAM_BOOT)
+#if defined(CONFIG_RENESAS_EXTRAM_BOOT)
 /* QoS version 0.11 */
 
 enum {
@@ -944,8 +942,8 @@ void qos_init(void)
 	writel(0x00000001, &axi_qos->qosthres2);
 	writel(0x00000001, &axi_qos->qosqon);
 }
-#else /* CONFIG_RMOBILE_EXTRAM_BOOT */
+#else /* CONFIG_RENESAS_EXTRAM_BOOT */
 void qos_init(void)
 {
 }
-#endif /* CONFIG_RMOBILE_EXTRAM_BOOT */
+#endif /* CONFIG_RENESAS_EXTRAM_BOOT */

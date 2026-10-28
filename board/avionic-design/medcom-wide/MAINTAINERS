@@ -2,5 +2,5 @@ MEDCOM-WIDE BOARD
 M:	Alban Bedel <alban.bedel@avionic-design.de>
 S:	Maintained
 F:	board/avionic-design/medcom-wide/
-F:	include/configs/medcom-wide.h
+F:	board/avionic-design/common/
 F:	configs/medcom-wide_defconfig

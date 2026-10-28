@@ -1,8 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * (C) Copyright 2013
  * NVIDIA Corporation <www.nvidia.com>
- *
- * SPDX-License-Identifier:     GPL-2.0+
  */
 
 /* Tegra124 clock PLL tables */
@@ -25,11 +24,13 @@ enum clock_id {
 	CLOCK_ID_XCPU = CLOCK_ID_FIRST_SIMPLE,
 	CLOCK_ID_EPCI,
 	CLOCK_ID_SFROM32KHZ,
+	CLOCK_ID_DISPLAY2,
 	CLOCK_ID_DP,	/* Special for Tegra124 */
 
 	/* These are the base clocks (inputs to the Tegra SoC) */
 	CLOCK_ID_32KHZ,
 	CLOCK_ID_OSC,
+	CLOCK_ID_CLK_M,
 
 	CLOCK_ID_COUNT,	/* number of PLLs */
 
@@ -37,7 +38,6 @@ enum clock_id {
 	 * These are clock IDs that are used in table clock_source[][]
 	 * but will not be assigned as a clock source for any peripheral.
 	 */
-	CLOCK_ID_DISPLAY2,
 	CLOCK_ID_CGENERAL2,
 	CLOCK_ID_CGENERAL3,
 	CLOCK_ID_MEMORY2,

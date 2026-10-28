@@ -1,29 +1,41 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * (C) Copyright 2015 Google, Inc
  * Written by Simon Glass <sjg@chromium.org>
  *
  * usb_match_device() modified from Linux kernel v4.0.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
-#include <common.h>
+#define LOG_CATEGORY UCLASS_USB
+
+#include <bootdev.h>
+#include <uthread.h>
 #include <dm.h>
 #include <errno.h>
+#include <log.h>
+#include <memalign.h>
 #include <usb.h>
 #include <dm/device-internal.h>
 #include <dm/lists.h>
-#include <dm/root.h>
 #include <dm/uclass-internal.h>
+#include <time.h>
 
-DECLARE_GLOBAL_DATA_PTR;
-
-extern bool usb_started; /* flag for the started/stopped USB status */
 static bool asynch_allowed;
 
 struct usb_uclass_priv {
 	int companion_device_count;
 };
+
+int usb_lock_async(struct usb_device *udev, int lock)
+{
+	struct udevice *bus = udev->controller_dev;
+	struct dm_usb_ops *ops = usb_get_ops(bus);
+
+	if (!ops->lock_async)
+		return -ENOSYS;
+
+	return ops->lock_async(bus, lock);
+}
 
 int usb_disable_asynch(int disable)
 {
@@ -34,7 +46,7 @@ int usb_disable_asynch(int disable)
 }
 
 int submit_int_msg(struct usb_device *udev, unsigned long pipe, void *buffer,
-		   int length, int interval)
+		   int length, int interval, bool nonblock)
 {
 	struct udevice *bus = udev->controller_dev;
 	struct dm_usb_ops *ops = usb_get_ops(bus);
@@ -42,7 +54,8 @@ int submit_int_msg(struct usb_device *udev, unsigned long pipe, void *buffer,
 	if (!ops->interrupt)
 		return -ENOSYS;
 
-	return ops->interrupt(bus, udev, pipe, buffer, length, interval);
+	return ops->interrupt(bus, udev, pipe, buffer, length, interval,
+			      nonblock);
 }
 
 int submit_control_msg(struct usb_device *udev, unsigned long pipe,
@@ -50,7 +63,7 @@ int submit_control_msg(struct usb_device *udev, unsigned long pipe,
 {
 	struct udevice *bus = udev->controller_dev;
 	struct dm_usb_ops *ops = usb_get_ops(bus);
-	struct usb_uclass_priv *uc_priv = bus->uclass->priv;
+	struct usb_uclass_priv *uc_priv = uclass_get_priv(bus->uclass);
 	int err;
 
 	if (!ops->control)
@@ -121,110 +134,285 @@ int usb_alloc_device(struct usb_device *udev)
 	struct udevice *bus = udev->controller_dev;
 	struct dm_usb_ops *ops = usb_get_ops(bus);
 
-	/* This is only requird by some controllers - current XHCI */
+	/* This is only required by some controllers - currently XHCI */
 	if (!ops->alloc_device)
 		return 0;
 
 	return ops->alloc_device(bus, udev);
 }
 
+int usb_reset_root_port(struct usb_device *udev)
+{
+	struct udevice *bus = udev->controller_dev;
+	struct dm_usb_ops *ops = usb_get_ops(bus);
+
+	if (!ops->reset_root_port)
+		return -ENOSYS;
+
+	return ops->reset_root_port(bus, udev);
+}
+
+int usb_update_hub_device(struct usb_device *udev)
+{
+	struct udevice *bus = udev->controller_dev;
+	struct dm_usb_ops *ops = usb_get_ops(bus);
+
+	if (!ops->update_hub_device)
+		return -ENOSYS;
+
+	return ops->update_hub_device(bus, udev);
+}
+
+int usb_get_max_xfer_size(struct usb_device *udev, size_t *size)
+{
+	struct udevice *bus = udev->controller_dev;
+	struct dm_usb_ops *ops = usb_get_ops(bus);
+
+	if (!ops->get_max_xfer_size)
+		return -ENOSYS;
+
+	return ops->get_max_xfer_size(bus, size);
+}
+
+#if CONFIG_IS_ENABLED(UTHREAD)
+static struct uthread_mutex mutex = UTHREAD_MUTEX_INITIALIZER;
+#endif
+
 int usb_stop(void)
 {
 	struct udevice *bus;
+	struct udevice *rh;
 	struct uclass *uc;
 	struct usb_uclass_priv *uc_priv;
 	int err = 0, ret;
 
+	uthread_mutex_lock(&mutex);
+
 	/* De-activate any devices that have been activated */
 	ret = uclass_get(UCLASS_USB, &uc);
-	if (ret)
+	if (ret) {
+		uthread_mutex_unlock(&mutex);
 		return ret;
-
-	uc_priv = uc->priv;
-
-	uclass_foreach_dev(bus, uc) {
-		ret = device_remove(bus);
-		if (ret && !err)
-			err = ret;
 	}
 
-#ifdef CONFIG_SANDBOX
-	struct udevice *dev;
+	uc_priv = uclass_get_priv(uc);
 
-	/* Reset all enulation devices */
-	ret = uclass_get(UCLASS_USB_EMUL, &uc);
-	if (ret)
-		return ret;
+	uclass_foreach_dev(bus, uc) {
+		ret = device_remove(bus, DM_REMOVE_NORMAL);
+		if (ret && !err)
+			err = ret;
 
-	uclass_foreach_dev(dev, uc)
-		usb_emul_reset(dev);
-#endif
+		/* Locate root hub device */
+		device_find_first_child(bus, &rh);
+		if (rh) {
+			/*
+			 * All USB devices are children of root hub.
+			 * Unbinding root hub will unbind all of its children.
+			 */
+			ret = device_unbind(rh);
+			if (ret && !err)
+				err = ret;
+		}
+	}
+
+#ifdef CONFIG_USB_STORAGE
 	usb_stor_reset();
-	usb_hub_reset();
+#endif
+	if (CONFIG_IS_ENABLED(BOOTSTD)) {
+		int ret;
+
+		ret = bootdev_unhunt(UCLASS_USB);
+		if (IS_ENABLED(CONFIG_BOOTSTD_FULL) && ret && ret != -EALREADY)
+			printf("failed to unhunt USB (err=%dE)\n", ret);
+	}
 	uc_priv->companion_device_count = 0;
 	usb_started = 0;
+
+	uthread_mutex_unlock(&mutex);
 
 	return err;
 }
 
-static void usb_scan_bus(struct udevice *bus, bool recurse)
+static void _usb_scan_bus(void *arg)
 {
+	struct udevice *bus = (struct udevice *)arg;
 	struct usb_bus_priv *priv;
 	struct udevice *dev;
 	int ret;
 
 	priv = dev_get_uclass_priv(bus);
 
-	assert(recurse);	/* TODO: Support non-recusive */
-
-	printf("scanning bus %d for devices... ", bus->seq);
-	debug("\n");
 	ret = usb_scan_device(bus, 0, USB_SPEED_FULL, &dev);
 	if (ret)
-		printf("failed, error %d\n", ret);
-	else if (priv->next_addr == 0)
-		printf("No USB Device found\n");
-	else
-		printf("%d USB Device(s) found\n", priv->next_addr);
+		printf("Scanning bus %s failed, error %d\n", bus->name, ret);
+}
+
+static void remove_inactive_children(struct uclass *uc, struct udevice *bus)
+{
+	uclass_foreach_dev(bus, uc) {
+		struct udevice *dev, *next;
+
+		if (!device_active(bus))
+			continue;
+		device_foreach_child_safe(dev, next, bus) {
+			if (!device_active(dev))
+				device_unbind(dev);
+		}
+	}
+}
+
+static int usb_probe_companion(struct udevice *bus)
+{
+	struct udevice *companion_dev;
+	int ret;
+
+	/*
+	 * Enforce optional companion controller is marked as such in order to
+	 * 1st scan the primary controller, before the companion controller
+	 * (ownership is given to companion when low or full speed devices
+	 * have been detected).
+	 */
+	ret = uclass_get_device_by_phandle(UCLASS_USB, bus, "companion", &companion_dev);
+	if (!ret) {
+		struct usb_bus_priv *companion_bus_priv;
+
+		debug("%s is the companion of %s\n", companion_dev->name, bus->name);
+		companion_bus_priv = dev_get_uclass_priv(companion_dev);
+		companion_bus_priv->companion = true;
+	} else if (ret && ret != -ENOENT && ret != -ENODEV) {
+		/*
+		 * Treat everything else than no companion or disabled
+		 * companion as an error. (It may not be enabled on boards
+		 * that have a High-Speed HUB to handle FS and LS traffic).
+		 */
+		printf("Failed to get companion (ret=%d)\n", ret);
+		return ret;
+	}
+
+	return 0;
+}
+
+static void _usb_init_bus(void *arg)
+{
+	struct udevice *bus = (struct udevice *)arg;
+	int ret;
+
+	/* init low_level USB */
+
+	/*
+	 * For Sandbox, we need scan the device tree each time when we
+	 * start the USB stack, in order to re-create the emulated USB
+	 * devices and bind drivers for them before we actually do the
+	 * driver probe.
+	 *
+	 * For USB onboard HUB, we need to do some non-trivial init
+	 * like enabling a power regulator, before enumeration.
+	 */
+	if (IS_ENABLED(CONFIG_SANDBOX) ||
+	    IS_ENABLED(CONFIG_USB_ONBOARD_HUB)) {
+		ret = dm_scan_fdt_dev(bus);
+		if (ret) {
+			printf("Bus %s: USB device scan from fdt failed (%d)\n",
+			       bus->name, ret);
+			return;
+		}
+	}
+
+	ret = device_probe(bus);
+	if (ret == -ENODEV) {	/* No such device. */
+		printf("Bus %s: Port not available.\n", bus->name);
+		return;
+	}
+
+	if (ret) {		/* Other error. */
+		printf("Bus %s: probe failed, error %d\n", bus->name, ret);
+		return;
+	}
+
+	usb_probe_companion(bus);
+}
+
+static int nthr;
+static int grp_id;
+
+static void usb_init_bus(struct udevice *bus)
+{
+	if (!grp_id)
+		grp_id = uthread_grp_new_id();
+	if (!uthread_create(NULL, _usb_init_bus, (void *)bus, 0, grp_id))
+		nthr++;
+}
+
+static void usb_scan_bus(struct udevice *bus, bool recurse)
+{
+	if (!grp_id)
+		grp_id = uthread_grp_new_id();
+	if (!uthread_create(NULL, _usb_scan_bus, (void *)bus, 0, grp_id))
+		nthr++;
+}
+
+static void usb_report_devices(struct uclass *uc)
+{
+	struct usb_bus_priv *priv;
+	struct udevice *bus;
+
+	uclass_foreach_dev(bus, uc) {
+		if (!device_active(bus))
+			continue;
+		priv = dev_get_uclass_priv(bus);
+		printf("Bus %s: ", bus->name);
+		if (priv->next_addr == 0)
+			printf("No USB Device found\n");
+		else
+			printf("%d USB Device(s) found\n", priv->next_addr);
+	}
+}
+
+static void run_threads(void)
+{
+#if CONFIG_IS_ENABLED(UTHREAD)
+	if (!nthr)
+		return;
+	while (!uthread_grp_done(grp_id))
+		uthread_schedule();
+	nthr = 0;
+	grp_id = 0;
+#endif
 }
 
 int usb_init(void)
 {
 	int controllers_initialized = 0;
+	unsigned long t0 = timer_get_us();
 	struct usb_uclass_priv *uc_priv;
 	struct usb_bus_priv *priv;
 	struct udevice *bus;
 	struct uclass *uc;
-	int count = 0;
 	int ret;
 
+	uthread_mutex_lock(&mutex);
+
+	if (usb_started) {
+		ret = 0;
+		goto out;
+	}
+
 	asynch_allowed = 1;
-	usb_hub_reset();
 
 	ret = uclass_get(UCLASS_USB, &uc);
 	if (ret)
-		return ret;
+		goto out;
 
-	uc_priv = uc->priv;
+	uc_priv = uclass_get_priv(uc);
 
 	uclass_foreach_dev(bus, uc) {
-		/* init low_level USB */
-		printf("USB%d:   ", count);
-		count++;
-		ret = device_probe(bus);
-		if (ret == -ENODEV) {	/* No such device. */
-			puts("Port not available.\n");
-			controllers_initialized++;
-			continue;
-		}
-
-		if (ret) {		/* Other error. */
-			printf("probe failed, error %d\n", ret);
-			continue;
-		}
-		controllers_initialized++;
-		usb_started = true;
+		usb_init_bus(bus);
 	}
+
+	if (CONFIG_IS_ENABLED(UTHREAD))
+		run_threads();
+
+	usb_started = true;
 
 	/*
 	 * lowlevel init done, now scan the bus for devices i.e. search HUBs
@@ -234,10 +422,15 @@ int usb_init(void)
 		if (!device_active(bus))
 			continue;
 
+		controllers_initialized++;
+
 		priv = dev_get_uclass_priv(bus);
 		if (!priv->companion)
 			usb_scan_bus(bus, true);
 	}
+
+	if (CONFIG_IS_ENABLED(UTHREAD))
+		run_threads();
 
 	/*
 	 * Now that the primary controllers have been scanned and have handed
@@ -255,105 +448,51 @@ int usb_init(void)
 		}
 	}
 
-	debug("scan end\n");
+	if (CONFIG_IS_ENABLED(UTHREAD))
+		run_threads();
+
+	usb_report_devices(uc);
+
+	/* Remove any devices that were not found on this scan */
+	remove_inactive_children(uc, bus);
+
+	ret = uclass_get(UCLASS_USB_HUB, &uc);
+	if (ret)
+		goto out;
+
+	remove_inactive_children(uc, bus);
+
 	/* if we were not able to find at least one working bus, bail out */
-	if (!count)
-		printf("No controllers found\n");
-	else if (controllers_initialized == 0)
-		printf("USB error: all controllers failed lowlevel init\n");
+	if (controllers_initialized == 0)
+		printf("No USB controllers found\n");
 
-	return usb_started ? 0 : -1;
-}
+	debug("USB initialized in %ld ms\n",
+	      (timer_get_us() - t0) / 1000);
 
-int usb_reset_root_port(void)
-{
-	return -ENOSYS;
-}
+	uthread_mutex_unlock(&mutex);
 
-static struct usb_device *find_child_devnum(struct udevice *parent, int devnum)
-{
-	struct usb_device *udev;
-	struct udevice *dev;
+	return usb_started ? 0 : -ENOENT;
+out:
+	uthread_mutex_unlock(&mutex);
 
-	if (!device_active(parent))
-		return NULL;
-	udev = dev_get_parentdata(parent);
-	if (udev->devnum == devnum)
-		return udev;
-
-	for (device_find_first_child(parent, &dev);
-	     dev;
-	     device_find_next_child(&dev)) {
-		udev = find_child_devnum(dev, devnum);
-		if (udev)
-			return udev;
-	}
-
-	return NULL;
-}
-
-struct usb_device *usb_get_dev_index(struct udevice *bus, int index)
-{
-	struct udevice *hub;
-	int devnum = index + 1; /* Addresses are allocated from 1 on USB */
-
-	device_find_first_child(bus, &hub);
-	if (device_get_uclass_id(hub) == UCLASS_USB_HUB)
-		return find_child_devnum(hub, devnum);
-
-	return NULL;
-}
-
-int usb_post_bind(struct udevice *dev)
-{
-	/* Scan the bus for devices */
-	return dm_scan_fdt_node(dev, gd->fdt_blob, dev->of_offset, false);
-}
-
-int usb_port_reset(struct usb_device *parent, int portnr)
-{
-	unsigned short portstatus;
-	int ret;
-
-	debug("%s: start\n", __func__);
-
-	if (parent) {
-		/* reset the port for the second time */
-		assert(portnr > 0);
-		debug("%s: reset %d\n", __func__, portnr - 1);
-		ret = legacy_hub_port_reset(parent, portnr - 1, &portstatus);
-		if (ret < 0) {
-			printf("\n     Couldn't reset port %i\n", portnr);
-			return ret;
-		}
-	} else {
-		debug("%s: reset root\n", __func__);
-		usb_reset_root_port();
-	}
-
-	return 0;
-}
-
-int usb_legacy_port_reset(struct usb_device *parent, int portnr)
-{
-	return usb_port_reset(parent, portnr);
+	return ret;
 }
 
 int usb_setup_ehci_gadget(struct ehci_ctrl **ctlrp)
 {
-	struct usb_platdata *plat;
+	struct usb_plat *plat;
 	struct udevice *dev;
 	int ret;
 
 	/* Find the old device and remove it */
-	ret = uclass_find_device_by_seq(UCLASS_USB, 0, true, &dev);
+	ret = uclass_find_first_device(UCLASS_USB, &dev);
 	if (ret)
 		return ret;
-	ret = device_remove(dev);
+	ret = device_remove(dev, DM_REMOVE_NORMAL);
 	if (ret)
 		return ret;
 
-	plat = dev_get_platdata(dev);
+	plat = dev_get_plat(dev);
 	plat->init_type = USB_INIT_DEVICE;
 	ret = device_probe(dev);
 	if (ret)
@@ -363,26 +502,44 @@ int usb_setup_ehci_gadget(struct ehci_ctrl **ctlrp)
 	return 0;
 }
 
+int usb_remove_ehci_gadget(struct ehci_ctrl **ctlrp)
+{
+	struct udevice *dev;
+	int ret;
+
+	/* Find the old device and remove it */
+	ret = uclass_find_first_device(UCLASS_USB, &dev);
+	if (ret)
+		return ret;
+	ret = device_remove(dev, DM_REMOVE_NORMAL);
+	if (ret)
+		return ret;
+
+	*ctlrp = NULL;
+
+	return 0;
+}
+
 /* returns 0 if no match, 1 if match */
-int usb_match_device(const struct usb_device_descriptor *desc,
-		     const struct usb_device_id *id)
+static int usb_match_device(const struct usb_device_descriptor *desc,
+			    const struct usb_device_id *id)
 {
 	if ((id->match_flags & USB_DEVICE_ID_MATCH_VENDOR) &&
-	    id->idVendor != le16_to_cpu(desc->idVendor))
+	    id->idVendor != desc->idVendor)
 		return 0;
 
 	if ((id->match_flags & USB_DEVICE_ID_MATCH_PRODUCT) &&
-	    id->idProduct != le16_to_cpu(desc->idProduct))
+	    id->idProduct != desc->idProduct)
 		return 0;
 
 	/* No need to test id->bcdDevice_lo != 0, since 0 is never
 	   greater than any unsigned number. */
 	if ((id->match_flags & USB_DEVICE_ID_MATCH_DEV_LO) &&
-	    (id->bcdDevice_lo > le16_to_cpu(desc->bcdDevice)))
+	    (id->bcdDevice_lo > desc->bcdDevice))
 		return 0;
 
 	if ((id->match_flags & USB_DEVICE_ID_MATCH_DEV_HI) &&
-	    (id->bcdDevice_hi < le16_to_cpu(desc->bcdDevice)))
+	    (id->bcdDevice_hi < desc->bcdDevice))
 		return 0;
 
 	if ((id->match_flags & USB_DEVICE_ID_MATCH_DEV_CLASS) &&
@@ -401,9 +558,9 @@ int usb_match_device(const struct usb_device_descriptor *desc,
 }
 
 /* returns 0 if no match, 1 if match */
-int usb_match_one_id_intf(const struct usb_device_descriptor *desc,
-			  const struct usb_interface_descriptor *int_desc,
-			  const struct usb_device_id *id)
+static int usb_match_one_id_intf(const struct usb_device_descriptor *desc,
+			const struct usb_interface_descriptor *int_desc,
+			const struct usb_device_id *id)
 {
 	/* The interface class, subclass, protocol and number should never be
 	 * checked for a match if the device class is Vendor Specific,
@@ -436,14 +593,43 @@ int usb_match_one_id_intf(const struct usb_device_descriptor *desc,
 }
 
 /* returns 0 if no match, 1 if match */
-int usb_match_one_id(struct usb_device_descriptor *desc,
-		     struct usb_interface_descriptor *int_desc,
-		     const struct usb_device_id *id)
+static int usb_match_one_id(struct usb_device_descriptor *desc,
+			    struct usb_interface_descriptor *int_desc,
+			    const struct usb_device_id *id)
 {
 	if (!usb_match_device(desc, id))
 		return 0;
 
 	return usb_match_one_id_intf(desc, int_desc, id);
+}
+
+static ofnode usb_get_ofnode(struct udevice *hub, int port)
+{
+	ofnode node;
+	u32 reg;
+
+	if (!dev_has_ofnode(hub))
+		return ofnode_null();
+
+	/*
+	 * The USB controller and its USB hub are two different udevices,
+	 * but the device tree has only one node for both. Thus we are
+	 * assigning this node to both udevices.
+	 * If port is zero, the controller scans its root hub, thus we
+	 * are using the same ofnode as the controller here.
+	 */
+	if (!port)
+		return dev_ofnode(hub);
+
+	ofnode_for_each_subnode(node, dev_ofnode(hub)) {
+		if (ofnode_read_u32(node, "reg", &reg))
+			continue;
+
+		if (reg == port)
+			return node;
+	}
+
+	return ofnode_null();
 }
 
 /**
@@ -454,13 +640,14 @@ int usb_match_one_id(struct usb_device_descriptor *desc,
 static int usb_find_and_bind_driver(struct udevice *parent,
 				    struct usb_device_descriptor *desc,
 				    struct usb_interface_descriptor *iface,
-				    int bus_seq, int devnum,
+				    int bus_seq, int devnum, int port,
 				    struct udevice **devp)
 {
 	struct usb_driver_entry *start, *entry;
 	int n_ents;
 	int ret;
-	char name[30], *str;
+	char name[34], *str;
+	ofnode node = usb_get_ofnode(parent, port);
 
 	*devp = NULL;
 	debug("%s: Searching for driver\n", __func__);
@@ -470,7 +657,7 @@ static int usb_find_and_bind_driver(struct udevice *parent,
 		const struct usb_device_id *id;
 		struct udevice *dev;
 		const struct driver *drv;
-		struct usb_dev_platdata *plat;
+		struct usb_dev_plat *plat;
 
 		for (id = entry->match; id->match_flags; id++) {
 			if (!usb_match_one_id(desc, iface, id))
@@ -479,19 +666,19 @@ static int usb_find_and_bind_driver(struct udevice *parent,
 			drv = entry->driver;
 			/*
 			 * We could pass the descriptor to the driver as
-			 * platdata (instead of NULL) and allow its bind()
+			 * plat (instead of NULL) and allow its bind()
 			 * method to return -ENOENT if it doesn't support this
 			 * device. That way we could continue the search to
 			 * find another driver. For now this doesn't seem
 			 * necesssary, so just bind the first match.
 			 */
-			ret = device_bind(parent, drv, drv->name, NULL, -1,
+			ret = device_bind(parent, drv, drv->name, NULL, node,
 					  &dev);
 			if (ret)
 				goto error;
 			debug("%s: Match found: %s\n", __func__, drv->name);
 			dev->driver_data = id->driver_info;
-			plat = dev_get_parent_platdata(dev);
+			plat = dev_get_parent_plat(dev);
 			plat->id = *id;
 			*devp = dev;
 			return 0;
@@ -504,6 +691,8 @@ static int usb_find_and_bind_driver(struct udevice *parent,
 	if (!str)
 		return -ENOMEM;
 	ret = device_bind_driver(parent, "usb_dev_generic_drv", str, devp);
+	if (!ret)
+		device_set_name_alloced(*devp);
 
 error:
 	debug("%s: No match found: %d\n", __func__, ret);
@@ -526,7 +715,7 @@ static int usb_find_child(struct udevice *parent,
 	for (device_find_first_child(parent, &dev);
 	     dev;
 	     device_find_next_child(&dev)) {
-		struct usb_dev_platdata *plat = dev_get_parent_platdata(dev);
+		struct usb_dev_plat *plat = dev_get_parent_plat(dev);
 
 		/* If this device is already in use, skip it */
 		if (device_active(dev))
@@ -547,7 +736,7 @@ int usb_scan_device(struct udevice *parent, int port,
 {
 	struct udevice *dev;
 	bool created = false;
-	struct usb_dev_platdata *plat;
+	struct usb_dev_plat *plat;
 	struct usb_bus_priv *priv;
 	struct usb_device *parent_udev;
 	int ret;
@@ -593,8 +782,8 @@ int usb_scan_device(struct udevice *parent, int port,
 	udev->portnr = port;
 	debug("Calling usb_setup_device(), portnr=%d\n", udev->portnr);
 	parent_udev = device_get_uclass_id(parent) == UCLASS_USB_HUB ?
-		dev_get_parentdata(parent) : NULL;
-	ret = usb_setup_device(udev, priv->desc_before_addr, parent_udev, port);
+		dev_get_parent_priv(parent) : NULL;
+	ret = usb_setup_device(udev, priv->desc_before_addr, parent_udev);
 	debug("read_descriptor for '%s': ret=%d\n", parent->name, ret);
 	if (ret)
 		return ret;
@@ -603,14 +792,15 @@ int usb_scan_device(struct udevice *parent, int port,
 	if (ret) {
 		if (ret != -ENOENT)
 			return ret;
-		ret = usb_find_and_bind_driver(parent, &udev->descriptor, iface,
-					       udev->controller_dev->seq,
-					       udev->devnum, &dev);
+		ret = usb_find_and_bind_driver(parent, &udev->descriptor,
+					       iface,
+					       dev_seq(udev->controller_dev),
+					       udev->devnum, port, &dev);
 		if (ret)
 			return ret;
 		created = true;
 	}
-	plat = dev_get_parent_platdata(dev);
+	plat = dev_get_parent_plat(dev);
 	debug("%s: Probing '%s', plat=%p\n", __func__, dev->name, plat);
 	plat->devnum = udev->devnum;
 	plat->udev = udev;
@@ -656,7 +846,7 @@ int usb_detect_change(void)
 			if (!device_active(dev))
 				continue;
 
-			udev = dev_get_parentdata(dev);
+			udev = dev_get_parent_priv(dev);
 			if (usb_get_port_status(udev, udev->portnr, &status)
 					< 0)
 				/* USB request failed */
@@ -671,22 +861,21 @@ int usb_detect_change(void)
 	return change;
 }
 
-int usb_child_post_bind(struct udevice *dev)
+static int usb_child_post_bind(struct udevice *dev)
 {
-	struct usb_dev_platdata *plat = dev_get_parent_platdata(dev);
-	const void *blob = gd->fdt_blob;
+	struct usb_dev_plat *plat = dev_get_parent_plat(dev);
 	int val;
 
-	if (dev->of_offset == -1)
+	if (!dev_has_ofnode(dev))
 		return 0;
 
 	/* We only support matching a few things */
-	val = fdtdec_get_int(blob, dev->of_offset, "usb,device-class", -1);
+	val = dev_read_u32_default(dev, "usb,device-class", -1);
 	if (val != -1) {
 		plat->id.match_flags |= USB_DEVICE_ID_MATCH_DEV_CLASS;
 		plat->id.bDeviceClass = val;
 	}
-	val = fdtdec_get_int(blob, dev->of_offset, "usb,interface-class", -1);
+	val = dev_read_u32_default(dev, "usb,interface-class", -1);
 	if (val != -1) {
 		plat->id.match_flags |= USB_DEVICE_ID_MATCH_INT_CLASS;
 		plat->id.bInterfaceClass = val;
@@ -712,8 +901,8 @@ struct udevice *usb_get_bus(struct udevice *dev)
 
 int usb_child_pre_probe(struct udevice *dev)
 {
-	struct usb_device *udev = dev_get_parentdata(dev);
-	struct usb_dev_platdata *plat = dev_get_parent_platdata(dev);
+	struct usb_device *udev = dev_get_parent_priv(dev);
+	struct usb_dev_plat *plat = dev_get_parent_plat(dev);
 	int ret;
 
 	if (plat->udev) {
@@ -752,13 +941,13 @@ UCLASS_DRIVER(usb) = {
 	.id		= UCLASS_USB,
 	.name		= "usb",
 	.flags		= DM_UC_FLAG_SEQ_ALIAS,
-	.post_bind	= usb_post_bind,
-	.priv_auto_alloc_size = sizeof(struct usb_uclass_priv),
-	.per_child_auto_alloc_size = sizeof(struct usb_device),
-	.per_device_auto_alloc_size = sizeof(struct usb_bus_priv),
+	.post_bind	= dm_scan_fdt_dev,
+	.priv_auto	= sizeof(struct usb_uclass_priv),
+	.per_child_auto	= sizeof(struct usb_device),
+	.per_device_auto	= sizeof(struct usb_bus_priv),
 	.child_post_bind = usb_child_post_bind,
 	.child_pre_probe = usb_child_pre_probe,
-	.per_child_platdata_auto_alloc_size = sizeof(struct usb_dev_platdata),
+	.per_child_plat_auto	= sizeof(struct usb_dev_plat),
 };
 
 UCLASS_DRIVER(usb_dev_generic) = {

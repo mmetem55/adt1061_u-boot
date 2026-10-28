@@ -1,13 +1,11 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * Copyright 2015 Freescale Semiconductor, Inc.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #ifndef _FSL_SFP_SNVS_
 #define _FSL_SFP_SNVS_
 
-#include <common.h>
 #include <config.h>
 #include <asm/io.h>
 
@@ -25,14 +23,13 @@
 #define sfp_in32(a)       in_be32(a)
 #define sfp_out32(a, v)   out_be32(a, v)
 #define sfp_in16(a)       in_be16(a)
-#else
-#error Neither CONFIG_SYS_FSL_SFP_LE nor CONFIG_SYS_FSL_SFP_BE is defined
 #endif
 
 /* Number of SRKH registers */
 #define NUM_SRKH_REGS	8
 
-#ifdef CONFIG_SYS_FSL_SFP_VER_3_2
+#if	defined(CONFIG_SYS_FSL_SFP_VER_3_2) ||	\
+	defined(CONFIG_SYS_FSL_SFP_VER_3_4)
 struct ccsr_sfp_regs {
 	u32 ospr;		/* 0x200 */
 	u32 ospr1;		/* 0x204 */
@@ -77,9 +74,16 @@ struct ccsr_sfp_regs {
 	u32 fsl_uid;	/* 0xB0  FSL Unique ID */
 };
 #endif
+
 #define ITS_MASK	0x00000004
 #define ITS_BIT		2
-#define OSPR_KEY_REVOC_SHIFT	13
-#define OSPR_KEY_REVOC_MASK	0x0000e000
+
+#if defined(CONFIG_SYS_FSL_SFP_VER_3_4)
+#define OSPR_KEY_REVOC_SHIFT    9
+#define OSPR_KEY_REVOC_MASK     0x0000fe00
+#else
+#define OSPR_KEY_REVOC_SHIFT    13
+#define OSPR_KEY_REVOC_MASK     0x0000e000
+#endif /* CONFIG_SYS_FSL_SFP_VER_3_4 */
 
 #endif

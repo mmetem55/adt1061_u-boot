@@ -229,6 +229,8 @@ struct usb_ctrlrequest {
 #define USB_DT_PIPE_USAGE		0x24
 /* From the USB 3.0 spec */
 #define	USB_DT_SS_ENDPOINT_COMP		0x30
+/* From HID 1.11 spec */
+#define USB_DT_HID_REPORT		0x22
 
 /* Conventional codes for class-specific descriptors.  The convention is
  * defined in the USB "Common Class" Spec (3.11).  Individual class specs
@@ -245,7 +247,6 @@ struct usb_descriptor_header {
 	__u8  bLength;
 	__u8  bDescriptorType;
 } __attribute__ ((packed));
-
 
 /*-------------------------------------------------------------------------*/
 
@@ -269,7 +270,6 @@ struct usb_device_descriptor {
 } __attribute__ ((packed));
 
 #define USB_DT_DEVICE_SIZE		18
-
 
 /*
  * Device and/or Interface Class codes
@@ -385,6 +385,24 @@ struct usb_generic_descriptor {
 	__u8  bDescriptorType;
 };
 
+struct __packed usb_class_hid_descriptor {
+	u8 bLength;
+	u8 bDescriptorType;
+	u16 bcdCDC;
+	u8 bCountryCode;
+	u8 bNumDescriptors;	/* 0x01 */
+	u8 bDescriptorType0;
+	u16 wDescriptorLength0;
+	/* optional descriptors are not supported. */
+};
+
+struct __packed usb_class_report_descriptor {
+	u8 bLength;	/* dummy */
+	u8 bDescriptorType;
+	u16 wLength;
+	u8 bData[0];
+};
+
 /*
  * Endpoints
  */
@@ -397,6 +415,12 @@ struct usb_generic_descriptor {
 #define USB_ENDPOINT_XFER_BULK		2
 #define USB_ENDPOINT_XFER_INT		3
 #define USB_ENDPOINT_MAX_ADJUSTABLE	0x80
+
+#define USB_ENDPOINT_MAXP_MASK		0x07ff
+#define USB_EP_MAXP_MULT_SHIFT		11
+#define USB_EP_MAXP_MULT_MASK		(3 << USB_EP_MAXP_MULT_SHIFT)
+#define USB_EP_MAXP_MULT(m)		\
+	(((m) & USB_EP_MAXP_MULT_MASK) >> USB_EP_MAXP_MULT_SHIFT)
 
 /* The USB 3.0 spec redefines bits 5:4 of bmAttributes as interrupt ep type. */
 #define USB_ENDPOINT_INTRTYPE		0x30
@@ -605,6 +629,20 @@ static inline int usb_endpoint_maxp(const struct usb_endpoint_descriptor *epd)
 	return __le16_to_cpu(get_unaligned(&epd->wMaxPacketSize));
 }
 
+/**
+ * usb_endpoint_maxp_mult - get endpoint's transactional opportunities
+ * @epd: endpoint to be checked
+ *
+ * Return @epd's wMaxPacketSize[12:11] + 1
+ */
+static inline int
+usb_endpoint_maxp_mult(const struct usb_endpoint_descriptor *epd)
+{
+	int maxp = __le16_to_cpu(epd->wMaxPacketSize);
+
+	return USB_EP_MAXP_MULT(maxp) + 1;
+}
+
 static inline int usb_endpoint_interrupt_type(
 		const struct usb_endpoint_descriptor *epd)
 {
@@ -663,7 +701,6 @@ struct usb_qualifier_descriptor {
 	__u8  bRESERVED;
 } __attribute__ ((packed));
 
-
 /*-------------------------------------------------------------------------*/
 
 /* USB_DT_OTG (from OTG 1.0a supplement) */
@@ -704,7 +741,6 @@ struct usb_interface_assoc_descriptor {
 	__u8  bFunctionProtocol;
 	__u8  iFunction;
 } __attribute__ ((packed));
-
 
 /*-------------------------------------------------------------------------*/
 
@@ -748,7 +784,6 @@ struct usb_encryption_descriptor {
 	__u8  bEncryptionValue;		/* use in SET_ENCRYPTION */
 	__u8  bAuthKeyIndex;
 } __attribute__((packed));
-
 
 /*-------------------------------------------------------------------------*/
 
@@ -838,6 +873,9 @@ struct usb_ss_cap_descriptor {		/* Link Power Management */
 	__le16 bU2DevExitLat;
 } __attribute__((packed));
 
+#define USB_DEFAULT_U1_DEV_EXIT_LAT     0x01	/* Less then 1 microsec */
+#define USB_DEFAULT_U2_DEV_EXIT_LAT     0x01F4	/* Less then 500 microsec */
+
 #define USB_DT_USB_SS_CAP_SIZE	10
 
 /*
@@ -913,9 +951,8 @@ enum usb_device_speed {
 	USB_SPEED_HIGH,				/* usb 2.0 */
 	USB_SPEED_WIRELESS,			/* wireless (usb 2.5) */
 	USB_SPEED_SUPER,			/* usb 3.0 */
+	USB_SPEED_SUPER_PLUS,			/* usb 3.1 */
 };
-
-#ifdef __KERNEL__
 
 /**
  * usb_speed_string() - Returns human readable-name of the speed.
@@ -924,8 +961,6 @@ enum usb_device_speed {
  *   USB_SPEED_UNKNOWN will be returned.
  */
 extern const char *usb_speed_string(enum usb_device_speed speed);
-
-#endif
 
 enum usb_device_state {
 	/* NOTATTACHED isn't in the USB spec, and this state acts

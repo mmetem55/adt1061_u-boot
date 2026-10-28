@@ -1,8 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  *  GRUB  --  GRand Unified Bootloader
  *  Copyright (C) 1999,2000,2001,2002,2003,2004  Free Software Foundation, Inc.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 /*
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
@@ -38,6 +37,5 @@ typedef struct zfs_znode_acl {
 	uint16_t	z_acl_count;		  /* ace count */
 	uint8_t	z_ace_data[ZFS_ACE_SPACE]; /* space for embedded ACEs */
 } zfs_znode_acl_t;
-
 
 #endif	/* _SYS_FS_ZFS_ACL_H */

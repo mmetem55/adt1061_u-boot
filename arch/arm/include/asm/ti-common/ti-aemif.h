@@ -1,10 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * AEMIF definitions
  *
  * (C) Copyright 2012-2014
  *     Texas Instruments Incorporated, <www.ti.com>
- *
- * SPDX-License-Identifier:     GPL-2.0+
  */
 
 #ifndef _AEMIF_H_
@@ -17,6 +16,7 @@
 #define AEMIF_PRESERVE             -1
 
 struct aemif_config {
+	void *base;
 	unsigned mode;
 	unsigned select_strobe;
 	unsigned extend_wait;

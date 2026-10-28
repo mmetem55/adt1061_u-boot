@@ -1,7 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0
 /**
  * udc-core.c - Core UDC Framework
  *
- * Copyright (C) 2015 Texas Instruments Incorporated - http://www.ti.com
+ * Copyright (C) 2015 Texas Instruments Incorporated - https://www.ti.com
  *
  * Author: Felipe Balbi <balbi@ti.com>
  *
@@ -10,16 +11,16 @@
  *
  * commit 02e8c96627 : usb: gadget: udc: core: prepend udc_attach_driver with
  *		       usb_
- *
- * SPDX-License-Identifier:     GPL-2.0
  */
 
+#include <dm/device_compat.h>
+#include <dm/devres.h>
 #include <linux/compat.h>
 #include <malloc.h>
 #include <asm/cache.h>
-#include <asm/dma-mapping.h>
-#include <common.h>
-
+#include <linux/dma-mapping.h>
+#include <dm.h>
+#include <dm/device-internal.h>
 #include <linux/usb/ch9.h>
 #include <linux/usb/gadget.h>
 
@@ -45,23 +46,16 @@ static LIST_HEAD(udc_list);
 DEFINE_MUTEX(udc_lock);
 
 /* ------------------------------------------------------------------------- */
-extern void
-invalidate_dcache_range(unsigned long start, unsigned long end );
-extern void
-flush_dcache_range(unsigned long start , unsigned long end);
 
 int usb_gadget_map_request(struct usb_gadget *gadget,
 		struct usb_request *req, int is_in)
 {
-	req->dma = req->buf;
 	if (req->length == 0)
 		return 0;
-	if (is_in)
-		flush_dcache_range((unsigned long)req->buf,
-			(unsigned long)(req->buf + req->length));
-	else
-		invalidate_dcache_range((unsigned long)req->dma,
-			(unsigned long)(req->dma + req->length));
+
+	req->dma = dma_map_single(req->buf, req->length,
+				  is_in ? DMA_TO_DEVICE : DMA_FROM_DEVICE);
+
 	return 0;
 }
 EXPORT_SYMBOL_GPL(usb_gadget_map_request);
@@ -71,12 +65,9 @@ void usb_gadget_unmap_request(struct usb_gadget *gadget,
 {
 	if (req->length == 0)
 		return;
-	if (is_in)
-		flush_dcache_range((unsigned long)req->buf,
-			(unsigned long)(req->buf + req->length));
-	else
-		invalidate_dcache_range((unsigned long)req->dma,
-			(unsigned long)(req->dma + req->length));
+
+	dma_unmap_single(req->dma, req->length,
+			 is_in ? DMA_TO_DEVICE : DMA_FROM_DEVICE);
 }
 EXPORT_SYMBOL_GPL(usb_gadget_unmap_request);
 
@@ -92,8 +83,7 @@ EXPORT_SYMBOL_GPL(usb_gadget_unmap_request);
 void usb_gadget_giveback_request(struct usb_ep *ep,
 		struct usb_request *req)
 {
-	if (req && req->complete)
-		req->complete(ep, req);
+	req->complete(ep, req);
 }
 EXPORT_SYMBOL_GPL(usb_gadget_giveback_request);
 
@@ -278,6 +268,27 @@ EXPORT_SYMBOL_GPL(usb_del_gadget_udc);
 
 /* ------------------------------------------------------------------------- */
 
+/**
+ * usb_gadget_udc_set_speed - tells usb device controller speed supported by
+ *    current driver
+ * @udc: The device we want to set maximum speed
+ * @speed: The maximum speed to allowed to run
+ *
+ * This call is issued by the UDC Class driver before calling
+ * usb_gadget_udc_start() in order to make sure that we don't try to
+ * connect on speeds the gadget driver doesn't support.
+ */
+static inline void usb_gadget_udc_set_speed(struct usb_udc *udc,
+					    enum usb_device_speed speed)
+{
+	if (udc->gadget->ops->udc_set_speed) {
+		enum usb_device_speed s;
+
+		s = min(speed, udc->gadget->max_speed);
+		udc->gadget->ops->udc_set_speed(udc->gadget, s);
+	}
+}
+
 static int udc_bind_to_driver(struct usb_udc *udc, struct usb_gadget_driver *driver)
 {
 	int ret;
@@ -286,6 +297,8 @@ static int udc_bind_to_driver(struct usb_udc *udc, struct usb_gadget_driver *dri
 			driver->function);
 
 	udc->driver = driver;
+
+	usb_gadget_udc_set_speed(udc, driver->speed);
 
 	ret = driver->bind(udc->gadget);
 	if (ret)
@@ -309,6 +322,7 @@ err1:
 int usb_gadget_probe_driver(struct usb_gadget_driver *driver)
 {
 	struct usb_udc		*udc = NULL;
+	unsigned int		udc_count = 0;
 	int			ret;
 
 	if (!driver || !driver->bind || !driver->setup)
@@ -316,12 +330,22 @@ int usb_gadget_probe_driver(struct usb_gadget_driver *driver)
 
 	mutex_lock(&udc_lock);
 	list_for_each_entry(udc, &udc_list, list) {
+		udc_count++;
+
 		/* For now we take the first one */
 		if (!udc->driver)
 			goto found;
 	}
 
-	printf("couldn't find an available UDC\n");
+	if (!udc_count)
+		printf("No UDC available in the system\n");
+	else
+		/* When this happens, users should 'unbind <class> <index>'
+		 * using the output of 'dm tree' and looking at the line right
+		 * after the USB peripheral/device controller.
+		 */
+		printf("All UDCs in use (%d available), use the unbind command\n",
+		       udc_count);
 	mutex_unlock(&udc_lock);
 	return -ENODEV;
 found:

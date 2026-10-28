@@ -1,8 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  *	Copied from LiMon - BOOTP.
  *
  *	Copyright 1994, 1995, 2000 Neil Russell.
- *	(See License)
  *	Copyright 2000 Paolo Scaffardi
  */
 
@@ -15,16 +15,15 @@
 
 /**********************************************************************/
 
+#define PORT_BOOTPS	67		/* BOOTP server UDP port */
+#define PORT_BOOTPC	68		/* BOOTP client UDP port */
+
 /*
  *	BOOTP header.
  */
 #if defined(CONFIG_CMD_DHCP)
 /* Minimum DHCP Options size per RFC2131 - results in 576 byte pkt */
 #define OPT_FIELD_SIZE 312
-#if defined(CONFIG_BOOTP_VENDOREX)
-extern u8 *dhcp_vendorex_prep(u8 *e); /*rtn new e after add own opts. */
-extern u8 *dhcp_vendorex_proc(u8 *e); /*rtn next e if mine,else NULL  */
-#endif
 #else
 #define OPT_FIELD_SIZE 64
 #endif
@@ -49,7 +48,7 @@ struct bootp_hdr {
 	char		bp_sname[64];	/* Server host name		*/
 	char		bp_file[128];	/* Boot file name		*/
 	char		bp_vend[OPT_FIELD_SIZE]; /* Vendor information	*/
-};
+} __attribute__((packed));
 
 #define BOOTP_HDR_SIZE	sizeof(struct bootp_hdr)
 
@@ -61,7 +60,6 @@ struct bootp_hdr {
 /* bootp.c */
 extern u32	bootp_id;		/* ID of cur BOOTP request	*/
 extern int	bootp_try;
-
 
 /* Send a BOOTP request */
 void bootp_reset(void);
@@ -87,6 +85,8 @@ typedef enum { INIT,
 #define DHCP_ACK      5
 #define DHCP_NAK      6
 #define DHCP_RELEASE  7
+
+#define DHCP_OPTION_PXE_CONFIG_FILE	209	/* "ConfigFile" option according to rfc5071 */
 
 /**********************************************************************/
 

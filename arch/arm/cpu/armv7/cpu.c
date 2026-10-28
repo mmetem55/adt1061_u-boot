@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * (C) Copyright 2008 Texas Insturments
  *
@@ -7,16 +8,15 @@
  *
  * (C) Copyright 2002
  * Gary Jennejohn, DENX Software Engineering, <garyj@denx.de>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 /*
  * CPU specific code
  */
 
-#include <common.h>
 #include <command.h>
+#include <cpu_func.h>
+#include <irq_func.h>
 #include <asm/system.h>
 #include <asm/cache.h>
 #include <asm/armv7.h>
@@ -32,15 +32,9 @@ int cleanup_before_linux_select(int flags)
 	 *
 	 * we turn off caches etc ...
 	 */
-#ifndef CONFIG_SPL_BUILD
+#ifndef CONFIG_XPL_BUILD
 	disable_interrupts();
 #endif
-
-	/*
-	 * Turn off I-cache and invalidate it
-	 */
-	icache_disable();
-	invalidate_icache_all();
 
 	if (flags & CBL_DISABLE_CACHES) {
 		/*
@@ -61,7 +55,16 @@ int cleanup_before_linux_select(int flags)
 		* to avoid coherency problems for kernel
 		*/
 		invalidate_dcache_all();
+
+		icache_disable();
+		invalidate_icache_all();
 	} else {
+		/*
+		 * Turn off I-cache and invalidate it
+		 */
+		icache_disable();
+		invalidate_icache_all();
+
 		flush_dcache_all();
 		invalidate_icache_all();
 		icache_enable();
@@ -78,4 +81,9 @@ int cleanup_before_linux_select(int flags)
 int cleanup_before_linux(void)
 {
 	return cleanup_before_linux_select(CBL_ALL);
+}
+
+void allow_unaligned(void)
+{
+	v7_arch_cp15_allow_unaligned();
 }

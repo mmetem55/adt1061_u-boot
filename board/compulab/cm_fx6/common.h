@@ -1,9 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * Copyright (C) 2014, Compulab Ltd - http://compulab.co.il/
  *
  * Author: Nikita Kiryanov <nikita@compulab.co.il>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #include <asm/arch/mx6-pins.h>
@@ -31,7 +30,6 @@
 #define CM_FX6_SATA_NSTANDBY2	IMX_GPIO_NR(5, 2)
 #define CM_FX6_SATA_NRSTDLY	IMX_GPIO_NR(6, 6)
 #define CM_FX6_SATA_PWLOSS_INT	IMX_GPIO_NR(6, 31)
-
 
 void cm_fx6_set_usdhc_iomux(void);
 void cm_fx6_set_ecspi_iomux(void);

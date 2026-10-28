@@ -1,23 +1,24 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * (C) Copyright 2003
  * Steven Scholz, imc Measurement & Control, steven.scholz@imc-berlin.de
  *
  * (C) Copyright 2002
  * Rich Ireland, Enterasys Networks, rireland@enterasys.com.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
+
+#define LOG_CATEGORY UCLASS_FPGA
 
 /*
  *  Altera FPGA support
  */
-#include <common.h>
+#if IS_ENABLED(CONFIG_FPGA_INTEL_SDM_MAILBOX)
+#include <asm/arch/misc.h>
+#endif
 #include <errno.h>
 #include <ACEX1K.h>
+#include <log.h>
 #include <stratixII.h>
-
-/* Define FPGA_DEBUG to 1 to get debug printf's */
-#define FPGA_DEBUG	0
 
 static const struct altera_fpga {
 	enum altera_family	family;
@@ -26,10 +27,7 @@ static const struct altera_fpga {
 	int			(*dump)(Altera_desc *, const void *, size_t);
 	int			(*info)(Altera_desc *);
 } altera_fpga[] = {
-#if defined(CONFIG_FPGA_ACEX1K)
-	{ Altera_ACEX1K, "ACEX1K", ACEX1K_load, ACEX1K_dump, ACEX1K_info },
-	{ Altera_CYC2,   "ACEX1K", ACEX1K_load, ACEX1K_dump, ACEX1K_info },
-#elif defined(CONFIG_FPGA_CYCLON2)
+#if defined(CONFIG_FPGA_CYCLON2)
 	{ Altera_ACEX1K, "CycloneII", CYC2_load, CYC2_dump, CYC2_info },
 	{ Altera_CYC2,   "CycloneII", CYC2_load, CYC2_dump, CYC2_info },
 #endif
@@ -37,10 +35,53 @@ static const struct altera_fpga {
 	{ Altera_StratixII, "StratixII", StratixII_load,
 	  StratixII_dump, StratixII_info },
 #endif
+#if defined(CONFIG_FPGA_STRATIX_V)
+	{ Altera_StratixV, "StratixV", stratixv_load, NULL, NULL },
+#endif
 #if defined(CONFIG_FPGA_SOCFPGA)
 	{ Altera_SoCFPGA, "SoC FPGA", socfpga_load, NULL, NULL },
 #endif
+#if defined(CONFIG_FPGA_INTEL_SDM_MAILBOX)
+	{ Intel_FPGA_SDM_Mailbox, "Intel SDM Mailbox", intel_sdm_mb_load, NULL,
+	  NULL },
+#endif
 };
+
+#if IS_ENABLED(CONFIG_FPGA_INTEL_SDM_MAILBOX)
+int fpga_is_partial_data(int devnum, size_t img_len)
+{
+	/*
+	 * The FPGA data (full or partial) is checked by
+	 * the SDM hardware, for Intel SDM Mailbox based
+	 * devices. Hence always return full bitstream.
+	 *
+	 * For Cyclone V and Arria 10 family, the bitstream
+	 * type parameter is not handled by the driver.
+	 */
+	return 0;
+}
+
+int fpga_loadbitstream(int devnum, char *fpgadata, size_t size,
+		       bitstream_type bstype)
+{
+	int ret_val;
+	int flags = 0;
+
+	ret_val = fpga_load(devnum, (void *)fpgadata, size, bstype, flags);
+
+	/*
+	 * Enable the HPS to FPGA bridges when FPGA load is completed
+	 * successfully. This is to ensure the FPGA is accessible
+	 * by the HPS.
+	 */
+	if (!ret_val) {
+		printf("Enable FPGA bridges\n");
+		do_bridge_reset(1, ~0);
+	}
+
+	return ret_val;
+}
+#endif
 
 static int altera_validate(Altera_desc *desc, const char *fn)
 {
@@ -99,8 +140,7 @@ int altera_load(Altera_desc *desc, const void *buf, size_t bsize)
 	if (!fpga)
 		return FPGA_FAIL;
 
-	debug_cond(FPGA_DEBUG, "%s: Launching the %s Loader...\n",
-		   __func__, fpga->name);
+	log_debug("Launching the %s Loader...\n", fpga->name);
 	if (fpga->load)
 		return fpga->load(desc, buf, bsize);
 	return 0;
@@ -113,8 +153,7 @@ int altera_dump(Altera_desc *desc, const void *buf, size_t bsize)
 	if (!fpga)
 		return FPGA_FAIL;
 
-	debug_cond(FPGA_DEBUG, "%s: Launching the %s Reader...\n",
-		   __func__, fpga->name);
+	log_debug("Launching the %s Reader...\n", fpga->name);
 	if (fpga->dump)
 		return fpga->dump(desc, buf, bsize);
 	return 0;
@@ -151,6 +190,9 @@ int altera_info(Altera_desc *desc)
 		break;
 	case fast_passive_parallel_security:
 		printf("Fast Passive Parallel with Security (FPPS)\n");
+		break;
+	case secure_device_manager_mailbox:
+		puts("Secure Device Manager (SDM) Mailbox\n");
 		break;
 		/* Add new interface types here */
 	default:

@@ -1,19 +1,32 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (c) 2015 National Instruments
  *
  * (C) Copyright 2015
  * Joe Hershberger <joe.hershberger@ni.com>
- *
- * SPDX-License-Identifier:	GPL-2.0
  */
 
+#include <log.h>
 #include <asm/eth-raw-os.h>
-#include <common.h>
 #include <dm.h>
+#include <env.h>
 #include <malloc.h>
 #include <net.h>
 
-DECLARE_GLOBAL_DATA_PTR;
+#define ARP_PROTOCOL_ADDR_LEN	4
+#define ARP_OP_REPLY		2
+
+struct sb_arp_hdr {
+	u16 hrd;
+	u16 pro;
+	u8 hln;
+	u8 pln;
+	u16 op;
+	u8 sha[ARP_HLEN];
+	struct in_addr spa;
+	u8 tha[ARP_HLEN];
+	struct in_addr tpa;
+} __packed;
 
 static int reply_arp;
 static struct in_addr arp_ip;
@@ -21,22 +34,26 @@ static struct in_addr arp_ip;
 static int sb_eth_raw_start(struct udevice *dev)
 {
 	struct eth_sandbox_raw_priv *priv = dev_get_priv(dev);
-	struct eth_pdata *pdata = dev_get_platdata(dev);
-	const char *interface;
+	struct eth_pdata *pdata = dev_get_plat(dev);
+	char ipaddr[sizeof("ipaddr99")];
+	int idx = dev_seq(dev);
+	int ret;
 
 	debug("eth_sandbox_raw: Start\n");
 
-	interface = fdt_getprop(gd->fdt_blob, dev->of_offset,
-					    "host-raw-interface", NULL);
-	if (interface == NULL)
-		return -EINVAL;
-
-	if (strcmp(interface, "lo") == 0) {
-		priv->local = 1;
-		setenv("ipaddr", "127.0.0.1");
-		setenv("serverip", "127.0.0.1");
+	ret = sandbox_eth_raw_os_start(priv, pdata->enetaddr);
+	if (priv->local) {
+		if (!IS_ENABLED(CONFIG_NET_LWIP) || !idx) {
+			env_set("ipaddr", "127.0.0.1");
+		} else if (idx > 0 && idx <= 99) {
+			snprintf(ipaddr, sizeof(ipaddr), "ipaddr%d", idx);
+			env_set(ipaddr, "127.0.0.1");
+		}
+		env_set("serverip", "127.0.0.1");
+		net_ip = string_to_ip("127.0.0.1");
+		net_set_server_ip(net_ip);
 	}
-	return sandbox_eth_raw_os_start(interface, pdata->enetaddr, priv);
+	return ret;
 }
 
 static int sb_eth_raw_send(struct udevice *dev, void *packet, int length)
@@ -49,13 +66,13 @@ static int sb_eth_raw_send(struct udevice *dev, void *packet, int length)
 		struct ethernet_hdr *eth = packet;
 
 		if (ntohs(eth->et_protlen) == PROT_ARP) {
-			struct arp_hdr *arp = packet + ETHER_HDR_SIZE;
+			struct sb_arp_hdr *arp = packet + ETHER_HDR_SIZE;
 
 			/**
 			 * localhost works on a higher-level API in Linux than
 			 * ARP packets, so fake it
 			 */
-			arp_ip = net_read_ip(&arp->ar_tpa);
+			memcpy(&arp_ip, &arp->tpa, sizeof(arp_ip));
 			reply_arp = 1;
 			return 0;
 		}
@@ -65,15 +82,15 @@ static int sb_eth_raw_send(struct udevice *dev, void *packet, int length)
 	return sandbox_eth_raw_os_send(packet, length, priv);
 }
 
-static int sb_eth_raw_recv(struct udevice *dev, uchar **packetp)
+static int sb_eth_raw_recv(struct udevice *dev, int flags, uchar **packetp)
 {
-	struct eth_pdata *pdata = dev_get_platdata(dev);
+	struct eth_pdata *pdata = dev_get_plat(dev);
 	struct eth_sandbox_raw_priv *priv = dev_get_priv(dev);
 	int retval = 0;
 	int length;
 
 	if (reply_arp) {
-		struct arp_hdr *arp = (void *)net_rx_packets[0] +
+		struct sb_arp_hdr *arp = (void *)net_rx_packets[0] +
 			ETHER_HDR_SIZE;
 
 		/*
@@ -85,18 +102,18 @@ static int sb_eth_raw_recv(struct udevice *dev, uchar **packetp)
 		 * to get a response. For this reason we fake the response to
 		 * make the u-boot network stack happy.
 		 */
-		arp->ar_hrd = htons(ARP_ETHER);
-		arp->ar_pro = htons(PROT_IP);
-		arp->ar_hln = ARP_HLEN;
-		arp->ar_pln = ARP_PLEN;
-		arp->ar_op = htons(ARPOP_REPLY);
+		arp->hrd = htons(ARP_ETHER);
+		arp->pro = htons(PROT_IP);
+		arp->hln = ARP_HLEN;
+		arp->pln = ARP_PROTOCOL_ADDR_LEN;
+		arp->op = htons(ARP_OP_REPLY);
 		/* Any non-zero MAC address will work */
-		memset(&arp->ar_sha, 0x01, ARP_HLEN);
+		memset(arp->sha, 0x01, ARP_HLEN);
 		/* Use whatever IP we were looking for (always 127.0.0.1?) */
-		net_write_ip(&arp->ar_spa, arp_ip);
-		memcpy(&arp->ar_tha, pdata->enetaddr, ARP_HLEN);
-		net_write_ip(&arp->ar_tpa, net_ip);
-		length = ARP_HDR_SIZE;
+		memcpy(&arp->spa, &arp_ip, sizeof(arp->spa));
+		memcpy(arp->tha, pdata->enetaddr, ARP_HLEN);
+		memcpy(&arp->tpa, &net_ip, sizeof(arp->tpa));
+		length = sizeof(*arp);
 	} else {
 		/* If local, the Ethernet header won't be included; skip it */
 		uchar *pktptr = priv->local ?
@@ -134,18 +151,53 @@ static void sb_eth_raw_stop(struct udevice *dev)
 	sandbox_eth_raw_os_stop(priv);
 }
 
+static int sb_eth_raw_read_rom_hwaddr(struct udevice *dev)
+{
+	struct eth_pdata *pdata = dev_get_plat(dev);
+
+	net_random_ethaddr(pdata->enetaddr);
+
+	return 0;
+}
+
 static const struct eth_ops sb_eth_raw_ops = {
 	.start			= sb_eth_raw_start,
 	.send			= sb_eth_raw_send,
 	.recv			= sb_eth_raw_recv,
 	.stop			= sb_eth_raw_stop,
+	.read_rom_hwaddr	= sb_eth_raw_read_rom_hwaddr,
 };
 
-static int sb_eth_raw_ofdata_to_platdata(struct udevice *dev)
+static int sb_eth_raw_of_to_plat(struct udevice *dev)
 {
-	struct eth_pdata *pdata = dev_get_platdata(dev);
+	struct eth_pdata *pdata = dev_get_plat(dev);
+	struct eth_sandbox_raw_priv *priv = dev_get_priv(dev);
+	const char *ifname;
+	int ret;
 
-	pdata->iobase = dev_get_addr(dev);
+	pdata->iobase = dev_read_addr(dev);
+
+	ifname = dev_read_string(dev, "host-raw-interface");
+	if (ifname) {
+		strlcpy(priv->host_ifname, ifname, IFNAMSIZ);
+		printf(": Using %s from DT\n", priv->host_ifname);
+	}
+	if (dev_read_u32(dev, "host-raw-interface-idx",
+			 &priv->host_ifindex) < 0) {
+		priv->host_ifindex = 0;
+	} else {
+		ret = sandbox_eth_raw_os_idx_to_name(priv);
+		if (ret < 0)
+			return ret;
+		printf(": Using interface index %d from DT (%s)\n",
+		       priv->host_ifindex, priv->host_ifname);
+	}
+
+	ret = sandbox_eth_raw_os_is_local(priv->host_ifname);
+	if (ret < 0)
+		return ret;
+	priv->local = ret;
+
 	return 0;
 }
 
@@ -158,8 +210,8 @@ U_BOOT_DRIVER(eth_sandbox_raw) = {
 	.name	= "eth_sandbox_raw",
 	.id	= UCLASS_ETH,
 	.of_match = sb_eth_raw_ids,
-	.ofdata_to_platdata = sb_eth_raw_ofdata_to_platdata,
+	.of_to_plat = sb_eth_raw_of_to_plat,
 	.ops	= &sb_eth_raw_ops,
-	.priv_auto_alloc_size = sizeof(struct eth_sandbox_raw_priv),
-	.platdata_auto_alloc_size = sizeof(struct eth_pdata),
+	.priv_auto	= sizeof(struct eth_sandbox_raw_priv),
+	.plat_auto	= sizeof(struct eth_pdata),
 };

@@ -1,17 +1,18 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Copyright (c) 2012, Google Inc.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
-#include <common.h>
+#include <stdio.h>
 #include <fs.h>
+#include <malloc.h>
 #include <os.h>
+#include <sandboxfs.h>
 
-int sandbox_fs_set_blk_dev(block_dev_desc_t *rbdd, disk_partition_t *info)
+int sandbox_fs_set_blk_dev(struct blk_desc *rbdd, struct disk_partition *info)
 {
 	/*
-	 * Only accept a NULL block_dev_desc_t for the sandbox, which is when
+	 * Only accept a NULL struct blk_desc for the sandbox, which is when
 	 * hostfs interface is used
 	 */
 	return rbdd != NULL;
@@ -27,7 +28,7 @@ int sandbox_fs_read_at(const char *filename, loff_t pos, void *buffer,
 	if (fd < 0)
 		return fd;
 	ret = os_lseek(fd, pos, OS_SEEK_SET);
-	if (ret == -1) {
+	if (ret < 0) {
 		os_close(fd);
 		return ret;
 	}
@@ -64,14 +65,14 @@ int sandbox_fs_write_at(const char *filename, loff_t pos, void *buffer,
 	if (fd < 0)
 		return fd;
 	ret = os_lseek(fd, pos, OS_SEEK_SET);
-	if (ret == -1) {
+	if (ret < 0) {
 		os_close(fd);
 		return ret;
 	}
 	size = os_write(fd, buffer, towrite);
 	os_close(fd);
 
-	if (size == -1) {
+	if (size < 0) {
 		ret = -1;
 	} else {
 		ret = 0;
@@ -88,14 +89,16 @@ int sandbox_fs_ls(const char *dirname)
 
 	ret = os_dirent_ls(dirname, &head);
 	if (ret)
-		return ret;
+		goto out;
 
 	for (node = head; node; node = node->next) {
 		printf("%s %10lu %s\n", os_dirent_get_typename(node->type),
 		       node->size, node->name);
 	}
+out:
+	os_dirent_free(head);
 
-	return 0;
+	return ret;
 }
 
 int sandbox_fs_exists(const char *filename)

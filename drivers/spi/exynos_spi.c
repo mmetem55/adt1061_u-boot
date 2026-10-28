@@ -1,27 +1,29 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * (C) Copyright 2012 SAMSUNG Electronics
  * Padmavathi Venna <padma.v@samsung.com>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
-#include <common.h>
 #include <dm.h>
 #include <errno.h>
+#include <log.h>
 #include <malloc.h>
 #include <spi.h>
 #include <fdtdec.h>
+#include <time.h>
 #include <asm/arch/clk.h>
 #include <asm/arch/clock.h>
 #include <asm/arch/cpu.h>
 #include <asm/arch/gpio.h>
 #include <asm/arch/pinmux.h>
-#include <asm/arch-exynos/spi.h>
+#include <asm/arch/spi.h>
+#include <asm/global_data.h>
 #include <asm/io.h>
+#include <linux/delay.h>
 
 DECLARE_GLOBAL_DATA_PTR;
 
-struct exynos_spi_platdata {
+struct exynos_spi_plat {
 	enum periph_id periph_id;
 	s32 frequency;		/* Default clock frequency, -1 for none */
 	struct exynos_spi *regs;
@@ -103,13 +105,9 @@ static int spi_rx_tx(struct exynos_spi_priv *priv, int todo,
 	uint out_bytes, in_bytes;
 	int toread;
 	unsigned start = get_timer(0);
-	int stopping;
 	int step;
 
 	out_bytes = in_bytes = todo;
-
-	stopping = priv->skip_preamble && (flags & SPI_XFER_END) &&
-					!(priv->mode & SPI_SLAVE);
 
 	/*
 	 * Try to transfer words if we can. This helps read performance at
@@ -159,12 +157,10 @@ static int spi_rx_tx(struct exynos_spi_priv *priv, int todo,
 			while (rx_lvl >= step) {
 				temp = readl(&regs->rx_data);
 				if (priv->skip_preamble) {
-					if (temp == SPI_PREAMBLE_END_BYTE) {
+					if (temp == SPI_PREAMBLE_END_BYTE)
 						priv->skip_preamble = 0;
-						stopping = 0;
-					}
 				} else {
-					if (rxp || stopping) {
+					if (rxp) {
 						if (step == 4)
 							*(uint32_t *)rxp = temp;
 						else
@@ -190,9 +186,9 @@ static int spi_rx_tx(struct exynos_spi_priv *priv, int todo,
 			spi_request_bytes(regs, toread, step);
 		}
 		if (priv->skip_preamble && get_timer(start) > 100) {
-			printf("SPI timeout: in_bytes=%d, out_bytes=%d, ",
-			       in_bytes, out_bytes);
-			return -1;
+			debug("SPI timeout: in_bytes=%d, out_bytes=%d, ",
+			      in_bytes, out_bytes);
+			return -ETIMEDOUT;
 		}
 	}
 
@@ -211,7 +207,7 @@ static int spi_rx_tx(struct exynos_spi_priv *priv, int todo,
 static void spi_cs_activate(struct udevice *dev)
 {
 	struct udevice *bus = dev->parent;
-	struct exynos_spi_platdata *pdata = dev_get_platdata(bus);
+	struct exynos_spi_plat *pdata = dev_get_plat(bus);
 	struct exynos_spi_priv *priv = dev_get_priv(bus);
 
 	/* If it's too soon to do another transaction, wait */
@@ -237,7 +233,7 @@ static void spi_cs_activate(struct udevice *dev)
 static void spi_cs_deactivate(struct udevice *dev)
 {
 	struct udevice *bus = dev->parent;
-	struct exynos_spi_platdata *pdata = dev_get_platdata(bus);
+	struct exynos_spi_plat *pdata = dev_get_plat(bus);
 	struct exynos_spi_priv *priv = dev_get_priv(bus);
 
 	setbits_le32(&priv->regs->cs_reg, SPI_SLAVE_SIG_INACT);
@@ -249,13 +245,13 @@ static void spi_cs_deactivate(struct udevice *dev)
 	debug("Deactivate CS, bus '%s'\n", bus->name);
 }
 
-static int exynos_spi_ofdata_to_platdata(struct udevice *bus)
+static int exynos_spi_of_to_plat(struct udevice *bus)
 {
-	struct exynos_spi_platdata *plat = bus->platdata;
+	struct exynos_spi_plat *plat = dev_get_plat(bus);
 	const void *blob = gd->fdt_blob;
-	int node = bus->of_offset;
+	int node = dev_of_offset(bus);
 
-	plat->regs = (struct exynos_spi *)fdtdec_get_addr(blob, node, "reg");
+	plat->regs = dev_read_addr_ptr(bus);
 	plat->periph_id = pinmux_decode_periph_id(blob, node);
 
 	if (plat->periph_id == PERIPH_ID_NONE) {
@@ -278,7 +274,7 @@ static int exynos_spi_ofdata_to_platdata(struct udevice *bus)
 
 static int exynos_spi_probe(struct udevice *bus)
 {
-	struct exynos_spi_platdata *plat = dev_get_platdata(bus);
+	struct exynos_spi_plat *plat = dev_get_plat(bus);
 	struct exynos_spi_priv *priv = dev_get_priv(bus);
 
 	priv->regs = plat->regs;
@@ -366,7 +362,7 @@ static int exynos_spi_xfer(struct udevice *dev, unsigned int bitlen,
 
 static int exynos_spi_set_speed(struct udevice *bus, uint speed)
 {
-	struct exynos_spi_platdata *plat = bus->platdata;
+	struct exynos_spi_plat *plat = dev_get_plat(bus);
 	struct exynos_spi_priv *priv = dev_get_priv(bus);
 	int ret;
 
@@ -424,8 +420,8 @@ U_BOOT_DRIVER(exynos_spi) = {
 	.id	= UCLASS_SPI,
 	.of_match = exynos_spi_ids,
 	.ops	= &exynos_spi_ops,
-	.ofdata_to_platdata = exynos_spi_ofdata_to_platdata,
-	.platdata_auto_alloc_size = sizeof(struct exynos_spi_platdata),
-	.priv_auto_alloc_size = sizeof(struct exynos_spi_priv),
+	.of_to_plat = exynos_spi_of_to_plat,
+	.plat_auto	= sizeof(struct exynos_spi_plat),
+	.priv_auto	= sizeof(struct exynos_spi_priv),
 	.probe	= exynos_spi_probe,
 };

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * (C) Copyright 2003
  * Texas Instruments <www.ti.com>
@@ -17,19 +18,21 @@
  * Philippe Robin, ARM Ltd. <philippe.robin@arm.com>
  *
  * Copyright (C) 2007 Sergey Kubushyn <ksi@koi8.net>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
-#include <common.h>
+#include <config.h>
+#include <init.h>
+#include <time.h>
+#include <asm/global_data.h>
 #include <asm/io.h>
 #include <asm/arch/timer_defs.h>
 #include <div64.h>
+#include <linux/delay.h>
 
 DECLARE_GLOBAL_DATA_PTR;
 
 static struct davinci_timer * const timer =
-	(struct davinci_timer *)CONFIG_SYS_TIMERBASE;
+	(struct davinci_timer *)CFG_SYS_TIMERBASE;
 
 #define TIMER_LOAD_VAL	0xffffffff
 
@@ -44,7 +47,7 @@ int timer_init(void)
 	writel(0x0, &timer->tim34);
 	writel(TIMER_LOAD_VAL, &timer->prd34);
 	writel(2 << 22, &timer->tcr);
-	gd->arch.timer_rate_hz = CONFIG_SYS_HZ_CLOCK / TIM_CLK_DIV;
+	gd->arch.timer_rate_hz = CFG_SYS_HZ_CLOCK / TIM_CLK_DIV;
 	gd->arch.timer_reset_value = 0;
 
 	return(0);
@@ -95,34 +98,3 @@ ulong get_tbclk(void)
 {
 	return gd->arch.timer_rate_hz;
 }
-
-#ifdef CONFIG_HW_WATCHDOG
-static struct davinci_timer * const wdttimer =
-	(struct davinci_timer *)CONFIG_SYS_WDTTIMERBASE;
-
-/*
- * See prufw2.pdf for using Timer as a WDT
- */
-void davinci_hw_watchdog_enable(void)
-{
-	writel(0x0, &wdttimer->tcr);
-	writel(0x0, &wdttimer->tgcr);
-	/* TIMMODE = 2h */
-	writel(0x08 | 0x03 | ((TIM_CLK_DIV - 1) << 8), &wdttimer->tgcr);
-	writel(CONFIG_SYS_WDT_PERIOD_LOW, &wdttimer->prd12);
-	writel(CONFIG_SYS_WDT_PERIOD_HIGH, &wdttimer->prd34);
-	writel(2 << 22, &wdttimer->tcr);
-	writel(0x0, &wdttimer->tim12);
-	writel(0x0, &wdttimer->tim34);
-	/* set WDEN bit, WDKEY 0xa5c6 */
-	writel(0xa5c64000, &wdttimer->wdtcr);
-	/* clear counter register */
-	writel(0xda7e4000, &wdttimer->wdtcr);
-}
-
-void davinci_hw_watchdog_reset(void)
-{
-	writel(0xa5c64000, &wdttimer->wdtcr);
-	writel(0xda7e4000, &wdttimer->wdtcr);
-}
-#endif

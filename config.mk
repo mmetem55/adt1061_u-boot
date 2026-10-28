@@ -1,9 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0+
 #
 # (C) Copyright 2000-2013
 # Wolfgang Denk, DENX Software Engineering, wd@denx.de.
-#
-# SPDX-License-Identifier:	GPL-2.0+
-#
 #########################################################################
 
 # This file is included from ./Makefile and spl/Makefile.
@@ -14,9 +12,8 @@
 #  If we did not have Tegra SoCs, build system would be much simpler...)
 PLATFORM_RELFLAGS :=
 PLATFORM_CPPFLAGS :=
-PLATFORM_LDFLAGS :=
-LDFLAGS :=
 LDFLAGS_FINAL :=
+LDFLAGS_STANDALONE :=
 OBJCOPYFLAGS :=
 # clear VENDOR for tcsh
 VENDOR :=
@@ -24,8 +21,8 @@ VENDOR :=
 
 ARCH := $(CONFIG_SYS_ARCH:"%"=%)
 CPU := $(CONFIG_SYS_CPU:"%"=%)
-ifdef CONFIG_SPL_BUILD
-ifdef CONFIG_TEGRA
+ifdef CONFIG_XPL_BUILD
+ifdef CONFIG_ARCH_TEGRA
 CPU := arm720t
 endif
 endif
@@ -50,57 +47,36 @@ ifdef	SOC
 sinclude $(srctree)/$(CPUDIR)/$(SOC)/config.mk	# include  SoC	specific rules
 endif
 ifneq ($(BOARD),)
-ifdef	VENDOR
+ifneq ($(VENDOR),)
 BOARDDIR = $(VENDOR)/$(BOARD)
+ENVDIR=${vendor}/env
 else
 BOARDDIR = $(BOARD)
+ENVDIR=${board}/env
 endif
-endif
-ifdef	BOARD
-sinclude $(srctree)/board/$(BOARDDIR)/config.mk	# include board specific rules
 endif
 
-ifeq ($(AUTOBOOT_FLAG), true)
-PLATFORM_CPPFLAGS += -DCONFIG_AUTOBOOT
+ifneq ($(VENDOR),)
+sinclude $(srctree)/board/$(VENDOR)/config.mk	# include vendor specific rules
+endif
+ifdef	BOARDDIR
+sinclude $(srctree)/board/$(BOARDDIR)/config.mk	# include board specific rules
 endif
 
 ifdef FTRACE
 PLATFORM_CPPFLAGS += -finstrument-functions -DFTRACE
 endif
 
-# Allow use of stdint.h if available
-ifneq ($(USE_STDINT),)
-PLATFORM_CPPFLAGS += -DCONFIG_USE_STDINT
-endif
-
 #########################################################################
 
 RELFLAGS := $(PLATFORM_RELFLAGS)
 
-OBJCOPYFLAGS += --gap-fill=0xff
-
 PLATFORM_CPPFLAGS += $(RELFLAGS)
 PLATFORM_CPPFLAGS += -pipe
-PLATFORM_CPPFLAGS += $(UBOOT_DEBUG_FLAG)
-PLATFORM_CPPFLAGS += $(UBOOT_SECURE_BOOT_FLAG)
-PLATFORM_CPPFLAGS += $(UBOOT_TOS_TRUSTY_FLAG)
-PLATFORM_CPPFLAGS += $(UBOOT_TEECFG_CUSTOM_FLAG)
-PLATFORM_CPPFLAGS += $(UBOOT_CHIP_UID_FLAG)
-PLATFORM_CPPFLAGS += $(UBOOT_FIREWALL_FLAG)
-PLATFORM_CPPFLAGS += $(UBOOT_ARMV7_LPAE_FLAG)
-PLATFORM_CPPFLAGS += $(UBOOT_KERNEL_CMDLINE_FLAG)
-PLATFORM_CPPFLAGS += $(UBOOT_PCTOOL_CHECK_MULTI_FIXNV_FLAG)
-PLATFORM_CPPFLAGS += $(UBOOT_PCTOOL_CHECK_WRITE_PROTECT_FLAG)
-PLATFORM_CPPFLAGS += $(UBOOT_ROC1_CACHE_WA_FLAG)
-PLATFORM_CPPFLAGS += $(UBOOT_CALIMODE_USE_BOOTIMG_FLAG)
-PLATFORM_CPPFLAGS += $(UBOOT_HWFEATURE_FLAG)
-PLATFORM_CPPFLAGS += $(UBOOT_NV_ENCRYPTION_FLAG)
-PLATFORM_CPPFLAGS += $(UBOOT_MODEM_FLAG)
 
-LDFLAGS += $(PLATFORM_LDFLAGS)
 LDFLAGS_FINAL += -Bstatic
 
 export PLATFORM_CPPFLAGS
 export RELFLAGS
 export LDFLAGS_FINAL
-export CONFIG_STANDALONE_LOAD_ADDR
+export LDFLAGS_STANDALONE

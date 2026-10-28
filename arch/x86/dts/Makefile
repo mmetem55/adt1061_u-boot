@@ -1,51 +1,27 @@
-dtb-y += chromebook_link.dtb \
+# SPDX-License-Identifier: GPL-2.0+
+
+dtb-y += bayleybay.dtb \
+	cherryhill.dtb \
+	chromebook_coral.dtb \
+	chromebook_link.dtb \
 	chromebox_panther.dtb \
+	chromebook_samus.dtb \
+	conga-qeval20-qa3-e3845.dtb \
+	coreboot.dtb \
+	cougarcanyon2.dtb \
 	crownbay.dtb \
+	dfi-bt700-q7x-151.dtb \
+	edison.dtb \
+	efi-x86_app.dtb \
+	efi-x86_payload.dtb \
 	galileo.dtb \
 	minnowmax.dtb \
 	qemu-x86_i440fx.dtb \
 	qemu-x86_q35.dtb \
-	isharkl.dtb \
-	sp9861e_1h10.dtb \
-	sp9861e_1h10_vmm.dtb \
-	sp9861e_3h10.dtb \
-	sp9861e_3h10_vmm.dtb \
-	sp9861e_1h11.dtb \
-	sp9861e_1h11_vmm.dtb \
-	sp9861e_2h10.dtb \
-	sp9861e_2h10_2705.dtb \
-	sp9861e_2h10_vmm.dtb \
-	sp9861e_2h10_2705_vmm.dtb \
-	sp9861-fpga-douchannel.dtb \
-	sp9861-fpga-sinchannel.dtb \
-	sp9861-fpga-vmm.dtb \
-	sp9861-vdk.dtb \
-	sp9861-vdk-4g-interleave.dtb \
-	sp9861-vdk-4g-noninterleave.dtb \
-	sp9861-vdk-4g-single.dtb \
-	sp9861-vdk-vmm.dtb \
-	sp9853i-fpga.dtb \
-	sp9853i-vdk.dtb \
-	sp9853i-vdk-4g.dtb \
-	sp9853i-vmm.dtb \
-	sp9853i_1h10.dtb \
-	sp9853i_9c10.dtb \
-	sp9853i_10c10.dtb \
-	sp9853i_2h10.dtb \
-	sp9853i_3c10.dtb \
-	sp9853i_1h10_vmm.dtb \
-	sp9853i_9c10_vmm.dtb \
-	sp9853i_10c10_vmm.dtb \
-	sp9853i_2h10_vmm.dtb \
-	sp9853i_3c10_vmm.dtb
+	theadorable-x86-dfi-bt700.dtb \
+	slimbootloader.dtb \
+	baytrail_som-db5800-som-6867.dtb
 
-targets += $(dtb-y)
+include $(srctree)/scripts/Makefile.dts
 
-DTC_FLAGS += -R 4 -p 0x1000
-
-PHONY += dtbs
-dtbs: $(addprefix $(obj)/, $(dtb-y))
-	@:
-
-clean-files := *.dtb
-
+DTC_FLAGS += -R 4

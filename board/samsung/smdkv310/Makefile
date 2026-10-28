@@ -1,15 +1,12 @@
+# SPDX-License-Identifier: GPL-2.0+
 #
 # Copyright (C) 2011 Samsung Electronics
-#
-# SPDX-License-Identifier:	GPL-2.0+
-#
 
-ifdef CONFIG_SPL_BUILD
-# necessary to create built-in.o
-obj- := __dummy__.o
+ifdef CONFIG_XPL_BUILD
+# necessary to create built-in.a
+obj- := __dummy__.a
 
-hostprogs-y := tools/mksmdkv310spl
-always := $(hostprogs-y)
+hostprogs-always-y += tools/mksmdkv310spl
 else
 obj-y	+= smdkv310.o
 endif

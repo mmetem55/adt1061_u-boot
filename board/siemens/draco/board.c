@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Board functions for TI AM335X based draco board
  * (C) Copyright 2013 Siemens Schweiz AG
@@ -8,38 +9,30 @@
  * Board functions for TI AM335X based boards
  * u-boot:/board/ti/am335x/board.c
  *
- * Copyright (C) 2011, Texas Instruments, Incorporated - http://www.ti.com/
- *
- * SPDX-License-Identifier:	GPL-2.0+
+ * Copyright (C) 2011, Texas Instruments, Incorporated - https://www.ti.com/
  */
 
-#include <common.h>
-#include <errno.h>
-#include <spl.h>
-#include <asm/arch/cpu.h>
-#include <asm/arch/hardware.h>
-#include <asm/arch/omap.h>
-#include <asm/arch/ddr_defs.h>
-#include <asm/arch/clock.h>
-#include <asm/arch/gpio.h>
-#include <asm/arch/mmc_host_def.h>
-#include <asm/arch/sys_proto.h>
-#include <asm/io.h>
-#include <asm/emif.h>
-#include <asm/gpio.h>
-#include <i2c.h>
-#include <miiphy.h>
+#include <command.h>
 #include <cpsw.h>
-#include <watchdog.h>
+#include <env.h>
+#include <init.h>
+#include <linux/delay.h>
+#include <nand.h>
+#include <asm/arch/clock.h>
+#include <asm/arch/ddr_defs.h>
+#include <asm/arch/mem.h>
+#include <asm/arch/sys_proto.h>
+#include <asm/gpio.h>
+#include <asm/io.h>
 #include "board.h"
+#include "../common/eeprom.h"
 #include "../common/factoryset.h"
 
-DECLARE_GLOBAL_DATA_PTR;
-
-#ifdef CONFIG_SPL_BUILD
-static struct draco_baseboard_id __attribute__((section(".data"))) settings;
+#ifdef CONFIG_XPL_BUILD
+static struct draco_baseboard_id __section(".data") settings;
 
 #if DDR_PLL_FREQ == 303
+#if !defined(CONFIG_TARGET_ETAMIN)
 /* Default@303MHz-i0 */
 const struct ddr3_data ddr3_default = {
 	0x33524444, 0x56312e35, 0x0080, 0x0000, 0x003A, 0x003F, 0x009F,
@@ -48,6 +41,16 @@ const struct ddr3_data ddr3_default = {
 	"default name @303MHz           \0",
 	"default marking                \0",
 };
+#else
+/* etamin board */
+const struct ddr3_data ddr3_default = {
+	0x33524444, 0x56312e36, 0x0080, 0x0000, 0x003A, 0x0010, 0x009F,
+	0x0050, 0x0888A39B, 0x266D7FDA, 0x501F86AF, 0x00100206, 0x61A44BB2,
+	0x0000093B, 0x0000018A,
+	"test-etamin                    \0",
+	"generic-8Gbit                  \0",
+};
+#endif
 #elif DDR_PLL_FREQ == 400
 /* Default@400MHz-i0 */
 const struct ddr3_data ddr3_default = {
@@ -103,29 +106,57 @@ static void print_chip_data(void)
 	printf("hw version: \t'%s'\n", settings.chip.shwver);
 	printf("max freq: \t%d MHz\n", dpll_mpu_opp100.m);
 }
-#endif /* CONFIG_SPL_BUILD */
+#endif /* CONFIG_XPL_BUILD */
 
+#define AM335X_NAND_ECC_MASK 0x0f
+#define AM335X_NAND_ECC_TYPE_16 0x02
+
+static int ecc_type;
+
+struct am335x_nand_geometry {
+	u32 magic;
+	u8 nand_geo_addr;
+	u8 nand_geo_page;
+	u8 nand_bus;
+};
+
+static int draco_read_nand_geometry(void)
+{
+	struct am335x_nand_geometry geo;
+
+	/* Read NAND geometry */
+	if (siemens_ee_read_data(SIEMENS_EE_ADDR_NAND_GEO, (uchar *)&geo,
+				 sizeof(struct am335x_nand_geometry))) {
+		printf("Could not read the NAND geomtery; something fundamentally wrong on the I2C bus.\n");
+		return -EIO;
+	}
+	if (geo.magic != 0xa657b310) {
+		printf("%s: bad magic: %x\n", __func__, geo.magic);
+		return -EFAULT;
+	}
+	if ((geo.nand_bus & AM335X_NAND_ECC_MASK) == AM335X_NAND_ECC_TYPE_16)
+		ecc_type = 16;
+	else
+		ecc_type = 8;
+
+	return 0;
+}
+
+#ifdef CONFIG_XPL_BUILD
 /*
  * Read header information from EEPROM into global structure.
  */
-static int read_eeprom(void)
+int draco_read_eeprom(void)
 {
-	/* Check if baseboard eeprom is available */
-	if (i2c_probe(CONFIG_SYS_I2C_EEPROM_ADDR)) {
-		printf("Could not probe the EEPROM; something fundamentally wrong on the I2C bus.\n");
-		return 1;
-	}
-
-#ifdef CONFIG_SPL_BUILD
 	/* Read Siemens eeprom data (DDR3) */
-	if (i2c_read(CONFIG_SYS_I2C_EEPROM_ADDR, EEPROM_ADDR_DDR3, 2,
-		     (uchar *)&settings.ddr3, sizeof(struct ddr3_data))) {
+	if (siemens_ee_read_data(SIEMENS_EE_ADDR_DDR3, (uchar *)&settings.ddr3,
+				 sizeof(struct ddr3_data))) {
 		printf("Could not read the EEPROM; something fundamentally wrong on the I2C bus.\nUse default DDR3 timings\n");
 		set_default_ddr3_timings();
 	}
 	/* Read Siemens eeprom data (CHIP) */
-	if (i2c_read(CONFIG_SYS_I2C_EEPROM_ADDR, EEPROM_ADDR_CHIP, 2,
-		     (uchar *)&settings.chip, sizeof(settings.chip)))
+	if (siemens_ee_read_data(SIEMENS_EE_ADDR_CHIP, (uchar *)&settings.chip,
+				 sizeof(settings.chip)))
 		printf("Could not read chip settings\n");
 
 	if (ddr3_default.magic == settings.ddr3.magic &&
@@ -147,12 +178,11 @@ static int read_eeprom(void)
 		printf("Warning: No chip data in eeprom\n");
 
 	print_ddr3_timings();
-#endif
-	return 0;
+
+	return draco_read_nand_geometry();
 }
 
-#ifdef CONFIG_SPL_BUILD
-static void board_init_ddr(void)
+void draco_init_ddr(void)
 {
 struct emif_regs draco_ddr3_emif_reg_data = {
 	.zq_config = 0x50074BE4,
@@ -174,6 +204,7 @@ struct ctrl_ioregs draco_ddr3_ioregs = {
 	draco_ddr3_emif_reg_data.emif_ddr_phy_ctlr_1 =
 		settings.ddr3.emif_ddr_phy_ctlr_1;
 	draco_ddr3_emif_reg_data.sdram_config = settings.ddr3.sdram_config;
+	draco_ddr3_emif_reg_data.sdram_config2 = 0x08000000;
 	draco_ddr3_emif_reg_data.ref_ctrl = settings.ddr3.ref_ctrl;
 
 	draco_ddr3_data.datardsratio0 = settings.ddr3.dt0rdsratio0;
@@ -196,41 +227,47 @@ struct ctrl_ioregs draco_ddr3_ioregs = {
 
 	config_ddr(DDR_PLL_FREQ, &draco_ddr3_ioregs, &draco_ddr3_data,
 		   &draco_ddr3_cmd_ctrl_data, &draco_ddr3_emif_reg_data, 0);
-
-	/* For Samsung 2Gbit RAM we need this delay otherwise config fails after
-	 * soft reset.
-	 */
-	udelay(2000);
 }
 
-static void spl_siemens_board_init(void)
+void spl_draco_board_init(void)
 {
 	return;
 }
-#endif /* if def CONFIG_SPL_BUILD */
+#endif /* if def CONFIG_XPL_BUILD */
 
 #ifdef CONFIG_BOARD_LATE_INIT
 int board_late_init(void)
 {
-	omap_nand_switch_ecc(1, 8);
+	int ret;
+
+	ret = draco_read_nand_geometry();
+	if (ret != 0)
+		return ret;
+
+	nand_curr_device = 0;
+	omap_nand_switch_ecc(1, ecc_type);
+#ifdef CONFIG_TARGET_ETAMIN
+	nand_curr_device = 1;
+	omap_nand_switch_ecc(1, ecc_type);
+#endif
 #ifdef CONFIG_FACTORYSET
 	/* Set ASN in environment*/
 	if (factory_dat.asn[0] != 0) {
-		setenv("dtb_name", (char *)factory_dat.asn);
+		env_set("dtb_name", (char *)factory_dat.asn);
 	} else {
 		/* dtb suffix gets added in load script */
-		setenv("dtb_name", "am335x-draco");
+		env_set("dtb_name", "am335x-draco");
 	}
 #else
-	setenv("dtb_name", "am335x-draco");
+	env_set("dtb_name", "am335x-draco");
 #endif
 
 	return 0;
 }
 #endif
 
-#if (defined(CONFIG_DRIVER_TI_CPSW) && !defined(CONFIG_SPL_BUILD)) || \
-	(defined(CONFIG_SPL_ETH_SUPPORT) && defined(CONFIG_SPL_BUILD))
+#if (defined(CONFIG_DRIVER_TI_CPSW) && !defined(CONFIG_XPL_BUILD)) || \
+	(defined(CONFIG_SPL_ETH) && defined(CONFIG_XPL_BUILD))
 static void cpsw_control(int enabled)
 {
 	/* VTP can be added here */
@@ -267,14 +304,14 @@ static struct cpsw_platform_data cpsw_data = {
 };
 
 #if defined(CONFIG_DRIVER_TI_CPSW) || \
-	(defined(CONFIG_USB_ETHER) && defined(CONFIG_MUSB_GADGET))
-int board_eth_init(bd_t *bis)
+	(defined(CONFIG_USB_ETHER) && defined(CONFIG_USB_MUSB_GADGET))
+int board_eth_init(struct bd_info *bis)
 {
 	struct ctrl_dev *cdev = (struct ctrl_dev *)CTRL_DEVICE_BASE;
 	int n = 0;
 	int rv;
 
-	factoryset_setenv();
+	factoryset_env_set();
 
 	/* Set rgmii mode and enable rmii clock to be sourced from chip */
 	writel((RMII_MODE_ENABLE | RMII_CHIPCKL_ENABLE), &cdev->miisel);
@@ -287,7 +324,7 @@ int board_eth_init(bd_t *bis)
 	return n;
 }
 
-static int do_switch_reset(cmd_tbl_t *cmdtp, int flag, int argc,
+static int do_switch_reset(struct cmd_tbl *cmdtp, int flag, int argc,
 			   char *const argv[])
 {
 	/* Reset SMSC LAN9303 switch for default configuration */
@@ -306,6 +343,4 @@ U_BOOT_CMD(
 	""
 );
 #endif /* #if defined(CONFIG_DRIVER_TI_CPSW) */
-#endif /* #if (defined(CONFIG_DRIVER_TI_CPSW) && !defined(CONFIG_SPL_BUILD)) */
-
-#include "../common/board.c"
+#endif /* #if (defined(CONFIG_DRIVER_TI_CPSW) && !defined(CONFIG_XPL_BUILD)) */

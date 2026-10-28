@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * MUSB OTG driver host support
  *
@@ -5,35 +6,11 @@
  * Copyright (C) 2005-2006 by Texas Instruments
  * Copyright (C) 2006-2007 Nokia Corporation
  * Copyright (C) 2008-2009 MontaVista Software, Inc. <source@mvista.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
- * 02110-1301 USA
- *
- * THIS SOFTWARE IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED
- * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.  IN
- * NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
- * USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
- * ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
- * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
  */
 
 #ifndef __UBOOT__
+#include <dm/device_compat.h>
+#include <dm/devres.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/delay.h>
@@ -44,15 +21,16 @@
 #include <linux/list.h>
 #include <linux/dma-mapping.h>
 #else
-#include <common.h>
+#include <dm.h>
+#include <dm/device_compat.h>
 #include <usb.h>
+#include <linux/bug.h>
+#include <linux/usb/usb_urb_compat.h>
 #include "linux-compat.h"
-#include "usb-compat.h"
 #endif
 
 #include "musb_core.h"
 #include "musb_host.h"
-
 
 /* MUSB HOST status 22-mar-2006
  *
@@ -88,7 +66,6 @@
  *   although ARP RX wins.  (That test was done with a full speed link.)
  */
 
-
 /*
  * NOTE on endpoint usage:
  *
@@ -102,7 +79,6 @@
  * "claimed" until its software queue is no longer refilled.  No multiplexing
  * of transfers between endpoints, or anything clever.
  */
-
 
 static void musb_ep_program(struct musb *musb, u8 epnum,
 			struct urb *urb, int is_out,
@@ -905,7 +881,6 @@ static void musb_ep_program(struct musb *musb, u8 epnum,
 	}
 }
 
-
 /*
  * Service the default endpoint (ep0) as host.
  * Return true until it's time to start the status stage.
@@ -1105,7 +1080,6 @@ irqreturn_t musb_h_ep0_irq(struct musb *musb)
 done:
 	return retval;
 }
-
 
 #ifdef CONFIG_USB_INVENTRA_DMA
 
@@ -1364,7 +1338,6 @@ void musb_host_tx(struct musb *musb, u8 epnum)
 	musb_writew(epio, MUSB_TXCSR,
 			MUSB_TXCSR_H_WZC_BITS | MUSB_TXCSR_TXPKTRDY);
 }
-
 
 #ifdef CONFIG_USB_INVENTRA_DMA
 
@@ -1889,7 +1862,7 @@ static int musb_schedule(
 			head = &musb->out_bulk;
 
 		/* Enable bulk RX NAK timeout scheme when bulk requests are
-		 * multiplexed.  This scheme doen't work in high speed to full
+		 * multiplexed.  This scheme doesn't work in high speed to full
 		 * speed scenario as NAK interrupts are not coming from a
 		 * full speed device connected to a high speed device.
 		 * NAK timeout interval is 8 (128 uframe or 16ms) for HS and
@@ -2067,7 +2040,11 @@ int musb_urb_enqueue(
 
 	/* precompute addressing for external hub/tt ports */
 	if (musb->is_multipoint) {
+#ifndef __UBOOT__
 		struct usb_device	*parent = urb->dev->parent;
+#else
+		struct usb_device	*parent = usb_dev_get_parent(urb->dev);
+#endif
 
 #ifndef __UBOOT__
 		if (parent != hcd->self.root_hub) {
@@ -2088,9 +2065,13 @@ int musb_urb_enqueue(
 			}
 #else
 			if (tt_needed(musb, urb->dev)) {
-				u16 hub_port = find_tt(urb->dev);
-				qh->h_addr_reg = (u8) (hub_port >> 8);
-				qh->h_port_reg = (u8) (hub_port & 0xff);
+				uint8_t portnr = 0;
+				uint8_t hubaddr = 0;
+				usb_find_usb2_hub_address_port(urb->dev,
+							       &hubaddr,
+							       &portnr);
+				qh->h_addr_reg = hubaddr;
+				qh->h_port_reg = portnr;
 			}
 #endif
 		}

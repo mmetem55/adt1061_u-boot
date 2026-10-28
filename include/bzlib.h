@@ -62,13 +62,15 @@
   For more information on these sources, see the manual.
 --*/
 
-
 #ifndef _BZLIB_H
 #define _BZLIB_H
 
 /* Configure for U-Boot environment */
 #define BZ_NO_STDIO
+
+#ifndef CONFIG_SANDBOX
 #define BZ_NO_COMPRESS
+#endif
 /* End of configuration for U-Boot environment */
 
 #ifdef __cplusplus
@@ -114,7 +116,6 @@ typedef
    }
    bz_stream;
 
-
 #ifndef BZ_IMPORT
 #define BZ_EXPORT
 #endif
@@ -137,7 +138,6 @@ typedef
 #   define BZ_API(func) func
 #   define BZ_EXTERN extern
 #endif
-
 
 /*-- Core (low-level) library functions --*/
 
@@ -170,7 +170,6 @@ BZ_EXTERN int BZ_API(BZ2_bzDecompress) (
 BZ_EXTERN int BZ_API(BZ2_bzDecompressEnd) (
       bz_stream *strm
    );
-
 
 /*-- High(er) level library functions --*/
 
@@ -244,7 +243,6 @@ BZ_EXTERN void BZ_API(BZ2_bzWriteClose64) (
    );
 #endif
 
-
 /*-- Utility functions --*/
 
 BZ_EXTERN int BZ_API(BZ2_bzBuffToBuffCompress) (
@@ -265,7 +263,6 @@ BZ_EXTERN int BZ_API(BZ2_bzBuffToBuffDecompress) (
       int           small,
       int           verbosity
    );
-
 
 /*--
    Code contributed by Yoshioka Tsuneo

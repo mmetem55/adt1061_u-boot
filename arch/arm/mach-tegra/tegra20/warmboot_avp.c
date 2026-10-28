@@ -1,11 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * (C) Copyright 2010 - 2011
  * NVIDIA Corporation <www.nvidia.com>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
-#include <common.h>
+#include <config.h>
 #include <asm/io.h>
 #include <asm/arch/clock.h>
 #include <asm/arch/flow.h>
@@ -35,7 +34,7 @@ void wb_start(void)
 	u32 reg;
 
 	/* enable JTAG & TBE */
-	writel(CONFIG_CTL_TBE | CONFIG_CTL_JTAG, &apb_misc->cfg_ctl);
+	writel(CFG_CTL_TBE | CFG_CTL_JTAG, &apb_misc->cfg_ctl);
 
 	/* Are we running where we're supposed to be? */
 	asm volatile (

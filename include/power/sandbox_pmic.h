@@ -1,8 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  *  Copyright (C) 2015 Samsung Electronics
  *  Przemyslaw Marczak  <p.marczak@samsung.com>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #ifndef _SANDBOX_PMIC_H_
@@ -13,11 +12,11 @@
 #define SANDBOX_BUCK_DRIVER		"sandbox_buck"
 #define SANDBOX_OF_BUCK_PREFIX		"buck"
 
-#define SANDBOX_BUCK_COUNT	2
-#define SANDBOX_LDO_COUNT	2
+#define SANDBOX_BUCK_COUNT	3
+#define SANDBOX_LDO_COUNT	3
 /*
  * Sandbox PMIC registers:
- * We have only 12 significant registers, but we alloc 16 for padding.
+ * We have only 15 significant registers, but we alloc 16 for padding.
  */
 enum {
 	SANDBOX_PMIC_REG_BUCK1_UV = 0,
@@ -36,6 +35,10 @@ enum {
 	SANDBOX_PMIC_REG_LDO2_UV,
 	SANDBOX_PMIC_REG_LDO2_UA,
 	SANDBOX_PMIC_REG_LDO2_OM,
+
+	SANDBOX_PMIC_REG_LDO3_UV,
+	SANDBOX_PMIC_REG_LDO3_UA,
+	SANDBOX_PMIC_REG_LDO3_OM,
 
 	SANDBOX_PMIC_REG_COUNT = 16,
 };
@@ -95,6 +98,11 @@ enum {
 #define OUT_LDO2_UV_MAX		3950000
 #define OUT_LDO2_UV_STEP	50000
 
+/* LDO3 Voltage: min: 0.75V, step: 50mV, max 3.95V */
+#define OUT_LDO3_UV_MIN		750000
+#define OUT_LDO3_UV_MAX		3950000
+#define OUT_LDO3_UV_STEP	50000
+
 /* register <-> value conversion */
 #define REG2VAL(min, step, reg)		((min) + ((step) * (reg)))
 #define VAL2REG(min, step, val)		(((val) - (min)) / (step))
@@ -109,22 +117,31 @@ enum {
 #define SANDBOX_BUCK1_PLATNAME	"SUPPLY_1.2V"
 #define SANDBOX_BUCK2_DEVNAME	"buck2"
 #define SANDBOX_BUCK2_PLATNAME	"SUPPLY_3.3V"
+/* BUCK3: for testing fallback regulator prefix matching during bind */
+#define SANDBOX_BUCK3_DEVNAME	"no_match_by_nodename"
+#define SANDBOX_BUCK3_PLATNAME	"buck_SUPPLY_1.5V"
 /* LDO names */
 #define SANDBOX_LDO1_DEVNAME	"ldo1"
 #define SANDBOX_LDO1_PLATNAME	"VDD_EMMC_1.8V"
 #define SANDBOX_LDO2_DEVNAME	"ldo2"
 #define SANDBOX_LDO2_PLATNAME	"VDD_LCD_3.3V"
+#define SANDBOX_LDO3_DEVNAME	"ldo3"
+#define SANDBOX_LDO3_PLATNAME	"SUPPLY_1.8_3.3V"
 
 /*
  * Expected regulators setup after call of:
- * - regulator_autoset()
+ * - regulator_autoset_by_name()
  * - regulator_list_autoset()
  */
 
-/* BUCK1: for testing regulator_autoset() */
+/* BUCK1: for testing regulator_autoset_by_name() */
 #define SANDBOX_BUCK1_AUTOSET_EXPECTED_UV	1200000
 #define SANDBOX_BUCK1_AUTOSET_EXPECTED_UA	200000
 #define SANDBOX_BUCK1_AUTOSET_EXPECTED_ENABLE	true
+
+/* BUCK2: for testing sandbox ADC's supply */
+#define SANDBOX_BUCK2_INITIAL_EXPECTED_UV	3000000
+#define SANDBOX_BUCK2_SET_UV			3300000
 
 /* LDO1/2 for testing regulator_list_autoset() */
 #define SANDBOX_LDO1_AUTOSET_EXPECTED_UV	1800000

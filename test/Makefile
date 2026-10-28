@@ -1,12 +1,28 @@
+# SPDX-License-Identifier: GPL-2.0+
 #
 # (C) Copyright 2012 The Chromium Authors
-#
-# SPDX-License-Identifier:	GPL-2.0+
-#
 
-obj-$(CONFIG_UNIT_TEST) += cmd_ut.o
-obj-$(CONFIG_UNIT_TEST) += ut.o
-obj-$(CONFIG_SANDBOX) += command_ut.o
-obj-$(CONFIG_SANDBOX) += compression.o
-obj-$(CONFIG_UT_TIME) += time_ut.o
-obj-$(CONFIG_CMD_UBOOT_IT_FUNCTION_TEST) += IT_Uboot_Test/
+obj-y += test-main.o
+
+obj-$(CONFIG_$(PHASE_)CMDLINE) += cmd/
+obj-$(CONFIG_$(PHASE_)CMDLINE) += cmd_ut.o
+obj-y += dm/
+obj-$(CONFIG_FUZZ) += fuzz/
+ifndef CONFIG_SANDBOX_VPL
+obj-y += lib/
+endif
+ifneq ($(CONFIG_HUSH_PARSER),)
+obj-$(CONFIG_$(PHASE_)CMDLINE) += hush/
+endif
+obj-$(CONFIG_UT_OPTEE) += optee/
+obj-y += ut.o
+
+ifeq ($(CONFIG_XPL_BUILD),)
+obj-y += boot/
+obj-y += common/
+obj-$(CONFIG_UT_ENV) += env/
+obj-$(CONFIG_UT_FDT_OVERLAY) += fdt_overlay/
+obj-y += log/
+else
+obj-$(CONFIG_SPL_UT_LOAD) += image/
+endif

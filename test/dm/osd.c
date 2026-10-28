@@ -4,13 +4,13 @@
  * Mario Six, Guntermann & Drunck GmbH, mario.six@gdsys.cc
  */
 
-#include <common.h>
 #include <display_options.h>
 #include <dm.h>
-#include <dm/test.h>
-#include <test/ut.h>
 #include <video_osd.h>
 #include <asm/test.h>
+#include <dm/test.h>
+#include <test/test.h>
+#include <test/ut.h>
 
 #include "../../drivers/video/sandbox_osd.h"
 
@@ -71,27 +71,29 @@ static int dm_test_osd_basics(struct unit_test_state *uts)
 	ut_assertok(sandbox_osd_get_mem(dev, mem, memsize));
 	split(mem, memsize / 2, text, colors);
 
-	ut_assertok(memcmp(text, "          "
-				 "          "
-				 "          "
-				 "          "
-				 "          "
-				 "          "
-				 "          "
-				 "          "
-				 "          "
-				 "          ", memsize / 2));
+	ut_asserteq_mem(text,
+			"          "
+			"          "
+			"          "
+			"          "
+			"          "
+			"          "
+			"          "
+			"          "
+			"          "
+			"          ", memsize / 2);
 
-	ut_assertok(memcmp(colors, "kkkkkkkkkk"
-				   "kkkkkkkkkk"
-				   "kkkkkkkkkk"
-				   "kkkkkkkkkk"
-				   "kkkkkkkkkk"
-				   "kkkkkkkkkk"
-				   "kkkkkkkkkk"
-				   "kkkkkkkkkk"
-				   "kkkkkkkkkk"
-				   "kkkkkkkkkk", memsize / 2));
+	ut_asserteq_mem(colors,
+			"kkkkkkkkkk"
+			"kkkkkkkkkk"
+			"kkkkkkkkkk"
+			"kkkkkkkkkk"
+			"kkkkkkkkkk"
+			"kkkkkkkkkk"
+			"kkkkkkkkkk"
+			"kkkkkkkkkk"
+			"kkkkkkkkkk"
+			"kkkkkkkkkk", memsize / 2);
 
 	print_mem(mem, 10, 10);
 
@@ -100,34 +102,35 @@ static int dm_test_osd_basics(struct unit_test_state *uts)
 	ut_assertok(sandbox_osd_get_mem(dev, mem, memsize));
 	split(mem, memsize / 2, text, colors);
 
-	ut_assertok(memcmp(text, "          "
-				 " Blah     "
-				 "          "
-				 "          "
-				 "          "
-				 "          "
-				 "          "
-				 "          "
-				 "          "
-				 "          ", memsize / 2));
+	ut_asserteq_mem(text,
+			"          "
+			" Blah     "
+			"          "
+			"          "
+			"          "
+			"          "
+			"          "
+			"          "
+			"          "
+			"          ", memsize / 2);
 
-	ut_assertok(memcmp(colors, "kkkkkkkkkk"
-				   "krrrrkkkkk"
-				   "kkkkkkkkkk"
-				   "kkkkkkkkkk"
-				   "kkkkkkkkkk"
-				   "kkkkkkkkkk"
-				   "kkkkkkkkkk"
-				   "kkkkkkkkkk"
-				   "kkkkkkkkkk"
-				   "kkkkkkkkkk", memsize / 2));
+	ut_asserteq_mem(colors,
+			"kkkkkkkkkk"
+			"krrrrkkkkk"
+			"kkkkkkkkkk"
+			"kkkkkkkkkk"
+			"kkkkkkkkkk"
+			"kkkkkkkkkk"
+			"kkkkkkkkkk"
+			"kkkkkkkkkk"
+			"kkkkkkkkkk"
+			"kkkkkkkkkk", memsize / 2);
 
 	print_mem(mem, 10, 10);
 
 	return 0;
 }
-
-DM_TEST(dm_test_osd_basics, DM_TESTF_SCAN_PDATA | DM_TESTF_SCAN_FDT);
+DM_TEST(dm_test_osd_basics, UTF_SCAN_PDATA | UTF_SCAN_FDT);
 
 static int dm_test_osd_extended(struct unit_test_state *uts)
 {
@@ -152,17 +155,19 @@ static int dm_test_osd_extended(struct unit_test_state *uts)
 	ut_assertok(sandbox_osd_get_mem(dev, mem, memsize));
 	split(mem, memsize / 2, text, colors);
 
-	ut_assertok(memcmp(text, "                    "
-				 "                    "
-				 "                    "
-				 "                    "
-				 "                    ", memsize / 2));
+	ut_asserteq_mem(text,
+			"                    "
+			"                    "
+			"                    "
+			"                    "
+			"                    ", memsize / 2);
 
-	ut_assertok(memcmp(colors, "kkkkkkkkkkkkkkkkkkkk"
-				   "kkkkkkkkkkkkkkkkkkkk"
-				   "kkkkkkkkkkkkkkkkkkkk"
-				   "kkkkkkkkkkkkkkkkkkkk"
-				   "kkkkkkkkkkkkkkkkkkkk", memsize / 2));
+	ut_asserteq_mem(colors,
+			"kkkkkkkkkkkkkkkkkkkk"
+			"kkkkkkkkkkkkkkkkkkkk"
+			"kkkkkkkkkkkkkkkkkkkk"
+			"kkkkkkkkkkkkkkkkkkkk"
+			"kkkkkkkkkkkkkkkkkkkk", memsize / 2);
 
 	print_mem(mem, 20, 5);
 
@@ -192,19 +197,20 @@ static int dm_test_osd_extended(struct unit_test_state *uts)
 
 	print_mem(mem, 20, 5);
 
-	ut_assertok(memcmp(text, "+---- OSD menu ----+"
-				 "|  *  Entry 1      |"
-				 "| (*) Entry 2      |"
-				 "|  *  Entry 3      |"
-				 "+------------------+", memsize / 2));
+	ut_asserteq_mem(text,
+			"+---- OSD menu ----+"
+			"|  *  Entry 1      |"
+			"| (*) Entry 2      |"
+			"|  *  Entry 3      |"
+			 "+------------------+", memsize / 2);
 
-	ut_assertok(memcmp(colors, "gggggggggggggggggggg"
-				   "gkbbbbbbbbbbbkkkkkkg"
-				   "gkbbbbbbbbbbbkkkkkkg"
-				   "gkbbbbbbbbbbbkkkkkkg"
-				   "gggggggggggggggggggg", memsize / 2));
+	ut_asserteq_mem(colors,
+			"gggggggggggggggggggg"
+			"gkbbbbbbbbbbbkkkkkkg"
+			"gkbbbbbbbbbbbkkkkkkg"
+			"gkbbbbbbbbbbbkkkkkkg"
+			"gggggggggggggggggggg", memsize / 2);
 
 	return 0;
 }
-
-DM_TEST(dm_test_osd_extended, DM_TESTF_SCAN_PDATA | DM_TESTF_SCAN_FDT);
+DM_TEST(dm_test_osd_extended, UTF_SCAN_PDATA | UTF_SCAN_FDT);

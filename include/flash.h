@@ -1,14 +1,14 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * (C) Copyright 2000-2005
  * Wolfgang Denk, DENX Software Engineering, wd@denx.de.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #ifndef _FLASH_H_
 #define _FLASH_H_
 
-#ifndef CONFIG_SYS_NO_FLASH
+#include <linux/types.h>
+
 /*-----------------------------------------------------------------------
  * FLASH Info: contains chip specific data, per FLASH bank
  */
@@ -19,9 +19,10 @@ typedef struct {
 	ulong	flash_id;		/* combined device & manufacturer code	*/
 	ulong	start[CONFIG_SYS_MAX_FLASH_SECT];   /* virtual sector start address */
 	uchar	protect[CONFIG_SYS_MAX_FLASH_SECT]; /* sector protection status	*/
-#ifdef CONFIG_SYS_FLASH_CFI
 	uchar	portwidth;		/* the width of the port		*/
 	uchar	chipwidth;		/* the width of the chip		*/
+	uchar	chip_lsb;		/* extra Least Significant Bit in the */
+					/* address of chip	*/
 	ushort	buffer_size;		/* # of bytes in write buffer		*/
 	ulong	erase_blk_tout;		/* maximum block erase timeout		*/
 	ulong	write_tout;		/* maximum write timeout		*/
@@ -39,7 +40,15 @@ typedef struct {
 	ushort	cfi_offset;		/* offset for cfi query			*/
 	ulong   addr_unlock1;		/* unlock address 1 for AMD flash roms  */
 	ulong   addr_unlock2;		/* unlock address 2 for AMD flash roms  */
+	uchar   sr_supported;		/* status register supported            */
 	const char *name;		/* human-readable name	                */
+#ifdef CONFIG_DM_MTD
+	struct mtd_info *mtd;
+#endif
+#ifdef CONFIG_CFI_FLASH			/* DM-specific parts */
+	struct udevice *dev;
+	phys_addr_t base;
+	phys_size_t addr_size;
 #endif
 } flash_info_t;
 
@@ -61,8 +70,6 @@ typedef unsigned long flash_sect_t;
 #define FLASH_CFI_BY16		0x02
 #define FLASH_CFI_BY32		0x04
 #define FLASH_CFI_BY64		0x08
-/* convert between bit value and numeric value */
-#define CFI_FLASH_SHIFT_WIDTH	3
 /*
  * Values for the flash device interface
  */
@@ -76,21 +83,21 @@ typedef unsigned long flash_sect_t;
 
 /* Prototypes */
 
-extern unsigned long flash_init (void);
-extern void flash_protect_default(void);
-extern void flash_print_info (flash_info_t *);
-extern int flash_erase	(flash_info_t *, int, int);
-extern int flash_sect_erase (ulong addr_first, ulong addr_last);
-extern int flash_sect_protect (int flag, ulong addr_first, ulong addr_last);
-extern int flash_sect_roundb (ulong *addr);
-extern unsigned long flash_sector_size(flash_info_t *info, flash_sect_t sect);
-extern void flash_set_verbose(uint);
+unsigned long flash_init(void);
+void flash_print_info(flash_info_t *info);
+int flash_erase(flash_info_t *info, int s_first, int s_last);
+int flash_sect_erase(ulong addr_first, ulong addr_last);
+int flash_sect_protect(int flag, ulong addr_first, ulong addr_last);
+int flash_sect_roundb(ulong *addr);
+unsigned long flash_sector_size(flash_info_t *info, flash_sect_t sect);
+void flash_cmd_reset(flash_info_t *info);
+void flash_set_verbose(uint v);
 
 /* common/flash.c */
-extern void flash_protect (int flag, ulong from, ulong to, flash_info_t *info);
-extern int flash_write (char *, ulong, ulong);
-extern flash_info_t *addr2info (ulong);
-extern int write_buff (flash_info_t *info, uchar *src, ulong addr, ulong cnt);
+void flash_protect(int flag, ulong from, ulong to, flash_info_t *info);
+int flash_write(char *src, ulong addr, ulong cnt);
+flash_info_t *addr2info(ulong addr);
+int write_buff(flash_info_t *info, uchar *src, ulong addr, ulong cnt);
 
 /* drivers/mtd/cfi_mtd.c */
 #ifdef CONFIG_FLASH_CFI_MTD
@@ -110,23 +117,26 @@ extern int jedec_flash_match(flash_info_t *info, ulong base);
 #define CFI_CMDSET_AMD_LEGACY		0xFFF0
 #endif
 
-#if defined(CONFIG_SYS_FLASH_CFI)
-extern flash_info_t *flash_get_info(ulong base);
-#endif
+/**
+ * flash_perror() - Print a flash error
+ *
+ * @err: Error number of message to print (ERR_... as below)
+ */
+void flash_perror(int err);
 
 /*-----------------------------------------------------------------------
  * return codes from flash_write():
  */
-#define ERR_OK				0
-#define ERR_TIMOUT			1
-#define ERR_NOT_ERASED			2
-#define ERR_PROTECTED			4
-#define ERR_INVAL			8
-#define ERR_ALIGN			16
-#define ERR_UNKNOWN_FLASH_VENDOR	32
-#define ERR_UNKNOWN_FLASH_TYPE		64
-#define ERR_PROG_ERROR			128
-#define ERR_ABORTED			256
+#define FL_ERR_OK			0
+#define FL_ERR_TIMEOUT			1
+#define FL_ERR_NOT_ERASED		2
+#define FL_ERR_PROTECTED		4
+#define FL_ERR_INVAL			8
+#define FL_ERR_ALIGN			16
+#define FL_ERR_UNKNOWN_FLASH_VENDOR	32
+#define FL_ERR_UNKNOWN_FLASH_TYPE	64
+#define FL_ERR_PROG_ERROR		128
+#define FL_ERR_ABORTED			256
 
 /*-----------------------------------------------------------------------
  * Protection Flags for flash_protect():
@@ -245,7 +255,6 @@ extern flash_info_t *flash_get_info(ulong base);
 #define AMD_ID_GL064MT_3 0x22012201	/* 3rd ID word for S29GL064M-R3 (top boot sector) */
 #define AMD_ID_GL128N_2	0x22212221	/* 2nd ID word for S29GL128N */
 #define AMD_ID_GL128N_3	0x22012201	/* 3rd ID word for S29GL128N */
-
 
 #define AMD_ID_LV320B_2 0x221A221A	/* 2d ID word for AM29LV320MB at 0x38 */
 #define AMD_ID_LV320B_3 0x22002200	/* 3d ID word for AM29LV320MB at 0x3c */
@@ -394,6 +403,9 @@ extern flash_info_t *flash_get_info(ulong base);
 #define FLASH_STM800DT	0x00D7		/* STM M29W800DT (1M = 64K x 16, top)	*/
 #define FLASH_STM800DB	0x005B		/* STM M29W800DB (1M = 64K x 16, bottom)*/
 
+#define FLASH_MCHP100T	0x0060		/* MCHP internal (1M = 64K x 16) */
+#define FLASH_MCHP100B	0x0061		/* MCHP internal (1M = 64K x 16) */
+
 #define FLASH_28F400_T	0x0062		/* MT  28F400B3 ID (  4M = 256K x 16 )	*/
 #define FLASH_28F400_B	0x0063		/* MT  28F400B3 ID (  4M = 256K x 16 )	*/
 
@@ -459,11 +471,9 @@ extern flash_info_t *flash_get_info(ulong base);
 #define FLASH_S29GL064M 0x00F0		/* Spansion S29GL064M-R6		*/
 #define FLASH_S29GL128N 0x00F1		/* Spansion S29GL128N			*/
 
-#define FLASH_STM32F4	0x00F2		/* STM32F4 Embedded Flash */
-#define FLASH_STM32F1	0x00F3		/* STM32F1 Embedded Flash */
+#define FLASH_STM32	0x00F2		/* STM32 Embedded Flash */
 
 #define FLASH_UNKNOWN	0xFFFF		/* unknown flash type			*/
-
 
 /* manufacturer offsets
  */
@@ -480,7 +490,7 @@ extern flash_info_t *flash_get_info(ulong base);
 #define FLASH_MAN_SHARP 0x00500000
 #define FLASH_MAN_ATM	0x00600000
 #define FLASH_MAN_CFI	0x01000000
-
+#define FLASH_MAN_MCHP	0x02000000	/* Microchip Technology		*/
 
 #define FLASH_TYPEMASK	0x0000FFFF	/* extract FLASH type	information	*/
 #define FLASH_VENDMASK	0xFFFF0000	/* extract FLASH vendor information	*/
@@ -499,7 +509,5 @@ extern flash_info_t *flash_get_info(ulong base);
  */
 #define FLASH_ERASE_TIMEOUT	120000	/* timeout for erasing in ms		*/
 #define FLASH_WRITE_TIMEOUT	500	/* timeout for writes  in ms		*/
-
-#endif /* !CONFIG_SYS_NO_FLASH */
 
 #endif /* _FLASH_H_ */

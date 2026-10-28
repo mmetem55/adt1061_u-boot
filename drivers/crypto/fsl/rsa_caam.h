@@ -1,13 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * Copyright 2014 Freescale Semiconductor, Inc.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #ifndef __RSA_CAAM_H
 #define __RSA_CAAM_H
-
-#include <common.h>
 
 /**
  * struct pk_in_params - holder for input to PKHA block in CAAM

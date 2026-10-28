@@ -1,23 +1,24 @@
+# SPDX-License-Identifier: GPL-2.0+
 #
 # (C) Copyright 2000-2007
 # Wolfgang Denk, DENX Software Engineering, wd@denx.de.
-#
-# SPDX-License-Identifier:	GPL-2.0+
-#
 
-obj-$(CONFIG_SCSI_AHCI) += ahci.o
-obj-$(CONFIG_ATA_PIIX) += ata_piix.o
-obj-$(CONFIG_DWC_AHSATA) += dwc_ahsata.o
-obj-$(CONFIG_FSL_SATA) += fsl_sata.o
-obj-$(CONFIG_IDE_FTIDE020) += ftide020.o
-obj-$(CONFIG_LIBATA) += libata.o
-obj-$(CONFIG_MVSATA_IDE) += mvsata_ide.o
-obj-$(CONFIG_MX51_PATA) += mxc_ata.o
-obj-$(CONFIG_PATA_BFIN) += pata_bfin.o
-obj-$(CONFIG_SATA_DWC) += sata_dwc.o
-obj-$(CONFIG_SATA_SIL3114) += sata_sil3114.o
-obj-$(CONFIG_SATA_SIL) += sata_sil.o
-obj-$(CONFIG_IDE_SIL680) += sil680.o
-obj-$(CONFIG_SANDBOX) += sandbox.o
-obj-$(CONFIG_SCSI_SYM53C8XX) += sym53c8xx.o
-obj-$(CONFIG_SYSTEMACE) += systemace.o
+obj-$(CONFIG_$(PHASE_)BLK) += blk-uclass.o
+
+ifndef CONFIG_$(PHASE_)BLK
+obj-$(CONFIG_SPL_LEGACY_BLOCK) += blk_legacy.o
+endif
+
+ifndef CONFIG_XPL_BUILD
+obj-$(CONFIG_IDE) += ide.o
+obj-$(CONFIG_RKMTD) += rkmtd.o
+endif
+obj-$(CONFIG_SANDBOX) += sandbox.o sandbox-bootdev.o host-uclass.o host_dev.o
+obj-$(CONFIG_$(PHASE_)BLOCK_CACHE) += blkcache.o
+obj-$(CONFIG_$(PHASE_)BLKMAP) += blkmap.o
+obj-$(CONFIG_$(PHASE_)BLKMAP) += blkmap_helper.o
+
+obj-$(CONFIG_EFI_MEDIA) += efi-media-uclass.o
+obj-$(CONFIG_EFI_MEDIA_SANDBOX) += sb_efi_media.o
+obj-$(CONFIG_EFI_MEDIA_BLK) += efi_blk.o
+

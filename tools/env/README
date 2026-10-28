@@ -3,9 +3,12 @@ This is a demo implementation of a Linux command line tool to access
 the U-Boot's environment variables.
 
 In order to cross-compile fw_printenv, run
-    make CROSS_COMPILE=<your cross-compiler prefix> env
+    make CROSS_COMPILE=<your cross-compiler prefix> envtools
 in the root directory of the U-Boot distribution. For example,
-    make CROSS_COMPILE=arm-linux- env
+    make CROSS_COMPILE=arm-linux- envtools
+
+You should then create a symlink from fw_setenv to fw_printenv. They use
+the same program and its function depends on its basename.
 
 For the run-time utility configuration uncomment the line
 #define CONFIG_FILE  "/etc/fw_env.config"
@@ -55,6 +58,9 @@ DEVICEx_ENVSECTORS defines the number of sectors that may be used for
 this environment instance. On NAND this is used to limit the range
 within which bad blocks are skipped, on NOR it is not used.
 
+If DEVICEx_ESIZE and DEVICEx_ENVSECTORS are both zero, then a runtime
+detection is attempted for NOR and NAND mtd types.
+
 To prevent losing changes to the environment and to prevent confusing the MTD
-drivers, a lock file at /var/lock/fw_printenv.lock is used to serialize access
+drivers, a lock file at /run/fw_printenv.lock is used to serialize access
 to the environment.

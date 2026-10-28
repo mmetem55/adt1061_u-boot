@@ -1,8 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * (C) Copyright 2000-2004
  * Wolfgang Denk, DENX Software Engineering, wd@denx.de.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 /*
@@ -13,7 +12,6 @@
 
 #ifndef __MPCXX_H__
 #define __MPCXX_H__
-
 
 /*-----------------------------------------------------------------------
  * Exception offsets (PowerPC standard)
@@ -81,7 +79,7 @@
 #define TBSCR_TBIRQ2	0x0400		/* Time Base Interrupt Request 2	*/
 #define TBSCR_TBIRQ1	0x0200		/* Time Base Interrupt Request 1	*/
 #define TBSCR_TBIRQ0	0x0100		/* Time Base Interrupt Request 0	*/
-#if 0	/* already in asm/8xx_immap.h */
+#if 0	/* already in asm/immap_8xx.h */
 #define TBSCR_REFA	0x0080		/* Reference Interrupt Status A		*/
 #define TBSCR_REFB	0x0040		/* Reference Interrupt Status B		*/
 #define TBSCR_REFAE	0x0008		/* Second Interrupt Enable A		*/
@@ -95,7 +93,7 @@
  */
 #undef	PISCR_PIRQ			/* TBD					*/
 #define PISCR_PITF	0x0002		/* Periodic Interrupt Timer Freeze	*/
-#if 0	/* already in asm/8xx_immap.h */
+#if 0	/* already in asm/immap_8xx.h */
 #define PISCR_PS	0x0080		/* Periodic interrupt Status		*/
 #define PISCR_PIE	0x0004		/* Periodic Interrupt Enable		*/
 #define PISCR_PTE	0x0001		/* Periodic Timer Enable		*/
@@ -144,20 +142,6 @@
 			  PLPRCR_S_MSK	 | \
 			  PLPRCR_MFI_MSK | \
 			  PLPRCR_PDF_MSK)
-
-/* Older chips (MPC860/862 et al) defines */
-#define PLPRCR_MF_MSK	0xFFF00000	/* Multiplication factor bits		*/
-#define PLPRCR_MF_SHIFT		20	/* Multiplication factor shift value	*/
-
-#define PLPRCR_SPLSS	0x00008000	/* SPLL Lock Status Sticky bit		*/
-#define PLPRCR_TMIST	0x00001000	/* Timers Interrupt Status		*/
-
-#define PLPRCR_LPM_MSK	0x00000300	/* Low Power Mode mask			*/
-#define PLPRCR_LPM_NORMAL 0x00000000	/* normal power management mode		*/
-#define PLPRCR_LPM_DOZE	  0x00000100	/* doze power management mode		*/
-#define PLPRCR_LPM_SLEEP  0x00000200	/* sleep power management mode		*/
-#define PLPRCR_LPM_DEEP_SLEEP 0x00000300 /* deep sleep power mgt mode		*/
-#define PLPRCR_LPM_DOWN	  0x00000300	/* down power management mode		*/
 
 /* Common defines */
 #define PLPRCR_TEXPS	0x00004000	/* TEXP Status				*/
@@ -215,7 +199,6 @@
 #define SCCR_DFALCD10	0x00000002	/* Division by 5			*/
 #define SCCR_DFALCD11	0x00000003	/* Division by 7 (maximum)		*/
 
-
 /*-----------------------------------------------------------------------
  * BR - Memory Controler: Base Register					16-9
  */
@@ -267,7 +250,6 @@
 #define OR_SETA		0x00000008	/* External Transfer Acknowledge	*/
 #define OR_TRLX		0x00000004	/* Timing Relaxed			*/
 #define OR_EHTR		0x00000002	/* Extended Hold Time on Read		*/
-
 
 /*-----------------------------------------------------------------------
  * MPTPR - Memory Periodic Timer Prescaler Register			16-17
@@ -479,7 +461,6 @@
 #define TGCR_STP1	0x0002		/* Stop timer	1		*/
 #define TGCR_RST1	0x0001		/* Reset timer	1		*/
 
-
 /*-----------------------------------------------------------------------
  * Timer Mode Register							18-9
  */
@@ -499,7 +480,6 @@
 #define TMR_ICLK_IN_GEN_DIV16	0x0004	/* Internal General system clk div 16	*/
 #define TMR_ICLK_TIN_PIN	0x0006	/* TINx pin				*/
 #define TMR_GE			0x0001	/* Gate Enable				*/
-
 
 /*-----------------------------------------------------------------------
  * I2C Controller Registers

@@ -5,17 +5,22 @@
  *
  */
 
-#include <common.h>
 #include <command.h>
 #include <dm.h>
+#include <log.h>
 #include <net.h>
 #include <rtc.h>
 
-#include "sntp.h"
+#include <net/sntp.h>
 
 #define SNTP_TIMEOUT 10000UL
 
 static int sntp_our_port;
+
+/* NTP server IP address */
+struct in_addr	net_ntp_server;
+/* offset time from UTC */
+int		net_ntp_time_offset;
 
 static void sntp_send(void)
 {
@@ -51,48 +56,46 @@ static void sntp_timeout_handler(void)
 static void sntp_handler(uchar *pkt, unsigned dest, struct in_addr sip,
 			 unsigned src, unsigned len)
 {
-#ifdef CONFIG_TIMESTAMP
 	struct sntp_pkt_t *rpktp = (struct sntp_pkt_t *)pkt;
-	struct rtc_time tm;
-	ulong seconds;
-#endif
+	u32 seconds;
 
 	debug("%s\n", __func__);
 
 	if (dest != sntp_our_port)
 		return;
 
-#ifdef CONFIG_TIMESTAMP
+	if (len < SNTP_PACKET_LEN)
+		return;
+
 	/*
 	 * As the RTC's used in U-Boot support second resolution only
 	 * we simply ignore the sub-second field.
 	 */
-	memcpy(&seconds, &rpktp->transmit_timestamp, sizeof(ulong));
-
-	rtc_to_tm(ntohl(seconds) - 2208988800UL + net_ntp_time_offset, &tm);
-#if defined(CONFIG_CMD_DATE)
-#  ifdef CONFIG_DM_RTC
-	struct udevice *dev;
-	int ret;
-
-	ret = uclass_get_device(UCLASS_RTC, 0, &dev);
-	if (ret)
-		printf("SNTP: cannot find RTC: err=%d\n", ret);
-	else
-		dm_rtc_set(dev, &tm);
-#  else
-	rtc_set(&tm);
-#  endif
-#endif
-	printf("Date: %4d-%02d-%02d Time: %2d:%02d:%02d\n",
-	       tm.tm_year, tm.tm_mon, tm.tm_mday,
-	       tm.tm_hour, tm.tm_min, tm.tm_sec);
-#endif
+	memcpy(&seconds, &rpktp->transmit_timestamp, sizeof(seconds));
+	net_sntp_set_rtc(ntohl(seconds) - 2208988800UL + net_ntp_time_offset);
 
 	net_set_state(NETLOOP_SUCCESS);
 }
 
-void sntp_start(void)
+/*
+ * SNTP:
+ *
+ *	Prerequisites:	- own ethernet address
+ *			- own IP address
+ *	We want:	- network time
+ *	Next step:	none
+ */
+int sntp_prereq(void *data)
+{
+	if (net_ntp_server.s_addr == 0) {
+		puts("*** ERROR: NTP server address not given\n");
+		return 1;
+	}
+
+	return 0;
+}
+
+int sntp_start(void *data)
 {
 	debug("%s\n", __func__);
 
@@ -101,4 +104,6 @@ void sntp_start(void)
 	memset(net_server_ethaddr, 0, sizeof(net_server_ethaddr));
 
 	sntp_send();
+
+	return 0;
 }

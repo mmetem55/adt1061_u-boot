@@ -36,7 +36,7 @@
 *		instruction decoding and accessess of immediate data via IP.  etc.
 *
 ****************************************************************************/
-#include <common.h>
+#include <linux/printk.h>
 #include "x86emu/x86emui.h"
 
 /*----------------------------- Implementation ----------------------------*/
@@ -241,7 +241,7 @@ no segment override. Address modes such as -3[BP] or 10[BP+SI] all refer to
 addresses relative to SS (ie: on the stack). So, at the minimum, all
 decodings of addressing modes would have to set/clear a bit describing
 whether the access is relative to DS or SS.  That is the function of the
-cpu-state-varible M.x86.mode. There are several potential states:
+cpu-state-variable M.x86.mode. There are several potential states:
 
     repe prefix seen  (handled elsewhere)
     repne prefix seen  (ditto)

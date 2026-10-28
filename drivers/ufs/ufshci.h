@@ -1,53 +1,21 @@
-/*
- * Universal Flash Storage Host controller driver
- *
- * This code is based on drivers/scsi/ufs/ufshci.h
- * Copyright (C) 2011-2013 Samsung India Software Operations
- *
- * Authors:
- *	Santosh Yaraganavi <santosh.sy@samsung.com>
- *	Vinayak Holikatti <h.vinayak@samsung.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- * See the COPYING file in the top-level directory or visit
- * <http://www.gnu.org/licenses/gpl-2.0.html>
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * This program is provided "AS IS" and "WITH ALL FAULTS" and
- * without warranty of any kind. You are solely responsible for
- * determining the appropriateness of using and distributing
- * the program and assume all risks associated with your exercise
- * of rights with respect to the program, including but not limited
- * to infringement of third party rights, the risks and costs of
- * program errors, damage to or loss of data, programs or equipment,
- * and unavailability or interruption of operations. Under no
- * circumstances will the contributor of this Program be liable for
- * any damages of any kind arising from your use or distribution of
- * this program.
- */
-
-#ifndef _UFSHCI_H
-#define _UFSHCI_H
+/* SPDX-License-Identifier: GPL-2.0+ */
+#ifndef __UFSHCI_H
+#define __UFSHCI_H
 
 enum {
 	TASK_REQ_UPIU_SIZE_DWORDS	= 8,
 	TASK_RSP_UPIU_SIZE_DWORDS	= 8,
-	//ALIGNED_UPIU_SIZE		= 512,
+	ALIGNED_UPIU_SIZE		= 512,
 };
 
 /* UFSHCI Registers */
 enum {
 	REG_CONTROLLER_CAPABILITIES		= 0x00,
+	REG_MCQCAP				= 0x04,
 	REG_UFS_VERSION				= 0x08,
-	REG_CONTROLLER_DEV_ID			= 0x10,
-	REG_CONTROLLER_PROD_ID			= 0x14,
+	REG_EXT_CONTROLLER_CAPABILITIES		= 0x0C,
+	REG_CONTROLLER_PID			= 0x10,
+	REG_CONTROLLER_MID			= 0x14,
 	REG_AUTO_HIBERNATE_IDLE_TIMER		= 0x18,
 	REG_INTERRUPT_STATUS			= 0x20,
 	REG_INTERRUPT_ENABLE			= 0x24,
@@ -79,20 +47,78 @@ enum {
 	REG_UFS_CCAP				= 0x100,
 	REG_UFS_CRYPTOCAP			= 0x104,
 
+	REG_UFS_MEM_CFG				= 0x300,
+	REG_UFS_MCQ_CFG				= 0x380,
+	REG_UFS_ESILBA				= 0x384,
+	REG_UFS_ESIUBA				= 0x388,
 	UFSHCI_CRYPTO_REG_SPACE_SIZE		= 0x400,
 };
 
 /* Controller capability masks */
 enum {
-	MASK_TRANSFER_REQUESTS_SLOTS		= 0x0000001F,
+	MASK_TRANSFER_REQUESTS_SLOTS_SDB	= 0x0000001F,
+	MASK_TRANSFER_REQUESTS_SLOTS_MCQ	= 0x000000FF,
+	MASK_NUMBER_OUTSTANDING_RTT		= 0x0000FF00,
 	MASK_TASK_MANAGEMENT_REQUEST_SLOTS	= 0x00070000,
+	MASK_EHSLUTRD_SUPPORTED			= 0x00400000,
 	MASK_AUTO_HIBERN8_SUPPORT		= 0x00800000,
 	MASK_64_ADDRESSING_SUPPORT		= 0x01000000,
 	MASK_OUT_OF_ORDER_DATA_DELIVERY_SUPPORT	= 0x02000000,
 	MASK_UIC_DME_TEST_MODE_SUPPORT		= 0x04000000,
 	MASK_CRYPTO_SUPPORT			= 0x10000000,
+	MASK_LSDB_SUPPORT			= 0x20000000,
+	MASK_MCQ_SUPPORT			= 0x40000000,
 };
 
+/* MCQ capability mask */
+enum {
+	MASK_EXT_IID_SUPPORT = 0x00000400,
+};
+
+enum {
+	REG_SQATTR		= 0x0,
+	REG_SQLBA		= 0x4,
+	REG_SQUBA		= 0x8,
+	REG_SQDAO		= 0xC,
+	REG_SQISAO		= 0x10,
+
+	REG_CQATTR		= 0x20,
+	REG_CQLBA		= 0x24,
+	REG_CQUBA		= 0x28,
+	REG_CQDAO		= 0x2C,
+	REG_CQISAO		= 0x30,
+};
+
+enum {
+	REG_SQHP		= 0x0,
+	REG_SQTP		= 0x4,
+	REG_SQRTC		= 0x8,
+	REG_SQCTI		= 0xC,
+	REG_SQRTS		= 0x10,
+};
+
+enum {
+	REG_CQHP		= 0x0,
+	REG_CQTP		= 0x4,
+};
+
+enum {
+	REG_CQIS		= 0x0,
+	REG_CQIE		= 0x4,
+};
+
+enum {
+	SQ_START		= 0x0,
+	SQ_STOP			= 0x1,
+	SQ_ICU			= 0x2,
+};
+
+enum {
+	SQ_STS			= 0x1,
+	SQ_CUS			= 0x2,
+};
+
+#define SQ_ICU_ERR_CODE_MASK		GENMASK(7, 4)
 #define UFS_MASK(mask, offset)		((mask) << (offset))
 
 /* UFS Version 08h */
@@ -106,27 +132,9 @@ enum {
 	UFSHCI_VERSION_20 = 0x00000200, /* 2.0 */
 	UFSHCI_VERSION_21 = 0x00000210, /* 2.1 */
 	UFSHCI_VERSION_30 = 0x00000300, /* 3.0 */
+	UFSHCI_VERSION_31 = 0x00000310, /* 3.1 */
+	UFSHCI_VERSION_40 = 0x00000400, /* 4.0 */
 };
-
-/*
- * HCDDID - Host Controller Identification Descriptor
- *	  - Device ID and Device Class 10h
- */
-#define DEVICE_CLASS	UFS_MASK(0xFFFF, 0)
-#define DEVICE_ID	UFS_MASK(0xFF, 24)
-
-/*
- * HCPMID - Host Controller Identification Descriptor
- *	  - Product/Manufacturer ID  14h
- */
-#define MANUFACTURE_ID_MASK	UFS_MASK(0xFFFF, 0)
-#define PRODUCT_ID_MASK		UFS_MASK(0xFFFF, 16)
-
-/* AHIT - Auto-Hibernate Idle Timer */
-#define UFSHCI_AHIBERN8_TIMER_MASK		GENMASK(9, 0)
-#define UFSHCI_AHIBERN8_SCALE_MASK		GENMASK(12, 10)
-#define UFSHCI_AHIBERN8_SCALE_FACTOR		10
-#define UFSHCI_AHIBERN8_MAX			(1023 * 100000)
 
 /*
  * IS - Interrupt Status - 20h
@@ -146,6 +154,7 @@ enum {
 #define CONTROLLER_FATAL_ERROR			0x10000
 #define SYSTEM_BUS_FATAL_ERROR			0x20000
 #define CRYPTO_ENGINE_FATAL_ERROR		0x40000
+#define MCQ_CQ_EVENT_STATUS			0x100000
 
 #define UFSHCD_UIC_HIBERN8_MASK	(UIC_HIBERNATE_ENTER |\
 				UIC_HIBERNATE_EXIT)
@@ -155,16 +164,13 @@ enum {
 
 #define UFSHCD_UIC_MASK		(UIC_COMMAND_COMPL | UFSHCD_UIC_PWR_MASK)
 
-#define UFSHCD_ERROR_MASK	(UIC_ERROR |\
-				DEVICE_FATAL_ERROR |\
-				CONTROLLER_FATAL_ERROR |\
-				SYSTEM_BUS_FATAL_ERROR |\
-				CRYPTO_ENGINE_FATAL_ERROR)
+#define UFSHCD_ERROR_MASK	(UIC_ERROR | INT_FATAL_ERRORS)
 
 #define INT_FATAL_ERRORS	(DEVICE_FATAL_ERROR |\
 				CONTROLLER_FATAL_ERROR |\
 				SYSTEM_BUS_FATAL_ERROR |\
-				CRYPTO_ENGINE_FATAL_ERROR)
+				CRYPTO_ENGINE_FATAL_ERROR |\
+				UIC_LINK_LOST)
 
 /* HCS - Host Controller Status 30h */
 #define DEVICE_PRESENT				0x1
@@ -181,7 +187,7 @@ enum {
 
 enum {
 	PWR_OK		= 0x0,
-	//PWR_LOCAL	= 0x01,
+	PWR_LOCAL	= 0x01,
 	PWR_REMOTE	= 0x02,
 	PWR_BUSY	= 0x03,
 	PWR_ERROR_CAP	= 0x04,
@@ -197,10 +203,11 @@ enum {
 #define UIC_PHY_ADAPTER_LAYER_ERROR			0x80000000
 #define UIC_PHY_ADAPTER_LAYER_ERROR_CODE_MASK		0x1F
 #define UIC_PHY_ADAPTER_LAYER_LANE_ERR_MASK		0xF
+#define UIC_PHY_ADAPTER_LAYER_GENERIC_ERROR		0x10
 
 /* UECDL - Host UIC Error Code Data Link Layer 3Ch */
 #define UIC_DATA_LINK_LAYER_ERROR		0x80000000
-#define UIC_DATA_LINK_LAYER_ERROR_CODE_MASK	0x7FFF
+#define UIC_DATA_LINK_LAYER_ERROR_CODE_MASK	0xFFFF
 #define UIC_DATA_LINK_LAYER_ERROR_TCX_REP_TIMER_EXP	0x2
 #define UIC_DATA_LINK_LAYER_ERROR_AFCX_REQ_TIMER_EXP	0x4
 #define UIC_DATA_LINK_LAYER_ERROR_FCX_PRO_TIMER_EXP	0x8
@@ -245,6 +252,12 @@ enum {
 /* UTMRLRSR - UTP Task Management Request Run-Stop Register 80h */
 #define UTP_TASK_REQ_LIST_RUN_STOP_BIT		0x1
 
+/* REG_UFS_MEM_CFG - Global Config Registers 300h */
+#define MCQ_MODE_SELECT	BIT(0)
+
+/* CQISy - CQ y Interrupt Status Register  */
+#define UFSHCD_MCQ_CQIS_TAIL_ENT_PUSH_STS	0x1
+
 /* UICCMD - UIC Command */
 #define COMMAND_OPCODE_MASK		0xFF
 #define GEN_SELECTOR_INDEX_MASK		0xFFFF
@@ -253,15 +266,15 @@ enum {
 #define RESET_LEVEL			0xFF
 
 #define ATTR_SET_TYPE_MASK		UFS_MASK(0xFF, 16)
-#define CONFIG_RESULT_CODE_MASK		0xFF
+#define CFG_RESULT_CODE_MASK		0xFF
 #define GENERIC_ERROR_CODE_MASK		0xFF
 
 /* GenSelectorIndex calculation macros for M-PHY attributes */
 #define UIC_ARG_MPHY_TX_GEN_SEL_INDEX(lane) (lane)
 #define UIC_ARG_MPHY_RX_GEN_SEL_INDEX(lane) (PA_MAXDATALANES + (lane))
 
-#define UIC_ARG_MIB_SEL(attr, sel)	((((attr) & 0xFFFF)) |\
-					 ((sel) & 0xFFFF) <<16)
+#define UIC_ARG_MIB_SEL(attr, sel)	((((attr) & 0xFFFF) << 16) |\
+					 ((sel) & 0xFFFF))
 #define UIC_ARG_MIB(attr)		UIC_ARG_MIB_SEL(attr, 0)
 #define UIC_ARG_ATTR_TYPE(t)		(((t) & 0xFF) << 16)
 #define UIC_GET_ATTR_ID(v)		(((v) >> 16) & 0xFFFF)
@@ -310,108 +323,31 @@ enum {
 #define INT_AGGR_COUNTER_THLD_VAL(c)	(((c) & 0x1F) << 8)
 #define INT_AGGR_TIMEOUT_VAL(t)		(((t) & 0xFF) << 0)
 
-/* Interrupt disable masks */
-enum {
-	/* Interrupt disable mask for UFSHCI v1.0 */
-	INTERRUPT_MASK_ALL_VER_10	= 0x30FFF,
-	INTERRUPT_MASK_RW_VER_10	= 0x30000,
-
-	/* Interrupt disable mask for UFSHCI v1.1 */
-	INTERRUPT_MASK_ALL_VER_11	= 0x31FFF,
-
-	/* Interrupt disable mask for UFSHCI v2.1 */
-	INTERRUPT_MASK_ALL_VER_21	= 0x71FFF,
-};
-
-/* CCAP - Crypto Capability 100h */
-union ufs_crypto_capabilities {
-	__le32 reg_val;
-	struct {
-		u8 num_crypto_cap;
-		u8 config_count;
-		u8 reserved;
-		u8 config_array_ptr;
-	};
-};
-
-enum ufs_crypto_key_size {
-	UFS_CRYPTO_KEY_SIZE_INVALID	= 0x0,
-	UFS_CRYPTO_KEY_SIZE_128		= 0x1,
-	UFS_CRYPTO_KEY_SIZE_192		= 0x2,
-	UFS_CRYPTO_KEY_SIZE_256		= 0x3,
-	UFS_CRYPTO_KEY_SIZE_512		= 0x4,
-};
-
-enum ufs_crypto_alg {
-	UFS_CRYPTO_ALG_AES_XTS			= 0x0,
-	UFS_CRYPTO_ALG_BITLOCKER_AES_CBC	= 0x1,
-	UFS_CRYPTO_ALG_AES_ECB			= 0x2,
-	UFS_CRYPTO_ALG_ESSIV_AES_CBC		= 0x3,
-};
-
-/* x-CRYPTOCAP - Crypto Capability X */
-union ufs_crypto_cap_entry {
-	__le32 reg_val;
-	struct {
-		u8 algorithm_id;
-		u8 sdus_mask; /* Supported data unit size mask */
-		u8 key_size;
-		u8 reserved;
-	};
-};
-
-#define UFS_CRYPTO_CONFIGURATION_ENABLE (1 << 7)
-#define UFS_CRYPTO_KEY_MAX_SIZE 64
-/* x-CRYPTOCFG - Crypto Configuration X */
-union ufs_crypto_cfg_entry {
-	__le32 reg_val[32];
-	struct {
-		u8 crypto_key[UFS_CRYPTO_KEY_MAX_SIZE];
-		u8 data_unit_size;
-		u8 crypto_cap_idx;
-		u8 reserved_1;
-		u8 config_enable;
-		u8 reserved_multi_host;
-		u8 reserved_2;
-		u8 vsb[2];
-		u8 reserved_3[56];
-	};
-};
-
 /*
  * Request Descriptor Definitions
  */
-
-/* Transfer request command type */
-enum {
-	UTP_CMD_TYPE_SCSI		= 0x0,
-	UTP_CMD_TYPE_UFS		= 0x1,
-	UTP_CMD_TYPE_DEV_MANAGE		= 0x2,
-};
 
 /* To accommodate UFS2.0 required Command type */
 enum {
 	UTP_CMD_TYPE_UFS_STORAGE	= 0x1,
 };
-#if 0
+
 enum {
 	UTP_SCSI_COMMAND		= 0x00000000,
+	UTP_REQ_DESC_INT_CMD            = 0x01000000,
 	UTP_NATIVE_UFS_COMMAND		= 0x10000000,
 	UTP_DEVICE_MANAGEMENT_FUNCTION	= 0x20000000,
-	UTP_REQ_DESC_INT_CMD		= 0x01000000,
-	UTP_REQ_DESC_CRYPTO_ENABLE_CMD	= 0x00800000,
 };
-#endif
+
 /* UTP Transfer Request Data Direction (DD) */
-#if 0
-enum {
-	UTP_NO_DATA_TRANSFER	= 0x00000000,
-	UTP_HOST_TO_DEVICE	= 0x02000000,
-	UTP_DEVICE_TO_HOST	= 0x04000000,
+enum utp_data_direction {
+	UTP_NO_DATA_TRANSFER	= 0,
+	UTP_HOST_TO_DEVICE	= 1,
+	UTP_DEVICE_TO_HOST	= 2,
 };
-#endif
+
 /* Overall command status values */
-enum {
+enum utp_ocs {
 	OCS_SUCCESS			= 0x0,
 	OCS_INVALID_CMD_TABLE_ATTR	= 0x1,
 	OCS_INVALID_PRDT_ATTR		= 0x2,
@@ -424,21 +360,18 @@ enum {
 	OCS_INVALID_CRYPTO_CONFIG	= 0x9,
 	OCS_GENERAL_CRYPTO_ERROR	= 0xA,
 	OCS_INVALID_COMMAND_STATUS	= 0x0F,
+};
+
+enum {
 	MASK_OCS			= 0x0F,
 };
 
 /* The maximum length of the data byte count field in the PRDT is 256KB */
-#define PRDT_DATA_BYTE_COUNT_MAX	(256 * 1024)
+#define PRDT_DATA_BYTE_COUNT_MAX	SZ_256K
 /* The granularity of the data byte count field in the PRDT is 32-bit */
 #define PRDT_DATA_BYTE_COUNT_PAD	4
-#if 0
-/**
- * struct ufshcd_sg_entry - UFSHCI PRD Entry
- * @base_addr: Lower 32bit physical address DW-0
- * @upper_addr: Upper 32bit physical address DW-1
- * @reserved: Reserved for future use DW-2
- * @size: size of physical segment DW-3
- */
+
+
 struct ufshcd_sg_entry {
 	__le32    base_addr;
 	__le32    upper_addr;
@@ -446,19 +379,19 @@ struct ufshcd_sg_entry {
 	__le32    size;
 };
 
+#define MAX_BUFF	128
 /**
  * struct utp_transfer_cmd_desc - UFS Command Descriptor structure
  * @command_upiu: Command UPIU Frame address
  * @response_upiu: Response UPIU Frame address
  * @prd_table: Physical Region Descriptor
  */
-#if 0
 struct utp_transfer_cmd_desc {
 	u8 command_upiu[ALIGNED_UPIU_SIZE];
 	u8 response_upiu[ALIGNED_UPIU_SIZE];
-	struct ufshcd_sg_entry    prd_table[SG_ALL];
+	struct ufshcd_sg_entry    prd_table[MAX_BUFF];
 };
-#endif
+
 /**
  * struct request_desc_header - Descriptor Header common to both UTRD and UTMRD
  * @dword0: Descriptor Header DW0
@@ -484,7 +417,6 @@ struct request_desc_header {
  * @prd_table_offset: Physical region descriptor offset DW-7
  */
 struct utp_transfer_req_desc {
-
 	/* DW 0-3 */
 	struct request_desc_header header;
 
@@ -499,6 +431,18 @@ struct utp_transfer_req_desc {
 	/* DW 7 */
 	__le16  prd_table_length;
 	__le16  prd_table_offset;
+};
+
+/**
+ * struct utp_upiu_header - UPIU header structure
+ * @dword_0: UPIU header DW-0
+ * @dword_1: UPIU header DW-1
+ * @dword_2: UPIU header DW-2
+ */
+struct utp_upiu_header {
+	__be32 dword_0;
+	__be32 dword_1;
+	__be32 dword_2;
 };
 
 /*
@@ -521,5 +465,5 @@ struct utp_task_req_desc {
 	__be32			output_param2;
 	__be32			__reserved2[3];
 };
+
 #endif
-#endif /* End of Header */

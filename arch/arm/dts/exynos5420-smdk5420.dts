@@ -1,10 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * SAMSUNG SMDK5420 board device tree source
  *
  * Copyright (c) 2013 Samsung Electronics Co., Ltd.
  *		http://www.samsung.com
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 /dts-v1/;
@@ -37,7 +36,7 @@
 	};
 
 	/* s2mps11 is on i2c bus 4 */
-	i2c@12ca0000 {
+	i2c@12CA0000 {
 		#address-cells = <1>;
 		#size-cells = <0>;
 		pmic@66 {
@@ -82,17 +81,35 @@
 		samsung,codec-type = "wm8994";
 	};
 
-	i2c@12c70000 {
-		soundcodec@1a {
+	i2c@12C70000 {
+		wm8994: soundcodec@1a {
 			reg = <0x1a>;
-			compatible = "wolfson,wm8994-codec";
+			u-boot,i2c-offset-len = <2>;
+			compatible = "wolfson,wm8994";
+			#sound-dai-cells = <1>;
+		};
+	};
+
+	sound {
+		compatible = "samsung,smdk5420-audio-wm8994";
+
+		samsung,model = "Snow-I2S-MAX98095";
+		samsung,audio-codec = <&wm8994>;
+
+		cpu {
+			sound-dai = <&i2s0 0>;
+		};
+
+		codec {
+			sound-dai = <&wm8994 0>;
 		};
 	};
 
 	mmc@12200000 {
-		samsung,bus-width = <8>;
-		samsung,timing = <1 3 3>;
-		samsung,removable = <0>;
+		bus-width = <8>;
+		samsung,dw-mshc-ciu-div = <3>;
+		samsung,dw-mshc-sdr-timing = <1 3>;
+		non-removable;
 		samsung,pre-init;
 	};
 
@@ -101,9 +118,9 @@
 	};
 
 	mmc@12220000 {
-		samsung,bus-width = <4>;
-		samsung,timing = <1 2 3>;
-		samsung,removable = <1>;
+		bus-width = <4>;
+		samsung,dw-mshc-ciu-div = <3>;
+		samsung,dw-mshc-sdr-timing = <1 2>;
 	};
 
 	mmc@12230000 {

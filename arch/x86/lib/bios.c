@@ -1,14 +1,19 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * From Coreboot file device/oprom/realmode/x86.c
  *
  * Copyright (C) 2007 Advanced Micro Devices, Inc.
  * Copyright (C) 2009-2010 coresystems GmbH
- *
- * SPDX-License-Identifier:	GPL-2.0
  */
-#include <common.h>
+
+#define LOG_CATEGRORY	LOGC_ARCH
+
+#include <compiler.h>
 #include <bios_emul.h>
-#include <vbe.h>
+#include <irq_func.h>
+#include <log.h>
+#include <pci.h>
+#include <vesa.h>
 #include <linux/linkage.h>
 #include <asm/cache.h>
 #include <asm/processor.h>
@@ -21,7 +26,9 @@
 static int (*int_handler[256])(void);
 
 /* to have a common register file for interrupt handlers */
+#if !CONFIG_IS_ENABLED(BIOSEMU)
 X86EMU_sysEnv _X86EMU_env;
+#endif
 
 asmlinkage void (*realmode_call)(u32 addr, u32 eax, u32 ebx, u32 ecx, u32 edx,
 				 u32 esi, u32 edi);
@@ -74,7 +81,7 @@ static int int_exception_handler(void)
 	};
 	struct eregs *regs = &reg_info;
 
-	debug("Oops, exception %d while executing option rom\n", regs->vector);
+	log_err("Exception %d while executing option rom\n", regs->vector);
 	cpu_hlt();
 
 	return 0;
@@ -157,7 +164,7 @@ static void setup_realmode_idt(void)
 	 for (i = 0; i < 256; i++) {
 		idts[i].cs = 0;
 		idts[i].offset = 0x1000 + (i * __idt_handler_size);
-		write_idt_stub((void *)((u32)idts[i].offset), i);
+		write_idt_stub((void *)((ulong)idts[i].offset), i);
 	}
 
 	/*
@@ -185,7 +192,8 @@ static void setup_realmode_idt(void)
 	write_idt_stub((void *)0xffe6e, 0x1a);
 }
 
-static u8 vbe_get_mode_info(struct vbe_mode_info *mi)
+#ifdef CONFIG_FRAMEBUFFER_SET_VESA_MODE
+static u8 vbe_get_mode_info(struct vesa_state *mi)
 {
 	u16 buffer_seg;
 	u16 buffer_adr;
@@ -199,13 +207,13 @@ static u8 vbe_get_mode_info(struct vbe_mode_info *mi)
 
 	realmode_interrupt(0x10, VESA_GET_MODE_INFO, 0x0000, mi->video_mode,
 			   0x0000, buffer_seg, buffer_adr);
-	memcpy(mi->mode_info_block, buffer, sizeof(struct vbe_mode_info));
+	memcpy(mi->mode_info_block, buffer, sizeof(struct vesa_mode_info));
 	mi->valid = true;
 
 	return 0;
 }
 
-static u8 vbe_set_mode(struct vbe_mode_info *mi)
+static u8 vbe_set_mode(struct vesa_state *mi)
 {
 	int video_mode = mi->video_mode;
 
@@ -220,14 +228,18 @@ static u8 vbe_set_mode(struct vbe_mode_info *mi)
 	return 0;
 }
 
-static void vbe_set_graphics(int vesa_mode, struct vbe_mode_info *mode_info)
+static void vbe_set_graphics(int vesa_mode, struct vesa_state *mode_info)
 {
 	unsigned char *framebuffer;
 
-	mode_info->video_mode = (1 << 14) | vesa_mode;
+	/*
+	 * bit 14 is linear-framebuffer mode
+	 * bit 15 means don't clear the display
+	 */
+	mode_info->video_mode = (1 << 14) | (1 << 15) | vesa_mode;
 	vbe_get_mode_info(mode_info);
 
-	framebuffer = (unsigned char *)mode_info->vesa.phys_base_ptr;
+	framebuffer = (unsigned char *)(ulong)mode_info->vesa.phys_base_ptr;
 	debug("VBE: resolution:  %dx%d@%d\n",
 	      le16_to_cpu(mode_info->vesa.x_resolution),
 	      le16_to_cpu(mode_info->vesa.y_resolution),
@@ -241,10 +253,12 @@ static void vbe_set_graphics(int vesa_mode, struct vbe_mode_info *mode_info)
 	mode_info->video_mode &= 0x3ff;
 	vbe_set_mode(mode_info);
 }
+#endif /* CONFIG_FRAMEBUFFER_SET_VESA_MODE */
 
-void bios_run_on_x86(pci_dev_t pcidev, unsigned long addr, int vesa_mode,
-		     struct vbe_mode_info *mode_info)
+void bios_run_on_x86(struct udevice *dev, unsigned long addr, int vesa_mode,
+		     struct vesa_state *mode_info)
 {
+	pci_dev_t pcidev = dm_pci_get_bdf(dev);
 	u32 num_dev;
 
 	num_dev = PCI_BUS(pcidev) << 8 | PCI_DEV(pcidev) << 3 |
@@ -272,8 +286,10 @@ void bios_run_on_x86(pci_dev_t pcidev, unsigned long addr, int vesa_mode,
 		      0x0);
 	debug("done\n");
 
+#ifdef CONFIG_FRAMEBUFFER_SET_VESA_MODE
 	if (vesa_mode != -1)
 		vbe_set_graphics(vesa_mode, mode_info);
+#endif
 }
 
 asmlinkage int interrupt_handler(u32 intnumber, u32 gsfs, u32 dses,
@@ -290,16 +306,14 @@ asmlinkage int interrupt_handler(u32 intnumber, u32 gsfs, u32 dses,
 	cs = cs_ip >> 16;
 	flags = stackflags;
 
-#ifdef CONFIG_REALMODE_DEBUG
-	debug("oprom: INT# 0x%x\n", intnumber);
-	debug("oprom: eax: %08x ebx: %08x ecx: %08x edx: %08x\n",
-	      eax, ebx, ecx, edx);
-	debug("oprom: ebp: %08x esp: %08x edi: %08x esi: %08x\n",
-	      ebp, esp, edi, esi);
-	debug("oprom:  ip: %04x      cs: %04x   flags: %08x\n",
-	      ip, cs, flags);
-	debug("oprom: stackflags = %04x\n", stackflags);
-#endif
+	log_debug("oprom: INT# 0x%x\n", intnumber);
+	log_debug("oprom: eax: %08x ebx: %08x ecx: %08x edx: %08x\n",
+		  eax, ebx, ecx, edx);
+	log_debug("oprom: ebp: %08x esp: %08x edi: %08x esi: %08x\n",
+		  ebp, esp, edi, esi);
+	log_debug("oprom:  ip: %04x      cs: %04x   flags: %08x\n",
+		  ip, cs, flags);
+	log_debug("oprom: stackflags = %04x\n", stackflags);
 
 	/*
 	 * Fetch arguments from the stack and put them to a place

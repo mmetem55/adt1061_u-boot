@@ -1,11 +1,10 @@
+/* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * This is from the Android Project,
  * Repository: https://android.googlesource.com/platform/system/core
  * File: libsparse/sparse_format.h
  * Commit: 28fa5bc347390480fe190294c6c385b6a9f0d68b
  * Copyright (C) 2010 The Android Open Source Project
- *
- * SPDX-License-Identifier: BSD-3-Clause
  */
 
 #ifndef _LIBSPARSE_SPARSE_FORMAT_H_
@@ -33,7 +32,6 @@ typedef struct sparse_header {
 #define CHUNK_TYPE_DONT_CARE	0xCAC3
 #define CHUNK_TYPE_CRC32    0xCAC4
 
-#define SPARSE_HEADER_MAJOR_VER 1
 typedef struct chunk_header {
   __le16	chunk_type;	/* 0xCAC1 -> raw; 0xCAC2 -> fill; 0xCAC3 -> don't care */
   __le16	reserved1;

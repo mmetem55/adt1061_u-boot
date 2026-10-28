@@ -1,12 +1,13 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
-  A version of malloc/free/realloc written by Doug Lea and released to the
-  public domain.  Send questions/comments/complaints/performance data
-  to dl@cs.oswego.edu
+  This code is based on a version of malloc/free/realloc written by Doug Lea and
+  released to the public domain. Send questions/comments/complaints/performance
+  data to dl@cs.oswego.edu
 
 * VERSION 2.6.6  Sun Mar  5 19:10:03 2000  Doug Lea  (dl at gee)
 
    Note: There may be an updated version of this malloc obtainable at
-	   ftp://g.oswego.edu/pub/misc/malloc.c
+	   http://g.oswego.edu/pub/misc/malloc.c
 	 Check before installing!
 
 * Why use this malloc?
@@ -212,7 +213,6 @@
      quickly avoid procedure declaration conflicts and linker symbol
      conflicts with existing memory allocation routines.
 
-
 */
 
 
@@ -255,11 +255,9 @@ extern "C" {
 #include <stdio.h>	/* needed for malloc_stats */
 #endif
 
-
 /*
   Compile-time options
 */
-
 
 /*
     Debugging:
@@ -305,9 +303,7 @@ extern "C" {
   returns a unique pointer for malloc(0), so does realloc(p, 0).
 */
 
-
 /*   #define REALLOC_ZERO_BYTES_FREES */
-
 
 /*
   WIN32 causes an emulation of sbrk to be compiled in
@@ -333,7 +329,6 @@ extern "C" {
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #endif
-
 
 /*
   HAVE_MEMCPY should be defined if you are not otherwise using
@@ -361,8 +356,11 @@ extern "C" {
 #if (__STD_C || defined(HAVE_MEMCPY))
 
 #if __STD_C
+/* U-Boot defines memset() and memcpy in /include/linux/string.h
 void* memset(void*, int, size_t);
 void* memcpy(void*, const void*, size_t);
+*/
+#include <linux/string.h>
 #else
 #ifdef WIN32
 /* On Win32 platforms, 'memset()' and 'memcpy()' are already declared in */
@@ -455,7 +453,6 @@ do {                                                                          \
 } while(0)
 
 #endif
-
 
 /*
   Define HAVE_MMAP to optionally make malloc() use mmap() to
@@ -559,7 +556,6 @@ do {                                                                          \
 #  endif
 #endif
 
-
 /*
 
   This version of malloc supports the standard SVID/XPG mallinfo
@@ -622,7 +618,6 @@ struct mallinfo {
 #define M_MMAP_THRESHOLD    -3
 #define M_MMAP_MAX          -4
 
-
 #ifndef DEFAULT_TRIM_THRESHOLD
 #define DEFAULT_TRIM_THRESHOLD (128 * 1024)
 #endif
@@ -673,9 +668,7 @@ struct mallinfo {
       It must be greater than page size to have any useful effect.  To
       disable trimming completely, you can set to (unsigned long)(-1);
 
-
 */
-
 
 #ifndef DEFAULT_TOP_PAD
 #define DEFAULT_TOP_PAD        (0)
@@ -708,7 +701,6 @@ struct mallinfo {
       the program needs.
 
 */
-
 
 #ifndef DEFAULT_MMAP_THRESHOLD
 #define DEFAULT_MMAP_THRESHOLD (128 * 1024)
@@ -749,9 +741,7 @@ struct mallinfo {
       All together, these considerations should lead you to use mmap
       only for relatively large requests.
 
-
 */
-
 
 #ifndef DEFAULT_MMAP_MAX
 #ifdef HAVE_MMAP
@@ -780,7 +770,6 @@ struct mallinfo {
       in mallopt will fail.
 */
 
-
 /*
     USE_DL_PREFIX will prefix all public routines with the string 'dl'.
       Useful to quickly avoid procedure declaration conflicts and linker
@@ -788,8 +777,13 @@ struct mallinfo {
 
 */
 
-/* #define USE_DL_PREFIX */
-
+/*
+ * Rename the U-Boot alloc functions so that sandbox can still use the system
+ * ones
+ */
+#ifdef CONFIG_SANDBOX
+#define USE_DL_PREFIX
+#endif
 
 /*
 
@@ -805,7 +799,6 @@ struct mallinfo {
   be hard to obtain finer granularity.
 
 */
-
 
 #ifdef INTERNAL_LINUX_C_LIB
 
@@ -872,13 +865,30 @@ extern Void_t*     sbrk();
 
 #else
 
-#ifdef CONFIG_SYS_MALLOC_SIMPLE
+void malloc_simple_info(void);
+
+/**
+ * malloc_enable_testing() - Put malloc() into test mode
+ *
+ * This only works if UNIT_TESTING is enabled
+ *
+ * @max_allocs: return -ENOMEM after max_allocs calls to malloc()
+ */
+void malloc_enable_testing(int max_allocs);
+
+/** malloc_disable_testing() - Put malloc() into normal mode */
+void malloc_disable_testing(void);
+
+#if CONFIG_IS_ENABLED(SYS_MALLOC_SIMPLE)
 #define malloc malloc_simple
 #define realloc realloc_simple
 #define memalign memalign_simple
+#if IS_ENABLED(CONFIG_VALGRIND)
+#define free free_simple
+#else
 static inline void free(void *ptr) {}
+#endif
 void *calloc(size_t nmemb, size_t size);
-void *memalign_simple(size_t alignment, size_t bytes);
 void *realloc_simple(void *ptr, size_t size);
 #else
 
@@ -892,6 +902,21 @@ void *realloc_simple(void *ptr, size_t size);
 # define pvALLOc		dlpvalloc
 # define mALLINFo	dlmallinfo
 # define mALLOPt		dlmallopt
+
+/* Ensure that U-Boot actually uses these too */
+#define calloc(x,y) dlcalloc(x,y)
+#define free(ptr) dlfree(ptr)
+#define malloc(x) dlmalloc(x)
+#define memalign(a,x) dlmemalign(a,x)
+#define realloc(p,x) dlrealloc(p,x)
+#define valloc dlvalloc
+#define pvalloc dlpvalloc
+#define mallinfo() dlmallinfo()
+#define mallopt dlmallopt
+#define malloc_trim dlmalloc_trim
+#define malloc_usable_size dlmalloc_usable_size
+#define malloc_stats dlmalloc_stats
+
 # else /* USE_DL_PREFIX */
 # define cALLOc		calloc
 # define fREe		free
@@ -913,7 +938,9 @@ int initf_malloc(void);
 
 /* Simple versions which can be used when space is tight */
 void *malloc_simple(size_t size);
+void *memalign_simple(size_t alignment, size_t bytes);
 
+#pragma GCC visibility push(hidden)
 # if __STD_C
 
 Void_t* mALLOc(size_t);
@@ -945,6 +972,7 @@ int     mALLOPt();
 struct mallinfo mALLINFo();
 # endif
 #endif
+#pragma GCC visibility pop
 
 /*
  * Begin and End of memory area for malloc(), and current "brk"
@@ -953,6 +981,14 @@ extern ulong mem_malloc_start;
 extern ulong mem_malloc_end;
 extern ulong mem_malloc_brk;
 
+/**
+ * mem_malloc_init() - Set up the malloc() pool
+ *
+ * Sets the region of memory to be used for all future calls to malloc(), etc.
+ *
+ * @start: Start address
+ * @size: Size in bytes
+ */
 void mem_malloc_init(ulong start, ulong size);
 
 #ifdef __cplusplus

@@ -1,9 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Copyright (C) 2014 Freescale Semiconductor
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
+#include <log.h>
+#include <malloc.h>
+#include <asm/arch/clock.h>
+#include <linux/bug.h>
 #include "qbman_portal.h"
 
 /* QBMan portal management command codes */
@@ -25,7 +28,7 @@
 #define QBMAN_CENA_SWP_VDQCR   0x780
 
 /* Reverse mapping of QBMAN_CENA_SWP_DQRR() */
-#define QBMAN_IDX_FROM_DQRR(p) (((unsigned long)p & 0xff) >> 6)
+#define QBMAN_IDX_FROM_DQRR(p) (((unsigned long)p & 0x1ff) >> 6)
 
 /*******************************/
 /* Pre-defined attribute codes */
@@ -64,7 +67,8 @@ enum qbman_sdqcr_fc {
 struct qbman_swp *qbman_swp_init(const struct qbman_swp_desc *d)
 {
 	int ret;
-	struct qbman_swp *p = kmalloc(sizeof(*p), GFP_KERNEL);
+	struct qbman_swp *p = malloc(sizeof(struct qbman_swp));
+	u32 major = 0, minor = 0;
 
 	if (!p)
 		return NULL;
@@ -77,11 +81,23 @@ struct qbman_swp *qbman_swp_init(const struct qbman_swp_desc *d)
 	qb_attr_code_encode(&code_sdqcr_dct, &p->sdq, qbman_sdqcr_dct_prio_ics);
 	qb_attr_code_encode(&code_sdqcr_fc, &p->sdq, qbman_sdqcr_fc_up_to_3);
 	qb_attr_code_encode(&code_sdqcr_tok, &p->sdq, 0xbb);
-	p->vdq.busy = 0; /* TODO: convert to atomic_t */
+	atomic_set(&p->vdq.busy, 1);
 	p->vdq.valid_bit = QB_VALID_BIT;
 	p->dqrr.next_idx = 0;
+
+	qbman_version(&major, &minor);
+	if (!major) {
+		printf("invalid qbman version\n");
+		return NULL;
+	}
+
+	if (major >= 4 && minor >= 1)
+		p->dqrr.dqrr_size = QBMAN_VER_4_1_DQRR_SIZE;
+	else
+		p->dqrr.dqrr_size = QBMAN_VER_4_0_DQRR_SIZE;
+
 	p->dqrr.valid_bit = QB_VALID_BIT;
-	ret = qbman_swp_sys_init(&p->sys, d);
+	ret = qbman_swp_sys_init(&p->sys, d, p->dqrr.dqrr_size);
 	if (ret) {
 		free(p);
 		printf("qbman_swp_sys_init() failed %d\n", ret);
@@ -102,12 +118,14 @@ struct qbman_swp *qbman_swp_init(const struct qbman_swp_desc *d)
 void *qbman_swp_mc_start(struct qbman_swp *p)
 {
 	void *ret;
+	int *return_val;
 #ifdef QBMAN_CHECKING
 	BUG_ON(p->mc.check != swp_mc_can_start);
 #endif
 	ret = qbman_cena_write_start(&p->sys, QBMAN_CENA_SWP_CR);
 #ifdef QBMAN_CHECKING
-	if (!ret)
+	return_val = (int *)ret;
+	if (!(*return_val))
 		p->mc.check = swp_mc_can_submit;
 #endif
 	return ret;
@@ -117,7 +135,7 @@ void qbman_swp_mc_submit(struct qbman_swp *p, void *cmd, uint32_t cmd_verb)
 {
 	uint32_t *v = cmd;
 #ifdef QBMAN_CHECKING
-	BUG_ON(!p->mc.check != swp_mc_can_submit);
+	BUG_ON(p->mc.check != swp_mc_can_submit);
 #endif
 	lwsync();
 	/* TBD: "|=" is going to hurt performance. Need to move as many fields
@@ -165,7 +183,6 @@ static struct qb_attr_code code_eq_qd_bin = QB_CODE(4, 0, 16);
 static struct qb_attr_code code_eq_qd_pri = QB_CODE(4, 16, 4);
 static struct qb_attr_code code_eq_rsp_stash = QB_CODE(5, 16, 1);
 static struct qb_attr_code code_eq_rsp_lo = QB_CODE(6, 0, 32);
-static struct qb_attr_code code_eq_rsp_hi = QB_CODE(7, 0, 32);
 
 enum qbman_eq_cmd_e {
 	/* No enqueue, primarily for plugging ORP gaps for dropped frames */
@@ -197,11 +214,9 @@ void qbman_eq_desc_set_response(struct qbman_eq_desc *d,
 {
 	uint32_t *cl = qb_cl(d);
 
-	qb_attr_code_encode(&code_eq_rsp_lo, cl, lower32(storage_phys));
-	qb_attr_code_encode(&code_eq_rsp_hi, cl, upper32(storage_phys));
+	qb_attr_code_encode_64(&code_eq_rsp_lo, (uint64_t *)cl, storage_phys);
 	qb_attr_code_encode(&code_eq_rsp_stash, cl, !!stash);
 }
-
 
 void qbman_eq_desc_set_qd(struct qbman_eq_desc *d, uint32_t qdid,
 			  uint32_t qd_bin, uint32_t qd_prio)
@@ -253,7 +268,6 @@ static struct qb_attr_code code_pull_numframes = QB_CODE(0, 8, 4);
 static struct qb_attr_code code_pull_token = QB_CODE(0, 16, 8);
 static struct qb_attr_code code_pull_dqsource = QB_CODE(1, 0, 24);
 static struct qb_attr_code code_pull_rsp_lo = QB_CODE(2, 0, 32);
-static struct qb_attr_code code_pull_rsp_hi = QB_CODE(3, 0, 32);
 
 enum qb_pull_dt_e {
 	qb_pull_dt_channel,
@@ -282,8 +296,7 @@ void qbman_pull_desc_set_storage(struct qbman_pull_desc *d,
 	}
 	qb_attr_code_encode(&code_pull_rls, cl, 1);
 	qb_attr_code_encode(&code_pull_stash, cl, !!stash);
-	qb_attr_code_encode(&code_pull_rsp_lo, cl, lower32(storage_phys));
-	qb_attr_code_encode(&code_pull_rsp_hi, cl, upper32(storage_phys));
+	qb_attr_code_encode_64(&code_pull_rsp_lo, (uint64_t *)cl, storage_phys);
 }
 
 void qbman_pull_desc_set_numframes(struct qbman_pull_desc *d, uint8_t numframes)
@@ -316,10 +329,10 @@ int qbman_swp_pull(struct qbman_swp *s, struct qbman_pull_desc *d)
 	uint32_t *p;
 	uint32_t *cl = qb_cl(d);
 
-	/* TODO: convert to atomic_t */
-	if (s->vdq.busy)
+	if (!atomic_dec_and_test(&s->vdq.busy)) {
+		atomic_inc(&s->vdq.busy);
 		return -EBUSY;
-	s->vdq.busy = 1;
+	}
 	s->vdq.storage = *(void **)&cl[4];
 	s->vdq.token = qb_attr_code_decode(&code_pull_token, cl);
 	p = qbman_cena_write_start(&s->sys, QBMAN_CENA_SWP_VDQCR);
@@ -351,7 +364,6 @@ static struct qb_attr_code code_dqrr_stat = QB_CODE(0, 8, 8);
 #define QBMAN_DQRR_RESPONSE_BPSCN     0x29
 #define QBMAN_DQRR_RESPONSE_CSCN_WQ   0x2a
 
-
 /* NULL return if there are no unconsumed DQRR entries. Returns a DQRR entry
  * only once, so repeated calls can return a sequence of DQRR entries, without
  * requiring they be consumed immediately or in any particular order. */
@@ -359,36 +371,44 @@ const struct ldpaa_dq *qbman_swp_dqrr_next(struct qbman_swp *s)
 {
 	uint32_t verb;
 	uint32_t response_verb;
-	const struct ldpaa_dq *dq = qbman_cena_read(&s->sys,
-					QBMAN_CENA_SWP_DQRR(s->dqrr.next_idx));
-	const uint32_t *p = qb_cl(dq);
+	uint32_t flags;
+	const struct ldpaa_dq *dq;
+	const uint32_t *p;
 
+	dq = qbman_cena_read(&s->sys, QBMAN_CENA_SWP_DQRR(s->dqrr.next_idx));
+	p = qb_cl(dq);
 	verb = qb_attr_code_decode(&code_dqrr_verb, p);
-	/* If the valid-bit isn't of the expected polarity, nothing there */
+
+	/* If the valid-bit isn't of the expected polarity, nothing there. Note,
+	 * in the DQRR reset bug workaround, we shouldn't need to skip these
+	 * check, because we've already determined that a new entry is available
+	 * and we've invalidated the cacheline before reading it, so the
+	 * valid-bit behaviour is repaired and should tell us what we already
+	 * knew from reading PI.
+	 */
 	if ((verb & QB_VALID_BIT) != s->dqrr.valid_bit) {
 		qbman_cena_invalidate_prefetch(&s->sys,
-					       QBMAN_CENA_SWP_DQRR(
-					       s->dqrr.next_idx));
+					QBMAN_CENA_SWP_DQRR(s->dqrr.next_idx));
 		return NULL;
 	}
 	/* There's something there. Move "next_idx" attention to the next ring
 	 * entry (and prefetch it) before returning what we found. */
 	s->dqrr.next_idx++;
-	s->dqrr.next_idx &= 3; /* Wrap around at 4 */
+	s->dqrr.next_idx &= s->dqrr.dqrr_size - 1;/* Wrap around at dqrr_size */
 	/* TODO: it's possible to do all this without conditionals, optimise it
 	 * later. */
 	if (!s->dqrr.next_idx)
 		s->dqrr.valid_bit ^= QB_VALID_BIT;
-	/* VDQCR "no longer busy" hook - if VDQCR shows "busy" and this is a
-	 * VDQCR result, mark it as non-busy. */
-	if (s->vdq.busy) {
-		uint32_t flags = ldpaa_dq_flags(dq);
 
-		response_verb = qb_attr_code_decode(&code_dqrr_response, &verb);
-		if ((response_verb == QBMAN_DQRR_RESPONSE_DQ) &&
-		    (flags & LDPAA_DQ_STAT_VOLATILE))
-			s->vdq.busy = 0;
-	}
+	/* If this is the final response to a volatile dequeue command
+	   indicate that the vdq is no longer busy */
+	flags = ldpaa_dq_flags(dq);
+	response_verb = qb_attr_code_decode(&code_dqrr_response, &verb);
+	if ((response_verb == QBMAN_DQRR_RESPONSE_DQ) &&
+	    (flags & LDPAA_DQ_STAT_VOLATILE) &&
+	    (flags & LDPAA_DQ_STAT_EXPIRED))
+			atomic_inc(&s->vdq.busy);
+
 	qbman_cena_invalidate_prefetch(&s->sys,
 				       QBMAN_CENA_SWP_DQRR(s->dqrr.next_idx));
 	return dq;
@@ -448,8 +468,10 @@ int qbman_dq_entry_has_newtoken(struct qbman_swp *s,
 	 * reset "busy".  We instead base the decision on whether the current
 	 * result is sitting at the first 'storage' location of the busy
 	 * command. */
-	if (s->vdq.busy && (s->vdq.storage == dq))
-		s->vdq.busy = 0;
+	if (s->vdq.storage == dq) {
+		s->vdq.storage = NULL;
+			atomic_inc(&s->vdq.busy);
+	}
 	return 1;
 }
 

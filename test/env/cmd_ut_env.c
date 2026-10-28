@@ -1,37 +1,74 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * (C) Copyright 2015
  * Joe Hershberger, National Instruments, joe.hershberger@ni.com
- *
- * SPDX-License-Identifier:	GPL-2.0
  */
 
-#include <common.h>
-#include <command.h>
 #include <test/env.h>
-#include <test/suites.h>
 #include <test/ut.h>
 
-int do_ut_env(cmd_tbl_t *cmdtp, int flag, int argc, char * const argv[])
+static int env_test_env_cmd(struct unit_test_state *uts)
 {
-	struct unit_test *tests = ll_entry_start(struct unit_test, env_test);
-	const int n_ents = ll_entry_count(struct unit_test, env_test);
-	struct unit_test_state uts = { .fail_count = 0 };
-	struct unit_test *test;
+	ut_assertok(run_command("setenv non_default_var1 1", 0));
+	ut_assert_console_end();
 
-	if (argc == 1)
-		printf("Running %d environment tests\n", n_ents);
+	ut_assertok(run_command("setenv non_default_var2 2", 0));
+	ut_assert_console_end();
 
-	for (test = tests; test < tests + n_ents; test++) {
-		if (argc > 1 && strcmp(argv[1], test->name))
-			continue;
-		printf("Test: %s\n", test->name);
+	ut_assertok(run_command("env print non_default_var1", 0));
+	ut_assert_nextline("non_default_var1=1");
+	ut_assert_console_end();
 
-		uts.start = mallinfo();
+	ut_assertok(run_command("env default non_default_var1", 0));
+	ut_assert_nextline("WARNING: 'non_default_var1' not in imported env, deleting it!");
+	ut_assert_console_end();
 
-		test->func(&uts);
-	}
+	ut_asserteq(1, run_command("env exists non_default_var1", 0));
+	ut_assert_console_end();
 
-	printf("Failures: %d\n", uts.fail_count);
+	ut_asserteq(0, run_command("env exists non_default_var2", 0));
+	ut_assert_console_end();
 
-	return uts.fail_count ? CMD_RET_FAILURE : 0;
+	ut_assertok(run_command("setenv non_default_var1 3", 0));
+	ut_assert_console_end();
+
+	ut_assertok(run_command("env default -k non_default_var1", 0));
+	ut_assert_console_end();
+
+	ut_asserteq(0, run_command("env exists non_default_var1", 0));
+	ut_assert_console_end();
+
+	ut_asserteq(0, run_command("env exists non_default_var2", 0));
+	ut_assert_console_end();
+
+	ut_assertok(run_command("env default -k -a -f", 0));
+	ut_assert_nextline("## Resetting to default environment");
+	ut_assert_console_end();
+
+	ut_asserteq(0, run_command("env exists non_default_var1", 0));
+	ut_assert_console_end();
+
+	ut_asserteq(0, run_command("env exists non_default_var2", 0));
+	ut_assert_console_end();
+
+	/*
+	 * While the following test of "env default -a" by itself
+	 * works, it unfortunately causes an unrelated test case,
+	 * env_test_fdt_import(), to fail, because the "from_fdt"
+	 * variable would be removed.
+	 */
+#if 0
+	ut_assertok(run_command("env default -a", 0));
+	ut_assert_nextline("## Resetting to default environment");
+	ut_assert_console_end();
+
+	ut_asserteq(1, run_command("env exists non_default_var1", 0));
+	ut_assert_console_end();
+
+	ut_asserteq(1, run_command("env exists non_default_var2", 0));
+	ut_assert_console_end();
+#endif
+
+	return 0;
 }
+ENV_TEST(env_test_env_cmd, UTF_CONSOLE);

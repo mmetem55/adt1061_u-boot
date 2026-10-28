@@ -1,7 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * Copyright (c) 2011 The Chromium OS Authors.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 /* Tegra20 high-level function multiplexing */
@@ -20,6 +19,7 @@ enum {
 	FUNCMUX_UART1_UAA_UAB,
 	FUNCMUX_UART1_GPU,
 	FUNCMUX_UART1_SDIO1,
+	FUNCMUX_UART1_SDB_SDD,
 	FUNCMUX_UART2_UAD = 0,
 	FUNCMUX_UART4_GMC = 0,
 

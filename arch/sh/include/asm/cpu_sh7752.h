@@ -1,7 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * Copyright (C) 2012  Renesas Solutions Corp.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #ifndef _ASM_CPU_SH7752_H_
@@ -66,7 +65,6 @@ struct sermux_regs {
 	unsigned char	smr5;
 };
 #define SERMUX_BASE	((struct sermux_regs *)0xfe470000)
-
 
 /* USB0/1 */
 struct usb_common_regs {

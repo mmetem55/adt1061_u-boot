@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  *  vectors - Generic ARM exception table code
  *
@@ -9,11 +10,31 @@
  *  Copyright (c) 2002	Alex Züpke <azu@sysgo.de>
  *  Copyright (c) 2002	Gary Jennejohn <garyj@denx.de>
  *  Copyright (c) 2002	Kyle Harris <kharris@nexus-tech.net>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #include <config.h>
+
+/*
+ * A macro to allow insertion of an ARM exception vector either
+ * for the non-boot0 case or by a boot0-header.
+ */
+        .macro ARM_VECTORS
+#ifdef CONFIG_ARCH_K3
+	ldr     pc, _reset
+#else
+	b	reset
+#endif
+#if !CONFIG_IS_ENABLED(SYS_NO_VECTOR_TABLE)
+	ldr	pc, _undefined_instruction
+	ldr	pc, _software_interrupt
+	ldr	pc, _prefetch_abort
+	ldr	pc, _data_abort
+	ldr	pc, _not_used
+	ldr	pc, _irq
+	ldr	pc, _fiq
+#endif
+	.endm
+
 
 /*
  *************************************************************************
@@ -24,7 +45,7 @@
  */
 
 .globl _start
-.globl _start_hyp
+
 /*
  *************************************************************************
  *
@@ -34,6 +55,22 @@
  */
 
 	.section ".vectors", "ax"
+
+#if defined(CONFIG_ENABLE_ARM_SOC_BOOT0_HOOK)
+/*
+ * Various SoCs need something special and SoC-specific up front in
+ * order to boot, allow them to set that in their boot0.h file and then
+ * use it here.
+ *
+ * To allow a boot0 hook to insert a 'special' sequence after the vector
+ * table (e.g. for the socfpga), the presence of a boot0 hook supresses
+ * the below vector table and assumes that the vector table is filled in
+ * by the boot0 hook.  The requirements for a boot0 hook thus are:
+ *   (1) defines '_start:' as appropriate
+ *   (2) inserts the vector table using ARM_VECTORS as appropriate
+ */
+#include <asm/arch/boot0.h>
+#else
 
 /*
  *************************************************************************
@@ -46,30 +83,13 @@
  */
 
 _start:
-
-#ifdef CONFIG_SYS_DV_NOR_BOOT_CFG
-	.word	CONFIG_SYS_DV_NOR_BOOT_CFG
+#ifdef CFG_SYS_DV_NOR_BOOT_CFG
+	.word	CFG_SYS_DV_NOR_BOOT_CFG
 #endif
+	ARM_VECTORS
+#endif /* !defined(CONFIG_ENABLE_ARM_SOC_BOOT0_HOOK) */
 
-	b	reset
-	ldr	pc, _undefined_instruction
-	ldr	pc, _software_interrupt
-	ldr	pc, _prefetch_abort
-	ldr	pc, _data_abort
-	ldr	pc, _not_used
-	ldr	pc, _irq
-	ldr	pc, _fiq
-
-_start_hyp:
-	b       reset
-	ldr     pc, _handle_hyp
-	ldr     pc, _handle_hyp
-	ldr     pc, _handle_hyp
-	ldr     pc, _handle_hyp
-	ldr     pc, _handle_hyp
-	ldr     pc, _irq_hyp
-	ldr     pc, _handle_hyp
-
+#if !CONFIG_IS_ENABLED(SYS_NO_VECTOR_TABLE)
 /*
  *************************************************************************
  *
@@ -80,6 +100,7 @@ _start_hyp:
  *************************************************************************
  */
 
+	.globl  _reset
 	.globl	_undefined_instruction
 	.globl	_software_interrupt
 	.globl	_prefetch_abort
@@ -88,6 +109,9 @@ _start_hyp:
 	.globl	_irq
 	.globl	_fiq
 
+#ifdef CONFIG_ARCH_K3
+_reset:			.word reset
+#endif
 _undefined_instruction:	.word undefined_instruction
 _software_interrupt:	.word software_interrupt
 _prefetch_abort:	.word prefetch_abort
@@ -95,9 +119,9 @@ _data_abort:		.word data_abort
 _not_used:		.word not_used
 _irq:			.word irq
 _fiq:			.word fiq
-_handle_hyp:		.word handle_hyp
-_irq_hyp:		.word irq_hyp
+
 	.balignl 16,0xdeadbeef
+#endif
 
 /*
  *************************************************************************
@@ -109,39 +133,49 @@ _irq_hyp:		.word irq_hyp
 
 /* SPL interrupt handling: just hang */
 
-#ifdef CONFIG_SPL_BUILD
+#ifdef CONFIG_XPL_BUILD
 
+#if !CONFIG_IS_ENABLED(SYS_NO_VECTOR_TABLE)
 	.align	5
 undefined_instruction:
+#if CONFIG_IS_ENABLED(USE_SEPARATE_FAULT_HANDLERS)
+	b	undefined_instruction
+#endif
 software_interrupt:
+#if CONFIG_IS_ENABLED(USE_SEPARATE_FAULT_HANDLERS)
+	b	software_interrupt
+#endif
 prefetch_abort:
+#if CONFIG_IS_ENABLED(USE_SEPARATE_FAULT_HANDLERS)
+	b	prefetch_abort
+#endif
 data_abort:
+#if CONFIG_IS_ENABLED(USE_SEPARATE_FAULT_HANDLERS)
+	b	data_abort
+#endif
 not_used:
+#if CONFIG_IS_ENABLED(USE_SEPARATE_FAULT_HANDLERS)
+	b	not_used
+#endif
 irq:
+#if CONFIG_IS_ENABLED(USE_SEPARATE_FAULT_HANDLERS)
+	b	irq
+#endif
 fiq:
-
 1:
-	bl	1b			/* hang and never return */
+	b	1b			/* hang and never return */
+#endif
 
-#else	/* !CONFIG_SPL_BUILD */
+#else	/* !CONFIG_XPL_BUILD */
 
 /* IRQ stack memory (calculated at run-time) + 8 bytes */
 .globl IRQ_STACK_START_IN
 IRQ_STACK_START_IN:
+#ifdef IRAM_BASE_ADDR
+	.word   IRAM_BASE_ADDR + 0x20
+#else
 	.word	0x0badc0de
-
-#ifdef CONFIG_USE_IRQ
-/* IRQ stack memory (calculated at run-time) */
-.globl IRQ_STACK_START
-IRQ_STACK_START:
-	.word	0x0badc0de
-
-/* IRQ stack memory (calculated at run-time) */
-.globl FIQ_STACK_START
-FIQ_STACK_START:
-	.word 0x0badc0de
-
-#endif /* CONFIG_USE_IRQ */
+#endif
 
 @
 @ IRQ stack frame.
@@ -170,8 +204,6 @@ FIQ_STACK_START:
 
 #define MODE_SVC 0x13
 #define I_BIT	 0x80
-
-.arch_extension virt
 
 /*
  * use bad_save_user_regs for abort/prefetch/undef/swi ...
@@ -226,6 +258,18 @@ FIQ_STACK_START:
 	movs	pc, lr		@ jump to next instruction & switch modes.
 	.endm
 
+	.macro get_bad_stack_swi
+	sub	r13, r13, #4	@ space on current stack for scratch reg.
+	str	r0, [r13]	@ save R0's value.
+	ldr	r0, IRQ_STACK_START_IN		@ get data regions start
+	str	lr, [r0]	@ save caller lr in position 0 of saved stack
+	mrs	lr, spsr	@ get the spsr
+	str	lr, [r0, #4]	@ save spsr in position 1 of saved stack
+	ldr	lr, [r0]	@ restore lr
+	ldr	r0, [r13]	@ restore r0
+	add	r13, r13, #4	@ pop stack entry
+	.endm
+
 	.macro get_irq_stack			@ setup IRQ stack
 	ldr	sp, IRQ_STACK_START
 	.endm
@@ -246,9 +290,16 @@ undefined_instruction:
 
 	.align	5
 software_interrupt:
-	get_bad_stack
+	get_bad_stack_swi
 	bad_save_user_regs
 	bl	do_software_interrupt
+#if CONFIG_IS_ENABLED(SEMIHOSTING_FALLBACK)
+	ldmia	sp, {r0 - lr}^			@ Calling r0 - lr
+	mov	r0, r0
+	ldr	lr, [sp, #S_PC]			@ Get PC
+	add	sp, sp, #S_FRAME_SIZE
+	movs	pc, lr		@ return & move spsr_svc into cpsr
+#endif
 
 	.align	5
 prefetch_abort:
@@ -268,24 +319,6 @@ not_used:
 	bad_save_user_regs
 	bl	do_not_used
 
-#ifdef CONFIG_USE_IRQ
-
-	.align	5
-irq:
-	get_irq_stack
-	irq_save_user_regs
-	bl	do_irq
-	irq_restore_user_regs
-
-	.align	5
-fiq:
-	get_fiq_stack
-	/* someone ought to write a more effiction fiq_save_user_regs */
-	irq_save_user_regs
-	bl	do_fiq
-	irq_restore_user_regs
-
-#else
 
 	.align	5
 irq:
@@ -299,17 +332,4 @@ fiq:
 	bad_save_user_regs
 	bl	do_fiq
 
-#endif /* CONFIG_USE_IRQ */
-
-handle_hyp:
-	b	.
-
-irq_hyp:
-	sub	sp, sp, #S_FRAME_SIZE
-	stmia	sp, {r0 - r12,r14}
-	bl do_irq
-	ldmia	sp, {r0 - r12,r14}
-	add	sp, sp, #S_FRAME_SIZE
-	eret
-
-#endif	/* CONFIG_SPL_BUILD */
+#endif	/* CONFIG_XPL_BUILD */

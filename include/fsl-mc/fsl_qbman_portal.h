@@ -1,7 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * Copyright (C) 2014 Freescale Semiconductor
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #ifndef _FSL_QBMAN_PORTAL_H
@@ -23,7 +22,6 @@ struct qbman_swp *qbman_swp_init(const struct qbman_swp_desc *);
  * driver. The structure is defined in the DPIO interface, but to avoid circular
  * dependencies we just pre/re-declare it here opaquely. */
 struct ldpaa_dq;
-
 
 /* ------------------- */
 /* Pull-mode dequeuing */
@@ -110,7 +108,6 @@ int qbman_dq_entry_is_DQ(const struct ldpaa_dq *);
 struct qbman_eq_desc {
 	uint32_t dont_manipulate_directly[8];
 };
-
 
 /* Clear the contents of a descriptor to default/starting state. */
 void qbman_eq_desc_clear(struct qbman_eq_desc *);

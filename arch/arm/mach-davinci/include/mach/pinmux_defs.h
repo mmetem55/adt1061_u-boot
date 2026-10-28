@@ -1,16 +1,14 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * Pinmux configurations for the DAxxx SoCs
  *
  * Copyright (C) 2011 OMICRON electronics GmbH
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #ifndef __ASM_ARCH_PINMUX_DEFS_H
 #define __ASM_ARCH_PINMUX_DEFS_H
 
 #include <asm/arch/davinci_misc.h>
-#include <config.h>
 
 /* SPI0 pin muxer settings */
 extern const struct pinmux_config spi0_pins_base[3];

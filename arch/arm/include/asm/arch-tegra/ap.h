@@ -1,10 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
- * (C) Copyright 2010-2011
+ * (C) Copyright 2010-2015
  * NVIDIA Corporation <www.nvidia.com>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 #include <asm/types.h>
+#include <asm/arch-tegra/tegra.h>
 
 /* Stabilization delays, in usec */
 #define PLL_STABILIZATION_DELAY	(300)
@@ -23,8 +23,6 @@
 /* AVP/CPU ID */
 #define PG_UP_TAG_0_PID_CPU	0x55555555	/* CPU aka "a9" aka "mpcore" */
 #define PG_UP_TAG_0		0x0
-
-#define CORESIGHT_UNLOCK	0xC5ACCE55;
 
 /* AP base physical address of internal SRAM */
 #define NV_PA_BASE_SRAM		0x40000000
@@ -45,35 +43,33 @@ extern void _start(void);
 /**
  * Works out the SOC/SKU type used for clocks settings
  *
- * @return	SOC type - see TEGRA_SOC...
+ * Return:	SOC type - see TEGRA_SOC...
  */
 int tegra_get_chip_sku(void);
 
 /**
  * Returns the pure SOC (chip ID) from the HIDREV register
  *
- * @return	SOC ID - see CHIPID_TEGRAxx...
+ * Return:	SOC ID - see CHIPID_TEGRAxx...
  */
 int tegra_get_chip(void);
 
 /**
+ * Returns the pure SOC major version from the HIDREV register
+ *
+ * Return:	SOC major version
+ */
+u32 tegra_get_major_version(void);
+
+/**
  * Returns the SKU ID from the sku_info register
  *
- * @return	SKU ID - see SKU_ID_Txx...
+ * Return:	SKU ID - see SKU_ID_Txx...
  */
 int tegra_get_sku_info(void);
 
 /* Do any chip-specific cache config */
 void config_cache(void);
-
-#if defined(CONFIG_TEGRA124)
-/* Do chip-specific vpr config */
-void config_vpr(void);
-#else
-static inline void config_vpr(void)
-{
-}
-#endif
 
 #if defined(CONFIG_TEGRA_SUPPORT_NON_SECURE)
 bool tegra_cpu_is_non_secure(void);

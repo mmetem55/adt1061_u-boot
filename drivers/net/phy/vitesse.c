@@ -1,10 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Vitesse PHY drivers
  *
  * Copyright 2010-2014 Freescale Semiconductor, Inc.
  * Original Author: Andy Fleming
  * Add vsc8662 phy support - Priyanka Jain
- * SPDX-License-Identifier:	GPL-2.0+
  */
 #include <miiphy.h>
 
@@ -30,9 +30,8 @@
 #define MIIM_CIS8204_SLEDCON_INIT	0x1115
 
 /* Vitesse VSC8601 Extended PHY Control Register 1 */
-#define MIIM_VSC8601_EPHY_CON		0x17
-#define MIIM_VSC8601_EPHY_CON_INIT_SKEW	0x1120
-#define MIIM_VSC8601_SKEW_CTRL		0x1c
+#define MII_VSC8601_EPHY_CTL		0x17
+#define MII_VSC8601_EPHY_CTL_RGMII_SKEW	(1 << 8)
 
 #define PHY_EXT_PAGE_ACCESS    0x1f
 #define PHY_EXT_PAGE_ACCESS_GENERAL	0x10
@@ -112,10 +111,12 @@ static int vitesse_parse_status(struct phy_device *phydev)
 
 static int vitesse_startup(struct phy_device *phydev)
 {
-	genphy_update_link(phydev);
-	vitesse_parse_status(phydev);
+	int ret;
 
-	return 0;
+	ret = genphy_update_link(phydev);
+	if (ret)
+		return ret;
+	return vitesse_parse_status(phydev);
 }
 
 static int cis8204_config(struct phy_device *phydev)
@@ -126,9 +127,7 @@ static int cis8204_config(struct phy_device *phydev)
 
 	genphy_config_aneg(phydev);
 
-	if ((phydev->interface == PHY_INTERFACE_MODE_RGMII) ||
-			(phydev->interface == PHY_INTERFACE_MODE_RGMII_TXID) ||
-			(phydev->interface == PHY_INTERFACE_MODE_RGMII_RXID))
+	if (phy_interface_is_rgmii(phydev))
 		phy_write(phydev, MDIO_DEVAD_NONE, MIIM_CIS8204_EPHY_CON,
 				MIIM_CIS8204_EPHYCON_INIT |
 				MIIM_CIS8204_EPHYCON_RGMII);
@@ -140,26 +139,32 @@ static int cis8204_config(struct phy_device *phydev)
 }
 
 /* Vitesse VSC8601 */
+/* This adds a skew for both TX and RX clocks, so the skew should only be
+ * applied to "rgmii-id" interfaces. It may not work as expected
+ * on "rgmii-txid", "rgmii-rxid" or "rgmii" interfaces. */
+static int vsc8601_add_skew(struct phy_device *phydev)
+{
+	int ret;
+
+	ret = phy_read(phydev, MDIO_DEVAD_NONE, MII_VSC8601_EPHY_CTL);
+	if (ret < 0)
+		return ret;
+
+	ret |= MII_VSC8601_EPHY_CTL_RGMII_SKEW;
+	return phy_write(phydev, MDIO_DEVAD_NONE, MII_VSC8601_EPHY_CTL, ret);
+}
+
 static int vsc8601_config(struct phy_device *phydev)
 {
-	/* Configure some basic stuff */
-#ifdef CONFIG_SYS_VSC8601_SKEWFIX
-	phy_write(phydev, MDIO_DEVAD_NONE, MIIM_VSC8601_EPHY_CON,
-			MIIM_VSC8601_EPHY_CON_INIT_SKEW);
-#if defined(CONFIG_SYS_VSC8601_SKEW_TX) && defined(CONFIG_SYS_VSC8601_SKEW_RX)
-	phy_write(phydev, MDIO_DEVAD_NONE, PHY_EXT_PAGE_ACCESS, 1);
-#define VSC8101_SKEW \
-	((CONFIG_SYS_VSC8601_SKEW_TX << 14) \
-	| (CONFIG_SYS_VSC8601_SKEW_RX << 12))
-	phy_write(phydev, MDIO_DEVAD_NONE, MIIM_VSC8601_SKEW_CTRL,
-			VSC8101_SKEW);
-	phy_write(phydev, MDIO_DEVAD_NONE, PHY_EXT_PAGE_ACCESS, 0);
-#endif
-#endif
+	int ret = 0;
 
-	genphy_config_aneg(phydev);
+	if (phydev->interface == PHY_INTERFACE_MODE_RGMII_ID)
+		ret = vsc8601_add_skew(phydev);
 
-	return 0;
+	if (ret < 0)
+		return ret;
+
+	return genphy_config_aneg(phydev);
 }
 
 static int vsc8574_config(struct phy_device *phydev)
@@ -234,7 +239,7 @@ static int vsc8514_config(struct phy_device *phydev)
 	while ((val & MIIM_VSC8514_18G_CMDSTAT) && timeout--)
 		val = phy_read(phydev, MDIO_DEVAD_NONE, MIIM_VSC8514_GENERAL18);
 
-	if (0 == timeout) {
+	if (timeout == -1) {
 		printf("PHY 8514 config failed\n");
 		return -1;
 	}
@@ -287,7 +292,7 @@ static int vsc8664_config(struct phy_device *phydev)
 	return 0;
 }
 
-static struct phy_driver VSC8211_driver = {
+U_BOOT_PHY_DRIVER(vsc8211) = {
 	.name	= "Vitesse VSC8211",
 	.uid	= 0xfc4b0,
 	.mask	= 0xffff0,
@@ -297,7 +302,7 @@ static struct phy_driver VSC8211_driver = {
 	.shutdown = &genphy_shutdown,
 };
 
-static struct phy_driver VSC8221_driver = {
+U_BOOT_PHY_DRIVER(vsc8221) = {
 	.name = "Vitesse VSC8221",
 	.uid = 0xfc550,
 	.mask = 0xffff0,
@@ -307,7 +312,7 @@ static struct phy_driver VSC8221_driver = {
 	.shutdown = &genphy_shutdown,
 };
 
-static struct phy_driver VSC8244_driver = {
+U_BOOT_PHY_DRIVER(vsc8244) = {
 	.name = "Vitesse VSC8244",
 	.uid = 0xfc6c0,
 	.mask = 0xffff0,
@@ -317,7 +322,7 @@ static struct phy_driver VSC8244_driver = {
 	.shutdown = &genphy_shutdown,
 };
 
-static struct phy_driver VSC8234_driver = {
+U_BOOT_PHY_DRIVER(vsc8234) = {
 	.name = "Vitesse VSC8234",
 	.uid = 0xfc620,
 	.mask = 0xffff0,
@@ -327,7 +332,7 @@ static struct phy_driver VSC8234_driver = {
 	.shutdown = &genphy_shutdown,
 };
 
-static struct phy_driver VSC8574_driver = {
+U_BOOT_PHY_DRIVER(vsc8574) = {
 	.name = "Vitesse VSC8574",
 	.uid = 0x704a0,
 	.mask = 0xffff0,
@@ -337,7 +342,7 @@ static struct phy_driver VSC8574_driver = {
 	.shutdown = &genphy_shutdown,
 };
 
-static struct phy_driver VSC8514_driver = {
+U_BOOT_PHY_DRIVER(vsc8514) = {
 	.name = "Vitesse VSC8514",
 	.uid = 0x70670,
 	.mask = 0xffff0,
@@ -347,7 +352,17 @@ static struct phy_driver VSC8514_driver = {
 	.shutdown = &genphy_shutdown,
 };
 
-static struct phy_driver VSC8601_driver = {
+U_BOOT_PHY_DRIVER(vsc8584) = {
+	.name = "Vitesse VSC8584",
+	.uid = 0x707c0,
+	.mask = 0xffff0,
+	.features = PHY_GBIT_FEATURES,
+	.config = &vsc8574_config,
+	.startup = &vitesse_startup,
+	.shutdown = &genphy_shutdown,
+};
+
+U_BOOT_PHY_DRIVER(vsc8601) = {
 	.name = "Vitesse VSC8601",
 	.uid = 0x70420,
 	.mask = 0xffff0,
@@ -357,7 +372,7 @@ static struct phy_driver VSC8601_driver = {
 	.shutdown = &genphy_shutdown,
 };
 
-static struct phy_driver VSC8641_driver = {
+U_BOOT_PHY_DRIVER(vsc8641) = {
 	.name = "Vitesse VSC8641",
 	.uid = 0x70430,
 	.mask = 0xffff0,
@@ -367,7 +382,7 @@ static struct phy_driver VSC8641_driver = {
 	.shutdown = &genphy_shutdown,
 };
 
-static struct phy_driver VSC8662_driver = {
+U_BOOT_PHY_DRIVER(vsc8662) = {
 	.name = "Vitesse VSC8662",
 	.uid = 0x70660,
 	.mask = 0xffff0,
@@ -377,7 +392,7 @@ static struct phy_driver VSC8662_driver = {
 	.shutdown = &genphy_shutdown,
 };
 
-static struct phy_driver VSC8664_driver = {
+U_BOOT_PHY_DRIVER(vsc8664) = {
 	.name = "Vitesse VSC8664",
 	.uid = 0x70660,
 	.mask = 0xffff0,
@@ -388,7 +403,7 @@ static struct phy_driver VSC8664_driver = {
 };
 
 /* Vitesse bought Cicada, so we'll put these here */
-static struct phy_driver cis8201_driver = {
+U_BOOT_PHY_DRIVER(cis8201) = {
 	.name = "CIS8201",
 	.uid = 0xfc410,
 	.mask = 0xffff0,
@@ -398,7 +413,7 @@ static struct phy_driver cis8201_driver = {
 	.shutdown = &genphy_shutdown,
 };
 
-static struct phy_driver cis8204_driver = {
+U_BOOT_PHY_DRIVER(cis8204) = {
 	.name = "Cicada Cis8204",
 	.uid = 0xfc440,
 	.mask = 0xffff0,
@@ -407,21 +422,3 @@ static struct phy_driver cis8204_driver = {
 	.startup = &vitesse_startup,
 	.shutdown = &genphy_shutdown,
 };
-
-int phy_vitesse_init(void)
-{
-	phy_register(&VSC8641_driver);
-	phy_register(&VSC8601_driver);
-	phy_register(&VSC8234_driver);
-	phy_register(&VSC8244_driver);
-	phy_register(&VSC8211_driver);
-	phy_register(&VSC8221_driver);
-	phy_register(&VSC8574_driver);
-	phy_register(&VSC8514_driver);
-	phy_register(&VSC8662_driver);
-	phy_register(&VSC8664_driver);
-	phy_register(&cis8201_driver);
-	phy_register(&cis8204_driver);
-
-	return 0;
-}

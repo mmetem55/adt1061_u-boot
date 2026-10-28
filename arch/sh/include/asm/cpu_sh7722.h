@@ -1,9 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * (C) Copyright 2007 Nobuhiro Iwamatsu <iwamatsu@nigauri.org>
  *
  * SH7722 Internal I/O register
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #ifndef _ASM_CPU_SH7722_H_
@@ -210,7 +209,6 @@
 #define RWTCNT      0xA4520000
 #define RWTCSR      0xA4520004
 #define WTCNT	RWTCNT
-
 
 /*	TMU	*/
 #define TMU_BASE	0xFFD80000

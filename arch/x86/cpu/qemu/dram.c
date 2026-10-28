@@ -1,16 +1,19 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Copyright (C) 2015, Bin Meng <bmeng.cn@gmail.com>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
-#include <common.h>
+#include <init.h>
+#include <spl.h>
+#include <asm/global_data.h>
+#include <asm/mtrr.h>
 #include <asm/post.h>
 #include <asm/arch/qemu.h>
+#include <linux/sizes.h>
 
 DECLARE_GLOBAL_DATA_PTR;
 
-int dram_init(void)
+u32 qemu_get_low_memory_size(void)
 {
 	u32 ram;
 
@@ -20,16 +23,62 @@ int dram_init(void)
 	ram |= ((u32)inb(CMOS_DATA_PORT)) << 6;
 	ram += 16 * 1024;
 
-	gd->ram_size = ram * 1024;
+	return ram * 1024;
+}
+
+u64 qemu_get_high_memory_size(void)
+{
+	u64 ram;
+
+	outb(HIGH_HIGHRAM_ADDR, CMOS_ADDR_PORT);
+	ram = ((u64)inb(CMOS_DATA_PORT)) << 22;
+	outb(MID_HIGHRAM_ADDR, CMOS_ADDR_PORT);
+	ram |= ((u64)inb(CMOS_DATA_PORT)) << 14;
+	outb(LOW_HIGHRAM_ADDR, CMOS_ADDR_PORT);
+	ram |= ((u64)inb(CMOS_DATA_PORT)) << 6;
+
+	return ram * 1024;
+}
+
+int dram_init(void)
+{
+	gd->ram_size = qemu_get_low_memory_size();
+	gd->ram_size += qemu_get_high_memory_size();
 	post_code(POST_DRAM);
+
+	if (xpl_phase() == PHASE_BOARD_F) {
+		u64 total = gd->ram_size;
+		int ret;
+
+		if (total > SZ_2G + SZ_1G)
+			total += SZ_1G;
+		ret = mtrr_add_request(MTRR_TYPE_WRBACK, 0, total);
+		if (ret != -ENOSYS) {
+			if (ret)
+				return log_msg_ret("mta", ret);
+			ret = mtrr_commit(false);
+			if (ret)
+				return log_msg_ret("mtc", ret);
+		}
+	}
 
 	return 0;
 }
 
-void dram_init_banksize(void)
+int dram_init_banksize(void)
 {
-	gd->bd->bi_dram[0].start = 0;
-	gd->bd->bi_dram[0].size = gd->ram_size;
+	u64 high_mem_size;
+
+	gd->dram[0].start = 0;
+	gd->dram[0].size = qemu_get_low_memory_size();
+
+	high_mem_size = qemu_get_high_memory_size();
+	if (high_mem_size) {
+		gd->dram[1].start = SZ_4G;
+		gd->dram[1].size = high_mem_size;
+	}
+
+	return 0;
 }
 
 /*
@@ -40,7 +89,7 @@ void dram_init_banksize(void)
  * the relocation address, and how far U-Boot is moved by relocation are
  * set in the global data structure.
  */
-ulong board_get_usable_ram_top(ulong total_size)
+phys_addr_t board_get_usable_ram_top(phys_size_t total_size)
 {
-	return gd->ram_size;
+	return qemu_get_low_memory_size();
 }

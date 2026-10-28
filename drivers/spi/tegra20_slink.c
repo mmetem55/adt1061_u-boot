@@ -1,75 +1,78 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * NVIDIA Tegra SPI-SLINK controller
  *
  * Copyright (c) 2010-2013 NVIDIA Corporation
- *
- * See file CREDITS for list of people who contributed to this
- * project.
- *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston,
- * MA 02111-1307 USA
  */
 
-#include <common.h>
 #include <dm.h>
+#include <log.h>
+#include <time.h>
+#include <asm/global_data.h>
 #include <asm/io.h>
 #include <asm/arch/clock.h>
 #include <asm/arch-tegra/clk_rst.h>
 #include <spi.h>
 #include <fdtdec.h>
+#include <linux/bitops.h>
+#include <linux/delay.h>
 #include "tegra_spi.h"
 
 DECLARE_GLOBAL_DATA_PTR;
 
 /* COMMAND */
-#define SLINK_CMD_ENB			(1 << 31)
-#define SLINK_CMD_GO			(1 << 30)
-#define SLINK_CMD_M_S			(1 << 28)
-#define SLINK_CMD_CK_SDA		(1 << 21)
-#define SLINK_CMD_CS_POL		(1 << 13)
-#define SLINK_CMD_CS_VAL		(1 << 12)
-#define SLINK_CMD_CS_SOFT		(1 << 11)
-#define SLINK_CMD_BIT_LENGTH		(1 << 4)
-#define SLINK_CMD_BIT_LENGTH_MASK	0x0000001F
+#define SLINK_CMD_ENB			BIT(31)
+#define SLINK_CMD_GO			BIT(30)
+#define SLINK_CMD_M_S			BIT(28)
+#define SLINK_CMD_IDLE_SCLK_DRIVE_LOW	(0 << 24)
+#define SLINK_CMD_IDLE_SCLK_DRIVE_HIGH	BIT(24)
+#define SLINK_CMD_IDLE_SCLK_PULL_LOW	(2 << 24)
+#define SLINK_CMD_IDLE_SCLK_PULL_HIGH	(3 << 24)
+#define SLINK_CMD_IDLE_SCLK_MASK	(3 << 24)
+#define SLINK_CMD_CS_POL3		BIT(23)
+#define SLINK_CMD_CS_POL2		BIT(22)
+#define SLINK_CMD_CK_SDA		BIT(21)
+#define SLINK_CMD_CS_POL1		BIT(20)
+#define SLINK_CMD_CS_POL		BIT(13)
+#define SLINK_CMD_CS_VAL		BIT(12)
+#define SLINK_CMD_CS_SOFT		BIT(11)
+#define SLINK_CMD_BIT_LENGTH		BIT(4)
+#define SLINK_CMD_BIT_LENGTH_MASK	GENMASK(4, 0)
 /* COMMAND2 */
-#define SLINK_CMD2_TXEN			(1 << 30)
-#define SLINK_CMD2_RXEN			(1 << 31)
-#define SLINK_CMD2_SS_EN		(1 << 18)
+#define SLINK_CMD2_TXEN			BIT(30)
+#define SLINK_CMD2_RXEN			BIT(31)
+#define SLINK_CMD2_SS_EN		BIT(18)
 #define SLINK_CMD2_SS_EN_SHIFT		18
-#define SLINK_CMD2_SS_EN_MASK		0x000C0000
-#define SLINK_CMD2_CS_ACTIVE_BETWEEN	(1 << 17)
+#define SLINK_CMD2_SS_EN_MASK		GENMASK(19, 18)
+#define SLINK_CMD2_CS_ACTIVE_BETWEEN	BIT(17)
 /* STATUS */
-#define SLINK_STAT_BSY			(1 << 31)
-#define SLINK_STAT_RDY			(1 << 30)
-#define SLINK_STAT_ERR			(1 << 29)
-#define SLINK_STAT_RXF_FLUSH		(1 << 27)
-#define SLINK_STAT_TXF_FLUSH		(1 << 26)
-#define SLINK_STAT_RXF_OVF		(1 << 25)
-#define SLINK_STAT_TXF_UNR		(1 << 24)
-#define SLINK_STAT_RXF_EMPTY		(1 << 23)
-#define SLINK_STAT_RXF_FULL		(1 << 22)
-#define SLINK_STAT_TXF_EMPTY		(1 << 21)
-#define SLINK_STAT_TXF_FULL		(1 << 20)
-#define SLINK_STAT_TXF_OVF		(1 << 19)
-#define SLINK_STAT_RXF_UNR		(1 << 18)
-#define SLINK_STAT_CUR_BLKCNT		(1 << 15)
+#define SLINK_STAT_BSY			BIT(31)
+#define SLINK_STAT_RDY			BIT(30)
+#define SLINK_STAT_ERR			BIT(29)
+#define SLINK_STAT_RXF_FLUSH		BIT(27)
+#define SLINK_STAT_TXF_FLUSH		BIT(26)
+#define SLINK_STAT_RXF_OVF		BIT(25)
+#define SLINK_STAT_TXF_UNR		BIT(24)
+#define SLINK_STAT_RXF_EMPTY		BIT(23)
+#define SLINK_STAT_RXF_FULL		BIT(22)
+#define SLINK_STAT_TXF_EMPTY		BIT(21)
+#define SLINK_STAT_TXF_FULL		BIT(20)
+#define SLINK_STAT_TXF_OVF		BIT(19)
+#define SLINK_STAT_RXF_UNR		BIT(18)
+#define SLINK_STAT_CUR_BLKCNT		BIT(15)
 /* STATUS2 */
-#define SLINK_STAT2_RXF_FULL_CNT	(1 << 16)
-#define SLINK_STAT2_TXF_FULL_CNT	(1 << 0)
+#define SLINK_STAT2_RXF_FULL_CNT	BIT(16)
+#define SLINK_STAT2_TXF_FULL_CNT	BIT(0)
 
 #define SPI_TIMEOUT		1000
 #define TEGRA_SPI_MAX_FREQ	52000000
+
+unsigned int cmd_cs_pol_bit[] = {
+	SLINK_CMD_CS_POL,
+	SLINK_CMD_CS_POL1,
+	SLINK_CMD_CS_POL2,
+	SLINK_CMD_CS_POL3,
+};
 
 struct spi_regs {
 	u32 command;	/* SLINK_COMMAND_0 register  */
@@ -100,14 +103,14 @@ struct tegra_spi_slave {
 	struct tegra30_spi_priv *ctrl;
 };
 
-static int tegra30_spi_ofdata_to_platdata(struct udevice *bus)
+static int tegra30_spi_of_to_plat(struct udevice *bus)
 {
-	struct tegra_spi_platdata *plat = bus->platdata;
+	struct tegra_spi_plat *plat = dev_get_plat(bus);
 	const void *blob = gd->fdt_blob;
-	int node = bus->of_offset;
+	int node = dev_of_offset(bus);
 
-	plat->base = fdtdec_get_addr(blob, node, "reg");
-	plat->periph_id = clock_decode_periph_id(blob, node);
+	plat->base = dev_read_addr(bus);
+	plat->periph_id = clock_decode_periph_id(bus);
 
 	if (plat->periph_id == PERIPH_ID_NONE) {
 		debug("%s: could not decode periph id %d\n", __func__,
@@ -129,7 +132,7 @@ static int tegra30_spi_ofdata_to_platdata(struct udevice *bus)
 
 static int tegra30_spi_probe(struct udevice *bus)
 {
-	struct tegra_spi_platdata *plat = dev_get_platdata(bus);
+	struct tegra_spi_plat *plat = dev_get_plat(bus);
 	struct tegra30_spi_priv *priv = dev_get_priv(bus);
 
 	priv->regs = (struct spi_regs *)plat->base;
@@ -137,6 +140,10 @@ static int tegra30_spi_probe(struct udevice *bus)
 	priv->last_transaction_us = timer_get_us();
 	priv->freq = plat->frequency;
 	priv->periph_id = plat->periph_id;
+
+	/* Change SPI clock to correct frequency, PLLP_OUT0 source */
+	clock_start_periph_pll(priv->periph_id, CLOCK_ID_PERIPH,
+			       priv->freq);
 
 	return 0;
 }
@@ -158,6 +165,14 @@ static int tegra30_spi_claim_bus(struct udevice *dev)
 	writel(reg, &regs->status);
 	debug("%s: STATUS = %08x\n", __func__, readl(&regs->status));
 
+	/* Update the polarity bits */
+	if (priv->mode & SPI_CS_HIGH)
+		setbits_le32(&priv->regs->command,
+			     cmd_cs_pol_bit[spi_chip_select(dev)]);
+	else
+		clrbits_le32(&priv->regs->command,
+			     cmd_cs_pol_bit[spi_chip_select(dev)]);
+
 	/* Set master mode and sw controlled CS */
 	reg = readl(&regs->command);
 	reg |= SLINK_CMD_M_S | SLINK_CMD_CS_SOFT;
@@ -170,7 +185,7 @@ static int tegra30_spi_claim_bus(struct udevice *dev)
 static void spi_cs_activate(struct udevice *dev)
 {
 	struct udevice *bus = dev->parent;
-	struct tegra_spi_platdata *pdata = dev_get_platdata(bus);
+	struct tegra_spi_plat *pdata = dev_get_plat(bus);
 	struct tegra30_spi_priv *priv = dev_get_priv(bus);
 
 	/* If it's too soon to do another transaction, wait */
@@ -189,7 +204,7 @@ static void spi_cs_activate(struct udevice *dev)
 static void spi_cs_deactivate(struct udevice *dev)
 {
 	struct udevice *bus = dev->parent;
-	struct tegra_spi_platdata *pdata = dev_get_platdata(bus);
+	struct tegra_spi_plat *pdata = dev_get_plat(bus);
 	struct tegra30_spi_priv *priv = dev_get_priv(bus);
 
 	/* CS is negated on Tegra, so drive a 0 to get a 1 */
@@ -210,16 +225,14 @@ static int tegra30_spi_xfer(struct udevice *dev, unsigned int bitlen,
 	u32 reg, tmpdout, tmpdin = 0;
 	const u8 *dout = data_out;
 	u8 *din = data_in;
-	int num_bytes;
-	int ret;
+	int num_bytes, overflow;
+	int ret = 0;
 
 	debug("%s: slave %u:%u dout %p din %p bitlen %u\n",
-	      __func__, bus->seq, spi_chip_select(dev), dout, din, bitlen);
-	if (bitlen % 8)
-		return -1;
-	num_bytes = bitlen / 8;
+	      __func__, dev_seq(bus), spi_chip_select(dev), dout, din, bitlen);
 
-	ret = 0;
+	num_bytes = DIV_ROUND_UP(bitlen, 8);
+	overflow = bitlen % 8;
 
 	reg = readl(&regs->status);
 	writel(reg, &regs->status);	/* Clear all SPI events via R/W */
@@ -256,8 +269,13 @@ static int tegra30_spi_xfer(struct udevice *dev, unsigned int bitlen,
 
 		num_bytes -= bytes;
 
-		clrsetbits_le32(&regs->command, SLINK_CMD_BIT_LENGTH_MASK,
-				bytes * 8 - 1);
+		if (overflow && !num_bytes)
+			clrsetbits_le32(&regs->command, SLINK_CMD_BIT_LENGTH_MASK,
+					(bytes - 1) * 8 + overflow - 1);
+		else
+			clrsetbits_le32(&regs->command, SLINK_CMD_BIT_LENGTH_MASK,
+					bytes * 8 - 1);
+
 		writel(tmpdout, &regs->tx_fifo);
 		setbits_le32(&regs->command, SLINK_CMD_GO);
 
@@ -317,7 +335,7 @@ static int tegra30_spi_xfer(struct udevice *dev, unsigned int bitlen,
 
 static int tegra30_spi_set_speed(struct udevice *bus, uint speed)
 {
-	struct tegra_spi_platdata *plat = bus->platdata;
+	struct tegra_spi_plat *plat = dev_get_plat(bus);
 	struct tegra30_spi_priv *priv = dev_get_priv(bus);
 
 	if (speed > plat->frequency)
@@ -331,6 +349,22 @@ static int tegra30_spi_set_speed(struct udevice *bus, uint speed)
 static int tegra30_spi_set_mode(struct udevice *bus, uint mode)
 {
 	struct tegra30_spi_priv *priv = dev_get_priv(bus);
+	struct spi_regs *regs = priv->regs;
+	u32 reg;
+
+	reg = readl(&regs->command);
+
+	/* Set CPOL and CPHA */
+	reg &= ~(SLINK_CMD_IDLE_SCLK_MASK | SLINK_CMD_CK_SDA);
+	if (mode & SPI_CPHA)
+		reg |= SLINK_CMD_CK_SDA;
+
+	if (mode & SPI_CPOL)
+		reg |= SLINK_CMD_IDLE_SCLK_DRIVE_HIGH;
+	else
+		reg |= SLINK_CMD_IDLE_SCLK_DRIVE_LOW;
+
+	writel(reg, &regs->command);
 
 	priv->mode = mode;
 	debug("%s: regs=%p, mode=%d\n", __func__, priv->regs, priv->mode);
@@ -359,8 +393,8 @@ U_BOOT_DRIVER(tegra30_spi) = {
 	.id	= UCLASS_SPI,
 	.of_match = tegra30_spi_ids,
 	.ops	= &tegra30_spi_ops,
-	.ofdata_to_platdata = tegra30_spi_ofdata_to_platdata,
-	.platdata_auto_alloc_size = sizeof(struct tegra_spi_platdata),
-	.priv_auto_alloc_size = sizeof(struct tegra30_spi_priv),
+	.of_to_plat = tegra30_spi_of_to_plat,
+	.plat_auto	= sizeof(struct tegra_spi_plat),
+	.priv_auto	= sizeof(struct tegra30_spi_priv),
 	.probe	= tegra30_spi_probe,
 };

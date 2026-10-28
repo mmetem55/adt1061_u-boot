@@ -1,14 +1,13 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * (C) Copyright 2009
  * Stefano Babic, DENX Software Engineering, sbabic@denx.de.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #ifndef __ASM_ARCH_CLOCK_H
 #define __ASM_ARCH_CLOCK_H
 
-#include <common.h>
+#include <stdbool.h>
 
 #ifdef CONFIG_SYS_MX5_HCLK
 #define MXC_HCLK	CONFIG_SYS_MX5_HCLK
@@ -39,12 +38,13 @@ enum mxc_clock {
 	MXC_NFC_CLK,
 	MXC_PERIPH_CLK,
 	MXC_I2C_CLK,
+	MXC_LDB_CLK,
 };
 
 u32 imx_get_uartclk(void);
 u32 imx_get_fecclk(void);
 unsigned int mxc_get_clock(enum mxc_clock clk);
-int mxc_set_clock(u32 ref, u32 freq, u32 clk_type);
+int mxc_set_clock(u32 ref, u32 freq, enum mxc_clock clk);
 void set_usb_phy_clk(void);
 void enable_usb_phy1_clk(bool enable);
 void enable_usb_phy2_clk(bool enable);

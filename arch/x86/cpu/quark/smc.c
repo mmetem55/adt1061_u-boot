@@ -1,30 +1,21 @@
+// SPDX-License-Identifier: Intel
 /*
  * Copyright (C) 2013, Intel Corporation
  * Copyright (C) 2015, Bin Meng <bmeng.cn@gmail.com>
  *
  * Ported from Intel released Quark UEFI BIOS
  * QuarkSocPkg/QuarkNorthCluster/MemoryInit/Pei
- *
- * SPDX-License-Identifier:	Intel
  */
 
-#include <common.h>
 #include <pci.h>
 #include <asm/arch/device.h>
 #include <asm/arch/mrc.h>
 #include <asm/arch/msg_port.h>
+#include <asm/u-boot-x86.h>
+#include <linux/string.h>
 #include "mrc_util.h"
 #include "hte.h"
 #include "smc.h"
-
-/* t_rfc values (in picoseconds) per density */
-static const uint32_t t_rfc[5] = {
-	90000,	/* 512Mb */
-	110000,	/* 1Gb */
-	160000,	/* 2Gb */
-	300000,	/* 4Gb */
-	350000,	/* 8Gb */
-};
 
 /* t_ck clock period in picoseconds per speed index 800, 1066, 1333 */
 static const uint32_t t_ck[3] = {
@@ -35,8 +26,12 @@ static const uint32_t t_ck[3] = {
 
 /* Global variables */
 static const uint16_t ddr_wclk[] = {193, 158};
+#ifdef BACKUP_WCTL
 static const uint16_t ddr_wctl[] = {1, 217};
+#endif
+#ifdef BACKUP_WCMD
 static const uint16_t ddr_wcmd[] = {1, 220};
+#endif
 
 #ifdef BACKUP_RCVN
 static const uint16_t ddr_rcvn[] = {129, 498};
@@ -249,7 +244,6 @@ void perform_ddr_reset(struct mrc_params *mrc_params)
 
 	LEAVEFN();
 }
-
 
 /*
  * This function performs some initialization on the DDRIO unit.

@@ -1,10 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
   Red Black Trees
   (C) 1999  Andrea Arcangeli <andrea@suse.de>
   (C) 2002  David Woodhouse <dwmw2@infradead.org>
   (C) 2012  Michel Lespinasse <walken@google.com>
-
- * SPDX-License-Identifier:	GPL-2.0+
 
   linux/include/linux/rbtree_augmented.h
 */
@@ -70,7 +69,6 @@ rbname ## _rotate(struct rb_node *rb_old, struct rb_node *rb_new)	\
 rbstatic const struct rb_augment_callbacks rbname = {			\
 	rbname ## _propagate, rbname ## _copy, rbname ## _rotate	\
 };
-
 
 #define	RB_RED		0
 #define	RB_BLACK	1

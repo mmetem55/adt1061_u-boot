@@ -1,16 +1,21 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Board functions for Sysam AMCORE (MCF5307 based) board
  *
- * (C) Copyright 2015  Angelo Dureghello <angelo@sysam.it>
- *
- * SPDX-License-Identifier:     GPL-2.0+
+ * (C) Copyright 2016  Angelo Dureghello <angelo@kernel-space.org>
  *
  * This file copies memory testdram() from sandburst/common/sb_common.c
  */
 
-#include <common.h>
+#include <config.h>
+#include <init.h>
+#include <asm/global_data.h>
 #include <asm/immap.h>
 #include <asm/io.h>
+#include <dm.h>
+#include <dm/platform_data/serial_coldfire.h>
+
+DECLARE_GLOBAL_DATA_PTR;
 
 void init_lcd(void)
 {
@@ -36,7 +41,7 @@ int checkboard(void)
 }
 
 /*
- * in initdram we are here executing from flash
+ * in dram_init we are here executing from flash
  * case 1:
  * is with no ACR/flash cache enabled
  * nop = 40ns (scope measured)
@@ -47,7 +52,7 @@ void fudelay(int usec)
 		asm volatile ("nop");
 }
 
-phys_size_t initdram(int board_type)
+int dram_init(void)
 {
 	u32 dramsize, RC;
 
@@ -72,7 +77,7 @@ phys_size_t initdram(int board_type)
 	 * DCR
 	 * set proper  RC as per specification
 	 */
-	RC = (CONFIG_SYS_CPU_CLK / 1000000) >> 1;
+	RC = (CFG_SYS_CPU_CLK / 1000000) >> 1;
 	RC = (RC * 15) >> 4;
 
 	/* 0x8000 is the faster option */
@@ -83,7 +88,7 @@ phys_size_t initdram(int board_type)
 	 */
 	out_be32(&dc->dacr0, 0x00003304);
 
-	dramsize = ((CONFIG_SYS_SDRAM_SIZE)-1) & 0xfffc0000;
+	dramsize = ((CFG_SYS_SDRAM_SIZE)-1) & 0xfffc0000;
 	out_be32(&dc->dmr0,  dramsize|1);
 
 	/* issue a PRECHARGE ALL */
@@ -91,11 +96,25 @@ phys_size_t initdram(int board_type)
 	out_be32((u32 *)0x00000004, 0xbeaddeed);
 	/* issue AUTOREFRESH */
 	out_be32(&dc->dacr0, 0x0000b304);
-	/* let refresh occour */
+	/* let refresh occur */
 	fudelay(1);
 
 	out_be32(&dc->dacr0, 0x0000b344);
 	out_be32((u32 *)0x00000c00, 0xbeaddeed);
 
-	return get_ram_size(CONFIG_SYS_SDRAM_BASE, CONFIG_SYS_SDRAM_SIZE);
+	gd->ram_size = get_ram_size(CFG_SYS_SDRAM_BASE,
+				    CFG_SYS_SDRAM_SIZE);
+
+	return 0;
 }
+
+static struct coldfire_serial_plat mcf5307_serial_plat = {
+	.base = CFG_SYS_UART_BASE,
+	.port = 0,
+	.baudrate = CONFIG_BAUDRATE,
+};
+
+U_BOOT_DRVINFO(coldfire_serial) = {
+	.name = "serial_coldfire",
+	.plat = &mcf5307_serial_plat,
+};

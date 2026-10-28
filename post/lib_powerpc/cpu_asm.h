@@ -1,8 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * (C) Copyright 2002
  * Wolfgang Denk, DENX Software Engineering, wd@denx.de.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 #ifndef _CPU_ASM_H
 #define _CPU_ASM_H
@@ -203,6 +202,5 @@
 #define ASM_LSWX(rd, rs1, rs2)		ASM_12(OP_LSWX, rd, rs1, rs2)
 #define ASM_STSWI(rd, rs, simm)		ASM_11IF(OP_STSWI, rd, rs, simm)
 #define ASM_STSWX(rd, rs1, rs2)		ASM_12(OP_STSWX, rd, rs1, rs2)
-
 
 #endif /* _CPU_ASM_H */

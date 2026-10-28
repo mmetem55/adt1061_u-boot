@@ -6,10 +6,11 @@
  * Grygorii Strashko <grygorii.strashko@ti.com>
  */
 
-#include <common.h>
 #include <dm.h>
+#include <malloc.h>
 #include <dm/test.h>
 #include <dma.h>
+#include <test/test.h>
 #include <test/ut.h>
 
 static int dm_test_dma_m2m(struct unit_test_state *uts)
@@ -29,11 +30,11 @@ static int dm_test_dma_m2m(struct unit_test_state *uts)
 		src_buf[i] = i;
 
 	ut_assertok(dma_memcpy(dst_buf, src_buf, len));
+	ut_asserteq_mem(src_buf, dst_buf, len);
 
-	ut_assertok(memcmp(src_buf, dst_buf, len));
 	return 0;
 }
-DM_TEST(dm_test_dma_m2m, DM_TESTF_SCAN_FDT);
+DM_TEST(dm_test_dma_m2m, UTF_SCAN_FDT);
 
 static int dm_test_dma(struct unit_test_state *uts)
 {
@@ -71,11 +72,11 @@ static int dm_test_dma(struct unit_test_state *uts)
 
 	ut_assertok(dma_free(&dma_tx));
 	ut_assertok(dma_free(&dma_rx));
-	ut_assertok(memcmp(src_buf, dst_buf, len));
+	ut_asserteq_mem(src_buf, dst_buf, len);
 
 	return 0;
 }
-DM_TEST(dm_test_dma, DM_TESTF_SCAN_FDT);
+DM_TEST(dm_test_dma, UTF_SCAN_FDT);
 
 static int dm_test_dma_rx(struct unit_test_state *uts)
 {
@@ -116,8 +117,8 @@ static int dm_test_dma_rx(struct unit_test_state *uts)
 
 	ut_assertok(dma_free(&dma_tx));
 	ut_assertok(dma_free(&dma_rx));
-	ut_assertok(memcmp(src_buf, dst_buf, len));
+	ut_asserteq_mem(src_buf, dst_buf, len);
 
 	return 0;
 }
-DM_TEST(dm_test_dma_rx, DM_TESTF_SCAN_FDT);
+DM_TEST(dm_test_dma_rx, UTF_SCAN_FDT);

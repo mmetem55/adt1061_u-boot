@@ -75,7 +75,6 @@ struct param_struct {
     char commandline[COMMAND_LINE_SIZE];
 };
 
-
 /*
  * The new way of passing information: a list of tagged entries
  */
@@ -132,7 +131,7 @@ struct tag_ramdisk {
 /* describes where the compressed ramdisk image lives (virtual address) */
 /*
  * this one accidentally used virtual addresses - as such,
- * its depreciated.
+ * it's deprecated.
  */
 #define ATAG_INITRD	0x54410005
 
@@ -235,7 +234,7 @@ struct tagtable {
 	int (*parse)(const struct tag *);
 };
 
-#define __tag __attribute__((unused, __section__(".taglist")))
+#define __tag __attribute__((unused)) __section(".taglist")
 #define __tagtable(tag, fn) \
 static struct tagtable __tagtable_##fn __tag = { tag, fn }
 

@@ -1,6 +1,4 @@
-/*
- * SPDX-License-Identifier:	GPL-2.0+
- */
+/* SPDX-License-Identifier: GPL-2.0+ */
 
 #ifndef _M68K_PTRACE_H
 #define _M68K_PTRACE_H
@@ -10,6 +8,8 @@
  * kernel stack during an exception.
  */
 #ifndef __ASSEMBLY__
+
+#include <linux/types.h>
 
 struct pt_regs {
 	ulong d0;

@@ -1,12 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * Copyright (c) 2011 The Chromium OS Authors.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #ifndef __ASM_SANDBOX_BYTEORDER_H
 #define __ASM_SANDBOX_BYTEORDER_H
-
 
 #include <asm/types.h>
 

@@ -1,13 +1,14 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
-* (C) Copyright 2010-2014
-* NVIDIA Corporation <www.nvidia.com>
-*
- * SPDX-License-Identifier:	GPL-2.0+
-*/
+ * (C) Copyright 2010-2015
+ * NVIDIA Corporation <www.nvidia.com>
+ */
 
 /* Tegra AP (Application Processor) code */
 
-#include <common.h>
+#include <config.h>
+#include <log.h>
+#include <linux/bug.h>
 #include <asm/io.h>
 #include <asm/arch/gp_padctrl.h>
 #include <asm/arch/mc.h>
@@ -31,9 +32,17 @@ int tegra_get_chip(void)
 	 * Tegra30, 0x35 for T114, and 0x40 for Tegra124.
 	 */
 	rev = (readl(&gp->hidrev) & HIDREV_CHIPID_MASK) >> HIDREV_CHIPID_SHIFT;
-	debug("%s: CHIPID is 0x%02X\n", __func__, rev);
+	debug("%s: CHIPID is 0x%02x\n", __func__, rev);
 
 	return rev;
+}
+
+u32 tegra_get_major_version(void)
+{
+	struct apb_misc_gp_ctlr *gp =
+		(struct apb_misc_gp_ctlr *)NV_PA_APB_MISC_GP_BASE;
+
+	return (readl(&gp->hidrev) & HIDREV_MAJORPREV_MASK) >> HIDREV_MAJORPREV_SHIFT;
 }
 
 int tegra_get_sku_info(void)
@@ -42,7 +51,7 @@ int tegra_get_sku_info(void)
 	struct fuse_regs *fuse = (struct fuse_regs *)NV_PA_FUSE_BASE;
 
 	sku_id = readl(&fuse->sku_info) & 0xff;
-	debug("%s: SKU info byte is 0x%02X\n", __func__, sku_id);
+	debug("%s: SKU info byte is 0x%02x\n", __func__, sku_id);
 
 	return sku_id;
 }
@@ -57,8 +66,10 @@ int tegra_get_chip_sku(void)
 	switch (chip_id) {
 	case CHIPID_TEGRA20:
 		switch (sku_id) {
-		case SKU_ID_T20_7:
+		case SKU_ID_T20_A04:
+		case SKU_ID_AP20:
 		case SKU_ID_T20:
+		case SKU_ID_AP20H:
 			return TEGRA_SOC_T20;
 		case SKU_ID_T25SE:
 		case SKU_ID_AP25:
@@ -66,6 +77,9 @@ int tegra_get_chip_sku(void)
 		case SKU_ID_AP25E:
 		case SKU_ID_T25E:
 			return TEGRA_SOC_T25;
+		default:
+			debug("%s: UNKNOWN Tegra20 SKU ID (0x%02x)\n", __func__, sku_id);
+			return TEGRA_SOC_T20;
 		}
 		break;
 	case CHIPID_TEGRA30:
@@ -73,7 +87,9 @@ int tegra_get_chip_sku(void)
 		case SKU_ID_T33:
 		case SKU_ID_T30:
 		case SKU_ID_TM30MQS_P_A3:
+			return TEGRA_SOC_T30;
 		default:
+			debug("%s: UNKNOWN Tegra30 SKU ID (0x%02x)\n", __func__, sku_id);
 			return TEGRA_SOC_T30;
 		}
 		break;
@@ -81,25 +97,39 @@ int tegra_get_chip_sku(void)
 		switch (sku_id) {
 		case SKU_ID_T114_ENG:
 		case SKU_ID_T114_1:
+			return TEGRA_SOC_T114;
 		default:
+			debug("%s: UNKNOWN Tegra114 SKU ID (0x%02x)\n", __func__, sku_id);
 			return TEGRA_SOC_T114;
 		}
 		break;
 	case CHIPID_TEGRA124:
 		switch (sku_id) {
 		case SKU_ID_T124_ENG:
-		default:
 			return TEGRA_SOC_T124;
+		default:
+			debug("%s: UNKNOWN Tegra124 SKU ID (0x%02x)\n", __func__, sku_id);
+			return TEGRA_SOC_T124;
+		}
+		break;
+	case CHIPID_TEGRA210:
+		switch (sku_id) {
+		case SKU_ID_T210_ENG:
+			return TEGRA_SOC_T210;
+		default:
+			debug("%s: UNKNOWN Tegra210 SKU ID (0x%02x)\n", __func__, sku_id);
+			return TEGRA_SOC_T210;
 		}
 		break;
 	}
 
 	/* unknown chip/sku id */
-	printf("%s: ERROR: UNKNOWN CHIP/SKU ID COMBO (0x%02X/0x%02X)\n",
-		__func__, chip_id, sku_id);
+	printf("%s: ERROR: UNKNOWN CHIP/SKU ID COMBO (0x%02x/0x%02x)\n",
+	       __func__, chip_id, sku_id);
 	return TEGRA_SOC_UNKNOWN;
 }
 
+#ifndef CONFIG_ARM64
 static void enable_scu(void)
 {
 	struct scu_ctlr *scu = (struct scu_ctlr *)NV_PA_ARM_PERIPHBASE;
@@ -131,8 +161,8 @@ static u32 get_odmdata(void)
 	 * on BCTs for currently supported SoCs, which are locked down.
 	 * If this changes in new chips, we can revisit this algorithm.
 	 */
-
-	u32 bct_start, odmdata;
+	unsigned long bct_start;
+	u32 odmdata;
 
 	bct_start = readl(NV_PA_BASE_SRAM + NVBOOTINFOTABLE_BCTPTR);
 	odmdata = readl(bct_start + BCT_ODMDATA_OFFSET);
@@ -147,8 +177,13 @@ static void init_pmc_scratch(void)
 	int i;
 
 	/* SCRATCH0 is initialized by the boot ROM and shouldn't be cleared */
-	for (i = 0; i < 23; i++)
-		writel(0, &pmc->pmc_scratch1+i);
+#if defined(CONFIG_TEGRA_SUPPORT_NON_SECURE)
+	if (!tegra_cpu_is_non_secure())
+#endif
+	{
+		for (i = 0; i < 23; i++)
+			writel(0, &pmc->pmc_scratch1 + i);
+	}
 
 	/* ODMDATA is for kernel use to determine RAM size, LP config, etc. */
 	odmdata = get_odmdata();
@@ -218,7 +253,5 @@ void s_init(void)
 
 	/* enable SMMU */
 	smmu_enable();
-
-	/* init vpr */
-	config_vpr();
 }
+#endif

@@ -1,16 +1,18 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * Copyright 2014 Freescale Semiconductor, Inc.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #ifndef __ASM_ARCH_LS102XA_IMMAP_H_
 #define __ASM_ARCH_LS102XA_IMMAP_H_
+#include <fsl_immap.h>
 
 #define SVR_MAJ(svr)		(((svr) >>  4) & 0xf)
 #define SVR_MIN(svr)		(((svr) >>  0) & 0xf)
 #define SVR_SOC_VER(svr)	(((svr) >> 8) & 0x7ff)
 #define IS_E_PROCESSOR(svr)	(svr & 0x80000)
+#define IS_SVR_REV(svr, maj, min) \
+		((SVR_MAJ(svr) == maj) && (SVR_MIN(svr) == min))
 
 #define SOC_VER_SLS1020		0x00
 #define SOC_VER_LS1020		0x10
@@ -31,7 +33,7 @@
 #define RCWSR4_SRDS1_PRTCL_SHIFT	24
 #define RCWSR4_SRDS1_PRTCL_MASK		0xff000000
 
-#define TIMER_COMP_VAL			0xffffffff
+#define TIMER_COMP_VAL			0xffffffffffffffffull
 #define ARCH_TIMER_CTRL_ENABLE		(1 << 0)
 #define SYS_COUNTER_CTRL_ENABLE		(1 << 24)
 
@@ -40,42 +42,24 @@
 
 #define DCFG_DCSR_PORCR1		0
 
-/*
- * Define default values for some CCSR macros to make header files cleaner
- *
- * To completely disable CCSR relocation in a board header file, define
- * CONFIG_SYS_CCSR_DO_NOT_RELOCATE.  This will force CONFIG_SYS_CCSRBAR_PHYS
- * to a value that is the same as CONFIG_SYS_CCSRBAR.
- */
-
-#ifdef CONFIG_SYS_CCSRBAR_PHYS
-#error "Do not define CONFIG_SYS_CCSRBAR_PHYS directly."
+#ifndef CFG_SYS_CCSRBAR
+#define CFG_SYS_CCSRBAR		CONFIG_SYS_IMMR
 #endif
 
-#ifdef CONFIG_SYS_CCSR_DO_NOT_RELOCATE
-#undef CONFIG_SYS_CCSRBAR_PHYS_HIGH
-#undef CONFIG_SYS_CCSRBAR_PHYS_LOW
-#define CONFIG_SYS_CCSRBAR_PHYS_HIGH	0
-#endif
-
-#ifndef CONFIG_SYS_CCSRBAR
-#define CONFIG_SYS_CCSRBAR		CONFIG_SYS_IMMR
-#endif
-
-#ifndef CONFIG_SYS_CCSRBAR_PHYS_HIGH
+#ifndef CFG_SYS_CCSRBAR_PHYS_HIGH
 #ifdef CONFIG_PHYS_64BIT
-#define CONFIG_SYS_CCSRBAR_PHYS_HIGH	0xf
+#define CFG_SYS_CCSRBAR_PHYS_HIGH	0xf
 #else
-#define CONFIG_SYS_CCSRBAR_PHYS_HIGH	0
+#define CFG_SYS_CCSRBAR_PHYS_HIGH	0
 #endif
 #endif
 
-#ifndef CONFIG_SYS_CCSRBAR_PHYS_LOW
-#define CONFIG_SYS_CCSRBAR_PHYS_LOW	CONFIG_SYS_IMMR
+#ifndef CFG_SYS_CCSRBAR_PHYS_LOW
+#define CFG_SYS_CCSRBAR_PHYS_LOW	CONFIG_SYS_IMMR
 #endif
 
-#define CONFIG_SYS_CCSRBAR_PHYS ((CONFIG_SYS_CCSRBAR_PHYS_HIGH * 1ull) << 32 | \
-				 CONFIG_SYS_CCSRBAR_PHYS_LOW)
+#define CFG_SYS_CCSRBAR_PHYS ((CFG_SYS_CCSRBAR_PHYS_HIGH * 1ull) << 32 | \
+				 CFG_SYS_CCSRBAR_PHYS_LOW)
 
 struct sys_info {
 	unsigned long freq_processor[CONFIG_MAX_CPUS];
@@ -83,6 +67,8 @@ struct sys_info {
 	unsigned long freq_ddrbus;
 	unsigned long freq_localbus;
 };
+
+#define CCSR_DEVDISR1_QE	0x00000001
 
 /* Device Configuration and Pin Control */
 struct ccsr_gur {
@@ -118,6 +104,8 @@ struct ccsr_gur {
 	u32	brrl;		/* Boot release */
 	u8      res_0e8[0x100-0xe8];
 	u32     rcwsr[16];      /* Reset control word status */
+#define RCW_SB_EN_REG_INDEX	7
+#define RCW_SB_EN_MASK		0x00200000
 	u8      res_140[0x200-0x140];
 	u32     scratchrw[4];  /* Scratch Read/Write */
 	u8      res_210[0x300-0x210];
@@ -143,12 +131,46 @@ struct ccsr_gur {
 	u32	sdhcpcr;
 };
 
-#define SCFG_ETSECDMAMCR_LE_BD_FR	0xf8001a0f
+#define SCFG_ETSECDMAMCR_LE_BD_FR	0x00000c00
+#define SCFG_SNPCNFGCR_SEC_RD_WR	0xc0000000
 #define SCFG_ETSECCMCR_GE2_CLK125	0x04000000
 #define SCFG_ETSECCMCR_GE0_CLK125	0x00000000
 #define SCFG_ETSECCMCR_GE1_CLK125	0x08000000
 #define SCFG_PIXCLKCR_PXCKEN		0x80000000
-#define SCFG_QSPI_CLKSEL		0xc0100000
+#define SCFG_QSPI_CLKSEL		0x30100000
+#define SCFG_SNPCNFGCR_SEC_RD_WR	0xc0000000
+#define SCFG_SNPCNFGCR_DCU_RD_WR	0x03000000
+#define SCFG_SNPCNFGCR_SATA_RD_WR	0x00c00000
+#define SCFG_SNPCNFGCR_USB3_RD_WR	0x00300000
+#define SCFG_SNPCNFGCR_DBG_RD_WR	0x000c0000
+#define SCFG_SNPCNFGCR_EDMA_SNP		0x00020000
+#define SCFG_ENDIANCR_LE		0x80000000
+#define SCFG_DPSLPCR_WDRR_EN		0x00000001
+#define SCFG_PMCINTECR_LPUART		0x40000000
+#define SCFG_PMCINTECR_FTM		0x20000000
+#define SCFG_PMCINTECR_GPIO		0x10000000
+#define SCFG_PMCINTECR_IRQ0		0x08000000
+#define SCFG_PMCINTECR_IRQ1		0x04000000
+#define SCFG_PMCINTECR_ETSECRXG0	0x00800000
+#define SCFG_PMCINTECR_ETSECRXG1	0x00400000
+#define SCFG_PMCINTECR_ETSECERRG0	0x00080000
+#define SCFG_PMCINTECR_ETSECERRG1	0x00040000
+#define SCFG_CLUSTERPMCR_WFIL2EN	0x80000000
+
+#define SCFG_BASE			0x01570000
+#define SCFG_USB3PRM1CR			0x070
+#define SCFG_USB_TXVREFTUNE		0x9
+#define SCFG_USB_SQRXTUNE_MASK		0x7
+#define SCFG_USB3PRM2CR			0x074
+#define SCFG_USB_PCSTXSWINGFULL_MASK	0x0000FE00
+#define SCFG_USB_PCSTXSWINGFULL_VAL		0x00008E00
+
+#define USB_PHY_BASE			0x08510000
+#define USB_PHY_RX_OVRD_IN_HI	0x200c
+#define USB_PHY_RX_EQ_VAL_1		0x0000
+#define USB_PHY_RX_EQ_VAL_2		0x8000
+#define USB_PHY_RX_EQ_VAL_3		0x8004
+#define USB_PHY_RX_EQ_VAL_4		0x800C
 
 /* Supplemental Configuration Unit */
 struct ccsr_scfg {
@@ -207,20 +229,20 @@ struct ccsr_scfg {
 	u32 qos2;
 	u32 qos3;
 	u32 cci_cfg;
-	u32 resv8[1];
+	u32 endiancr;
 	u32 etsecdmamcr;
 	u32 usb3prm3cr;
 	u32 resv9[1];
 	u32 debug_streamid;
 	u32 resv10[5];
 	u32 snpcnfgcr;
-	u32 resv11[1];
+	u32 hrstcr;
 	u32 intpcr;
 	u32 resv12[20];
 	u32 scfgrevcr;
 	u32 coresrencr;
 	u32 pex2pmrdsr;
-	u32 ddrc1cr;
+	u32 eddrtqcfg;
 	u32 ddrc2cr;
 	u32 ddrc3cr;
 	u32 ddrc4cr;
@@ -231,6 +253,9 @@ struct ccsr_scfg {
 	u32 sdhciovserlcr;
 	u32 resv14[61];
 	u32 sparecr[8];
+	u32 resv15[248];
+	u32 core0sftrstsr;
+	u32 clusterpmcr;
 };
 
 /* Clocking */
@@ -348,51 +373,42 @@ struct ccsr_serdes {
 	u8	res_a00[0x1000-0xa00];	/* from 0xa00 to 0xfff */
 };
 
-#define CCI400_CTRLORD_TERM_BARRIER	0x00000008
-#define CCI400_CTRLORD_EN_BARRIER	0
-#define CCI400_SHAORD_NON_SHAREABLE	0x00000002
-#define CCI400_DVM_MESSAGE_REQ_EN	0x00000002
-#define CCI400_SNOOP_REQ_EN		0x00000001
+#define RCPM_POWMGTCSR			0x130
+#define RCPM_POWMGTCSR_SERDES_PW	0x80000000
+#define RCPM_POWMGTCSR_LPM20_REQ	0x00100000
+#define RCPM_POWMGTCSR_LPM20_ST		0x00000200
+#define RCPM_POWMGTCSR_P_LPM20_ST	0x00000100
+#define RCPM_IPPDEXPCR0			0x140
+#define RCPM_IPPDEXPCR0_ETSEC		0x80000000
+#define RCPM_IPPDEXPCR0_GPIO		0x00000040
+#define RCPM_IPPDEXPCR1			0x144
+#define RCPM_IPPDEXPCR1_LPUART		0x40000000
+#define RCPM_IPPDEXPCR1_FLEXTIMER	0x20000000
+#define RCPM_IPPDEXPCR1_OCRAM1		0x10000000
+#define RCPM_NFIQOUTR			0x15c
+#define RCPM_NIRQOUTR			0x16c
+#define RCPM_DSIMSKR			0x18c
+#define RCPM_CLPCL10SETR		0x1c4
+#define RCPM_CLPCL10SETR_C0		0x00000001
 
-/* CCI-400 registers */
-struct ccsr_cci400 {
-	u32 ctrl_ord;			/* Control Override */
-	u32 spec_ctrl;			/* Speculation Control */
-	u32 secure_access;		/* Secure Access */
-	u32 status;			/* Status */
-	u32 impr_err;			/* Imprecise Error */
-	u8 res_14[0x100 - 0x14];
-	u32 pmcr;			/* Performance Monitor Control */
-	u8 res_104[0xfd0 - 0x104];
-	u32 pid[8];			/* Peripheral ID */
-	u32 cid[4];			/* Component ID */
-	struct {
-		u32 snoop_ctrl;		/* Snoop Control */
-		u32 sha_ord;		/* Shareable Override */
-		u8 res_1008[0x1100 - 0x1008];
-		u32 rc_qos_ord;		/* read channel QoS Value Override */
-		u32 wc_qos_ord;		/* read channel QoS Value Override */
-		u8 res_1108[0x110c - 0x1108];
-		u32 qos_ctrl;		/* QoS Control */
-		u32 max_ot;		/* Max OT */
-		u8 res_1114[0x1130 - 0x1114];
-		u32 target_lat;		/* Target Latency */
-		u32 latency_regu;	/* Latency Regulation */
-		u32 qos_range;		/* QoS Range */
-		u8 res_113c[0x2000 - 0x113c];
-	} slave[5];			/* Slave Interface */
-	u8 res_6000[0x9004 - 0x6000];
-	u32 cycle_counter;		/* Cycle counter */
-	u32 count_ctrl;			/* Count Control */
-	u32 overflow_status;		/* Overflow Flag Status */
-	u8 res_9010[0xa000 - 0x9010];
-	struct {
-		u32 event_select;	/* Event Select */
-		u32 event_count;	/* Event Count */
-		u32 counter_ctrl;	/* Counter Control */
-		u32 overflow_status;	/* Overflow Flag Status */
-		u8 res_a010[0xb000 - 0xa010];
-	} pcounter[4];			/* Performance Counter */
-	u8 res_e004[0x10000 - 0xe004];
+struct ccsr_rcpm {
+	u8 rev1[0x4c];
+	u32 twaitsr;
+	u8 rev2[0xe0];
+	u32 powmgtcsr;
+	u8 rev3[0xc];
+	u32 ippdexpcr0;
+	u32 ippdexpcr1;
+	u8 rev4[0x14];
+	u32 nfiqoutr;
+	u8 rev5[0xc];
+	u32 nirqoutr;
+	u8 rev6[0x1c];
+	u32 dsimskr;
+	u8 rev7[0x34];
+	u32 clpcl10setr;
 };
+
+uint get_svr(void);
+
 #endif	/* __ASM_ARCH_LS102XA_IMMAP_H_ */

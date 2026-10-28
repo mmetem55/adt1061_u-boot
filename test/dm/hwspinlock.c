@@ -3,12 +3,12 @@
  * Copyright (C) 2018, STMicroelectronics - All Rights Reserved
  */
 
-#include <common.h>
 #include <dm.h>
 #include <hwspinlock.h>
 #include <asm/state.h>
 #include <asm/test.h>
 #include <dm/test.h>
+#include <test/test.h>
 #include <test/ut.h>
 
 /* Test that hwspinlock driver functions are called */
@@ -36,5 +36,4 @@ static int dm_test_hwspinlock_base(struct unit_test_state *uts)
 
 	return 0;
 }
-
-DM_TEST(dm_test_hwspinlock_base, DM_TESTF_SCAN_PDATA | DM_TESTF_SCAN_FDT);
+DM_TEST(dm_test_hwspinlock_base, UTF_SCAN_PDATA | UTF_SCAN_FDT);

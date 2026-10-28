@@ -15,11 +15,14 @@
  *    reentrant and should be faster). Use only strsep() in new code, please.
  */
 
-#include <linux/types.h>
-#include <linux/string.h>
+#include <asm/sections.h>
+#include <config.h>
+#include <limits.h>
+#include <linux/compiler.h>
 #include <linux/ctype.h>
+#include <linux/string.h>
+#include <linux/types.h>
 #include <malloc.h>
-
 
 /**
  * strncasecmp - Case insensitive, length-limited string comparison
@@ -113,6 +116,8 @@ char * strncpy(char * dest,const char *src,size_t count)
  * NUL-terminated string that fits in the buffer (unless,
  * of course, the buffer size is zero). It does not pad
  * out the result like strncpy() does.
+ *
+ * Return: strlen(src)
  */
 size_t strlcpy(char *dest, const char *src, size_t size)
 {
@@ -175,22 +180,47 @@ char * strncat(char *dest, const char *src, size_t count)
 }
 #endif
 
+#ifndef __HAVE_ARCH_STRLCAT
+/**
+ * strlcat - Append a length-limited, %NUL-terminated string to another
+ * @dest: The string to be appended to
+ * @src: The string to append to it
+ * @size: The size of @dest
+ *
+ * Compatible with *BSD: the result is always a valid NUL-terminated string that
+ * fits in the buffer (unless, of course, the buffer size is zero). It does not
+ * write past @size like strncat() does.
+ *
+ * Return: min(strlen(dest), size) + strlen(src)
+ */
+size_t strlcat(char *dest, const char *src, size_t size)
+{
+	size_t len = strnlen(dest, size);
+
+	return len + strlcpy(dest + len, src, size - len);
+}
+#endif
+
 #ifndef __HAVE_ARCH_STRCMP
 /**
  * strcmp - Compare two strings
  * @cs: One string
  * @ct: Another string
  */
-int strcmp(const char * cs,const char * ct)
+int strcmp(const char *cs, const char *ct)
 {
-	register signed char __res;
+	int ret;
 
 	while (1) {
-		if ((__res = *cs - *ct++) != 0 || !*cs++)
+		unsigned char a = *cs++;
+		unsigned char b = *ct++;
+
+		ret = a - b;
+		if (ret || !b)
 			break;
 	}
 
-	return __res;
+	return ret;
 }
 #endif
 
@@ -201,17 +231,20 @@ int strcmp(const char * cs,const char * ct)
  * @ct: Another string
  * @count: The maximum number of bytes to compare
  */
-int strncmp(const char * cs,const char * ct,size_t count)
+int strncmp(const char *cs, const char *ct, size_t count)
 {
-	register signed char __res = 0;
+	int ret = 0;
 
-	while (count) {
-		if ((__res = *cs - *ct++) != 0 || !*cs++)
+	while (count--) {
+		unsigned char a = *cs++;
+		unsigned char b = *ct++;
+
+		ret = a - b;
+		if (ret || !b)
 			break;
-		count--;
 	}
 
-	return __res;
+	return ret;
 }
 #endif
 
@@ -229,6 +262,14 @@ char * strchr(const char * s, int c)
 	return (char *) s;
 }
 #endif
+
+char *strchrnul(const char *s, int c)
+{
+	for (; *s != (char)c; ++s)
+		if (*s == '\0')
+			break;
+	return (char *)s;
+}
 
 #ifndef __HAVE_ARCH_STRRCHR
 /**
@@ -278,22 +319,86 @@ size_t strnlen(const char * s, size_t count)
 }
 #endif
 
-#ifndef __HAVE_ARCH_STRDUP
-char * strdup(const char *s)
+#ifndef __HAVE_ARCH_STRCSPN
+/**
+ * strcspn - Calculate the length of the initial substring of @s which does
+ * not contain letters in @reject
+ * @s: The string to be searched
+ * @reject: The string to avoid
+ */
+size_t strcspn(const char *s, const char *reject)
 {
-	char *new;
+	const char *p;
+	const char *r;
+	size_t count = 0;
 
-	if ((s == NULL)	||
-	    ((new = malloc (strlen(s) + 1)) == NULL) ) {
-		return NULL;
+	for (p = s; *p != '\0'; ++p) {
+		for (r = reject; *r != '\0'; ++r) {
+			if (*p == *r)
+				return count;
+		}
+		++count;
 	}
-
-	strcpy (new, s);
-	return new;
+	return count;
 }
 #endif
 
-#ifndef __HAVE_ARCH_STRSPN
+void *memdup_nul(const void *src, size_t len)
+{
+	char *dst;
+
+	if (len + 1 < len)
+		return NULL;
+
+	dst = malloc(len + 1);
+	if (!dst)
+		return NULL;
+
+	dst[len] = '\0';
+	return memcpy(dst, src, len);
+}
+
+char * strdup(const char *s)
+{
+	return s ? memdup_nul(s, strlen(s)) : NULL;
+}
+
+char * strndup(const char *s, size_t n)
+{
+	return s ? memdup_nul(s, strnlen(s, n)) : NULL;
+}
+
+/**
+ * strdup_const - conditionally duplicate an existing const string
+ * @s: the string to duplicate
+ *
+ * Note: Strings allocated by kstrdup_const should be freed by kfree_const and
+ * must not be passed to krealloc().
+ *
+ * Return: source string if it is in .rodata section otherwise
+ * fallback to kstrdup.
+ */
+const char *strdup_const(const char *s)
+{
+	if (is_kernel_rodata((unsigned long)s))
+		return s;
+
+	return strdup(s);
+}
+
+/**
+ * kfree_const - conditionally free memory
+ * @x: pointer to the memory
+ *
+ * Function calls kfree only if @x is not in .rodata section.
+ */
+void kfree_const(const void *x)
+{
+	if (!is_kernel_rodata((unsigned long)x))
+		free((void *)x);
+}
+
+
 /**
  * strspn - Calculate the length of the initial substring of @s which only
  *	contain letters in @accept
@@ -318,9 +423,7 @@ size_t strspn(const char *s, const char *accept)
 
 	return count;
 }
-#endif
 
-#ifndef __HAVE_ARCH_STRPBRK
 /**
  * strpbrk - Find the first occurrence of a set of characters
  * @cs: The string to be searched
@@ -338,9 +441,7 @@ char * strpbrk(const char * cs,const char * ct)
 	}
 	return NULL;
 }
-#endif
 
-#ifndef __HAVE_ARCH_STRTOK
 /**
  * strtok - Split a string into tokens
  * @s: The string to be searched
@@ -367,9 +468,7 @@ char * strtok(char * s,const char * ct)
 	___strtok = send;
 	return (sbegin);
 }
-#endif
 
-#ifndef __HAVE_ARCH_STRSEP
 /**
  * strsep - Split a string into tokens
  * @s: The string to be searched
@@ -395,35 +494,6 @@ char * strsep(char **s, const char *ct)
 
 	return sbegin;
 }
-#endif
-
-#ifndef __HAVE_ARCH_STRSWAB
-/**
- * strswab - swap adjacent even and odd bytes in %NUL-terminated string
- * s: address of the string
- *
- * returns the address of the swapped string or NULL on error. If
- * string length is odd, last byte is untouched.
- */
-char *strswab(const char *s)
-{
-	char *p, *q;
-
-	if ((NULL == s) || ('\0' == *s)) {
-		return (NULL);
-	}
-
-	for (p=(char *)s, q=p+1; (*p != '\0') && (*q != '\0'); p+=2, q+=2) {
-		char  tmp;
-
-		tmp = *p;
-		*p  = *q;
-		*q  = tmp;
-	}
-
-	return (char *) s;
-}
-#endif
 
 #ifndef __HAVE_ARCH_MEMSET
 /**
@@ -434,11 +504,13 @@ char *strswab(const char *s)
  *
  * Do not use memset() to access IO space, use memset_io() instead.
  */
-void * memset(void * s,int c,size_t count)
+__used void * memset(void * s,int c,size_t count)
 {
 	unsigned long *sl = (unsigned long *) s;
-	unsigned long cl = 0;
 	char *s8;
+
+#if !CONFIG_IS_ENABLED(TINY_MEMSET)
+	unsigned long cl = 0;
 	int i;
 
 	/* do it one word at a time (32 bits or 64 bits) while possible */
@@ -452,36 +524,12 @@ void * memset(void * s,int c,size_t count)
 			count -= sizeof(*sl);
 		}
 	}
-	/* fill 8 bits at a time */
+#endif	/* fill 8 bits at a time */
 	s8 = (char *)sl;
 	while (count--)
 		*s8++ = c;
 
 	return s;
-}
-#endif
-
-#ifndef __HAVE_ARCH_BCOPY
-/**
- * bcopy - Copy one area of memory to another
- * @src: Where to copy from
- * @dest: Where to copy to
- * @count: The size of the area.
- *
- * Note that this is the same as memcpy(), with the arguments reversed.
- * memcpy() is the standard, bcopy() is a legacy BSD function.
- *
- * You should not use this function to access IO space, use memcpy_toio()
- * or memcpy_fromio() instead.
- */
-char * bcopy(const char * src, char * dest, int count)
-{
-	char *tmp = dest;
-
-	while (count--)
-		*tmp++ = *src++;
-
-	return dest;
 }
 #endif
 
@@ -495,7 +543,7 @@ char * bcopy(const char * src, char * dest, int count)
  * You should not use this function to access IO space, use memcpy_toio()
  * or memcpy_fromio() instead.
  */
-void * memcpy(void *dest, const void *src, size_t count)
+__rcode __used void *memcpy(void *dest, const void *src, size_t count)
 {
 	unsigned long *dl = (unsigned long *)dest, *sl = (unsigned long *)src;
 	char *d8, *s8;
@@ -529,20 +577,25 @@ void * memcpy(void *dest, const void *src, size_t count)
  *
  * Unlike memcpy(), memmove() copes with overlapping areas.
  */
-void * memmove(void * dest,const void *src,size_t count)
+__rcode __used void *memmove(void *dest, const void *src, size_t count)
 {
 	char *tmp, *s;
 
-	if (src == dest)
-		return dest;
-
-	if (dest <= src) {
-		tmp = (char *) dest;
-		s = (char *) src;
-		while (count--)
-			*tmp++ = *s++;
-		}
-	else {
+	if (dest <= src || (src + count) <= dest) {
+	/*
+	 * Use the fast memcpy implementation (ARCH optimized or lib/string.c) when it is possible:
+	 * - when dest is before src (assuming that memcpy is doing forward-copying)
+	 * - when destination don't overlap the source buffer (src + count <= dest)
+	 *
+	 * WARNING: the first optimisation cause an issue, when __HAVE_ARCH_MEMCPY is defined,
+	 *          __HAVE_ARCH_MEMMOVE is not defined and if the memcpy ARCH-specific
+	 *          implementation is not doing a forward-copying.
+	 *
+	 * No issue today because memcpy is doing a forward-copying in lib/string.c and for ARM32
+	 * architecture; no other arches use __HAVE_ARCH_MEMCPY without __HAVE_ARCH_MEMMOVE.
+	 */
+		memcpy(dest, src, count);
+	} else {
 		tmp = (char *) dest + count;
 		s = (char *) src + count;
 		while (count--)
@@ -560,7 +613,7 @@ void * memmove(void * dest,const void *src,size_t count)
  * @ct: Another area of memory
  * @count: The size of the area.
  */
-int memcmp(const void * cs,const void * ct,size_t count)
+__used int memcmp(const void * cs,const void * ct,size_t count)
 {
 	const unsigned char *su1, *su2;
 	int res = 0;
@@ -596,29 +649,84 @@ void * memscan(void * addr, int c, size_t size)
 }
 #endif
 
-#ifndef __HAVE_ARCH_STRSTR
-/**
- * strstr - Find the first substring in a %NUL terminated string
- * @s1: The string to be searched
- * @s2: The string to search for
- */
-char * strstr(const char * s1,const char * s2)
+void *memdup(const void *src, size_t len)
 {
-	int l1, l2;
+	void *p;
 
+	p = malloc(len);
+	if (!p)
+		return NULL;
+
+	return memcpy(p, src, len);
+}
+
+#ifndef __HAVE_ARCH_STRNSTR
+/**
+ * strnstr() - find the first substring occurrence in a NUL terminated string
+ *
+ * @s1:		string to be searched
+ * @s2:		string to search for
+ * @len:	maximum number of characters in s1 to consider
+ *
+ * Return:	pointer to the first occurrence or NULL
+ */
+char *strnstr(const char *s1, const char *s2, size_t len)
+{
+	size_t l1, l2;
+
+	l1 = strnlen(s1, len);
 	l2 = strlen(s2);
-	if (!l2)
-		return (char *) s1;
-	l1 = strlen(s1);
-	while (l1 >= l2) {
-		l1--;
-		if (!memcmp(s1,s2,l2))
+
+	for (; l1 >= l2; --l1, ++s1) {
+		if (!memcmp(s1, s2, l2))
 			return (char *) s1;
-		s1++;
 	}
+
 	return NULL;
 }
 #endif
+
+#ifndef __HAVE_ARCH_STRSTR
+/**
+ * strstr() - find the first substring occurrence in a NUL terminated string
+ *
+ * @s1:		string to be searched
+ * @s2:		string to search for
+ *
+ * Return:	pointer to the first occurrence or NULL
+ */
+char *strstr(const char *s1, const char *s2)
+{
+	return strnstr(s1, s2, SIZE_MAX);
+}
+#endif
+
+/**
+ * strcasestr() - Case insensitive substring search
+ *
+ * @haystack:	string to be searched
+ * @needle:	string to search for
+ *
+ * Return:	pointer to the first occurrence or NULL
+ *
+ * The case of both strings are ignored.
+ */
+char *strcasestr(const char *haystack, const char *needle)
+{
+	size_t l1, l2;
+
+	l1 = strlen(haystack);
+	l2 = strlen(needle);
+
+	while (l1 >= l2) {
+		if (!strncasecmp(haystack, needle, l2))
+			return (char *)haystack;
+		haystack++;
+		l1--;
+	}
+
+	return NULL;
+}
 
 #ifndef __HAVE_ARCH_MEMCHR
 /**

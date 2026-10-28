@@ -1,87 +1,69 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Copyright (C) 2015 Google, Inc
- *
- * SPDX-License-Identifier:	GPL-2.0+
  *
  * Based on code from coreboot
  */
 
-#include <common.h>
 #include <cpu.h>
 #include <dm.h>
+#include <event.h>
+#include <init.h>
+#include <log.h>
+#include <pci.h>
 #include <asm/cpu.h>
+#include <asm/cpu_x86.h>
+#include <asm/io.h>
 #include <asm/lapic.h>
-#include <asm/mp.h>
 #include <asm/msr.h>
 #include <asm/turbo.h>
 
-#ifdef CONFIG_SMP
-static int enable_smis(struct udevice *cpu, void *unused)
-{
-	return 0;
-}
+#define BYT_PRV_CLK			0x800
+#define BYT_PRV_CLK_EN			(1 << 0)
+#define BYT_PRV_CLK_M_VAL_SHIFT		1
+#define BYT_PRV_CLK_N_VAL_SHIFT		16
+#define BYT_PRV_CLK_UPDATE		(1 << 31)
 
-static struct mp_flight_record mp_steps[] = {
-	MP_FR_BLOCK_APS(mp_init_cpu, NULL, mp_init_cpu, NULL),
-	/* Wait for APs to finish initialization before proceeding. */
-	MP_FR_BLOCK_APS(NULL, NULL, enable_smis, NULL),
-};
-
-static int detect_num_cpus(void)
+static void hsuart_clock_set(void *base)
 {
-	int ecx = 0;
+	u32 m, n, reg;
 
 	/*
-	 * Use the algorithm described in Intel 64 and IA-32 Architectures
-	 * Software Developer's Manual Volume 3 (3A, 3B & 3C): System
-	 * Programming Guide, Jan-2015. Section 8.9.2: Hierarchical Mapping
-	 * of CPUID Extended Topology Leaf.
+	 * Configure the BayTrail UART clock for the internal HS UARTs
+	 * (PCI devices) to 58982400 Hz
 	 */
-	while (1) {
-		struct cpuid_result leaf_b;
-
-		leaf_b = cpuid_ext(0xb, ecx);
-
-		/*
-		 * Bay Trail doesn't have hyperthreading so just determine the
-		 * number of cores by from level type (ecx[15:8] == * 2)
-		 */
-		if ((leaf_b.ecx & 0xff00) == 0x0200)
-			return leaf_b.ebx & 0xffff;
-		ecx++;
-	}
+	m = 0x2400;
+	n = 0x3d09;
+	reg = (m << BYT_PRV_CLK_M_VAL_SHIFT) | (n << BYT_PRV_CLK_N_VAL_SHIFT);
+	writel(reg, base + BYT_PRV_CLK);
+	reg |= BYT_PRV_CLK_EN | BYT_PRV_CLK_UPDATE;
+	writel(reg, base + BYT_PRV_CLK);
 }
 
-static int baytrail_init_cpus(void)
+/*
+ * Configure the internal clock of both SIO HS-UARTs, if they are enabled
+ * via FSP
+ */
+static int baytrail_uart_init(void)
 {
-	struct mp_params mp_params;
+	struct udevice *dev;
+	void *base;
+	int ret;
+	int i;
 
-	lapic_setup();
-
-	mp_params.num_cpus = detect_num_cpus();
-	mp_params.parallel_microcode_load = 0,
-	mp_params.flight_plan = &mp_steps[0];
-	mp_params.num_records = ARRAY_SIZE(mp_steps);
-	mp_params.microcode_pointer = 0;
-
-	if (mp_init(&mp_params)) {
-		printf("Warning: MP init failure\n");
-		return -EIO;
+	/* Loop over the 2 HS-UARTs */
+	for (i = 0; i < 2; i++) {
+		ret = dm_pci_bus_find_bdf(PCI_BDF(0, 0x1e, 3 + i), &dev);
+		if (!ret) {
+			base = dm_pci_map_bar(dev, PCI_BASE_ADDRESS_0, 0, 0, PCI_REGION_TYPE,
+					      PCI_REGION_MEM);
+			hsuart_clock_set(base);
+		}
 	}
 
 	return 0;
 }
-#endif
-
-int x86_init_cpus(void)
-{
-#ifdef CONFIG_SMP
-	debug("Init additional CPUs\n");
-	baytrail_init_cpus();
-#endif
-
-	return 0;
-}
+EVENT_SPY_SIMPLE(EVT_DM_POST_INIT_F, baytrail_uart_init);
 
 static void set_max_freq(void)
 {
@@ -89,9 +71,9 @@ static void set_max_freq(void)
 	msr_t msr;
 
 	/* Enable speed step */
-	msr = msr_read(MSR_IA32_MISC_ENABLES);
-	msr.lo |= (1 << 16);
-	msr_write(MSR_IA32_MISC_ENABLES, msr);
+	msr = msr_read(MSR_IA32_MISC_ENABLE);
+	msr.lo |= MISC_ENABLE_ENHANCED_SPEEDSTEP;
+	msr_write(MSR_IA32_MISC_ENABLE, msr);
 
 	/*
 	 * Set guaranteed ratio [21:16] from IACORE_RATIOS to bits [15:8] of
@@ -101,7 +83,7 @@ static void set_max_freq(void)
 	perf_ctl.lo = (msr.lo & 0x3f0000) >> 8;
 
 	/*
-	 * Set guaranteed vid [21:16] from IACORE_VIDS to bits [7:0] of
+	 * Set guaranteed vid [22:16] from IACORE_VIDS to bits [7:0] of
 	 * the PERF_CTL
 	 */
 	msr = msr_read(MSR_IACORE_VIDS);
@@ -113,6 +95,8 @@ static void set_max_freq(void)
 
 static int cpu_x86_baytrail_probe(struct udevice *dev)
 {
+	if (!ll_boot_init())
+		return 0;
 	debug("Init BayTrail core\n");
 
 	/*
@@ -167,7 +151,7 @@ static unsigned long tsc_freq(void)
 	return bclk * ((platform_info.lo >> 8) & 0xff);
 }
 
-static int baytrail_get_info(struct udevice *dev, struct cpu_info *info)
+static int baytrail_get_info(const struct udevice *dev, struct cpu_info *info)
 {
 	info->cpu_freq = tsc_freq();
 	info->features = 1 << CPU_FEAT_L1_CACHE | 1 << CPU_FEAT_MMU;
@@ -175,19 +159,39 @@ static int baytrail_get_info(struct udevice *dev, struct cpu_info *info)
 	return 0;
 }
 
-static int cpu_x86_baytrail_bind(struct udevice *dev)
+static int baytrail_get_count(const struct udevice *dev)
 {
-	struct cpu_platdata *plat = dev_get_parent_platdata(dev);
+	int ecx = 0;
 
-	plat->cpu_id = fdtdec_get_int(gd->fdt_blob, dev->node,
-				      "intel,apic-id", -1);
+	/*
+	 * Use the algorithm described in Intel 64 and IA-32 Architectures
+	 * Software Developer's Manual Volume 3 (3A, 3B & 3C): System
+	 * Programming Guide, Jan-2015. Section 8.9.2: Hierarchical Mapping
+	 * of CPUID Extended Topology Leaf.
+	 */
+	while (1) {
+		struct cpuid_result leaf_b;
+
+		leaf_b = cpuid_ext(0xb, ecx);
+
+		/*
+		 * Bay Trail doesn't have hyperthreading so just determine the
+		 * number of cores by from level type (ecx[15:8] == * 2)
+		 */
+		if ((leaf_b.ecx & 0xff00) == 0x0200)
+			return leaf_b.ebx & 0xffff;
+
+		ecx++;
+	}
 
 	return 0;
 }
 
 static const struct cpu_ops cpu_x86_baytrail_ops = {
-	.get_desc	= x86_cpu_get_desc,
+	.get_desc	= cpu_x86_get_desc,
 	.get_info	= baytrail_get_info,
+	.get_count	= baytrail_get_count,
+	.get_vendor	= cpu_x86_get_vendor,
 };
 
 static const struct udevice_id cpu_x86_baytrail_ids[] = {
@@ -199,7 +203,8 @@ U_BOOT_DRIVER(cpu_x86_baytrail_drv) = {
 	.name		= "cpu_x86_baytrail",
 	.id		= UCLASS_CPU,
 	.of_match	= cpu_x86_baytrail_ids,
-	.bind		= cpu_x86_baytrail_bind,
+	.bind		= cpu_x86_bind,
 	.probe		= cpu_x86_baytrail_probe,
 	.ops		= &cpu_x86_baytrail_ops,
+	.flags		= DM_FLAG_PRE_RELOC,
 };

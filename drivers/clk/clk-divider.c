@@ -9,24 +9,31 @@
  *
  */
 
-#include <common.h>
+#define LOG_CATEGORY UCLASS_CLK
+
 #include <asm/io.h>
 #include <malloc.h>
 #include <clk-uclass.h>
+#include <log.h>
 #include <dm/device.h>
+#include <dm/devres.h>
 #include <dm/uclass.h>
 #include <dm/lists.h>
+#include <dm/device_compat.h>
 #include <dm/device-internal.h>
+#include <linux/bug.h>
 #include <linux/clk-provider.h>
+#include <linux/err.h>
 #include <linux/log2.h>
 #include <div64.h>
 #include <clk.h>
+#include <linux/printk.h>
 #include "clk.h"
 
 #define UBOOT_DM_CLK_CCF_DIVIDER "ccf_clk_divider"
 
-static unsigned int _get_table_div(const struct clk_div_table *table,
-				   unsigned int val)
+unsigned int clk_divider_get_table_div(const struct clk_div_table *table,
+				       unsigned int val)
 {
 	const struct clk_div_table *clkt;
 
@@ -46,7 +53,7 @@ static unsigned int _get_div(const struct clk_div_table *table,
 	if (flags & CLK_DIVIDER_MAX_AT_ZERO)
 		return val ? val : clk_div_mask(width) + 1;
 	if (table)
-		return _get_table_div(table, val);
+		return clk_divider_get_table_div(table, val);
 	return val + 1;
 }
 
@@ -70,12 +77,11 @@ unsigned long divider_recalc_rate(struct clk *hw, unsigned long parent_rate,
 
 static ulong clk_divider_recalc_rate(struct clk *clk)
 {
-	struct clk_divider *divider = to_clk_divider(clk_dev_binded(clk) ?
-			dev_get_clk_ptr(clk->dev) : clk);
+	struct clk_divider *divider = to_clk_divider(clk);
 	unsigned long parent_rate = clk_get_parent_rate(clk);
 	unsigned int val;
 
-#if CONFIG_IS_ENABLED(SANDBOX_CLK_CCF)
+#if IS_ENABLED(CONFIG_SANDBOX_CLK_CCF)
 	val = divider->io_divider_val;
 #else
 	val = readl(divider->reg);
@@ -87,8 +93,8 @@ static ulong clk_divider_recalc_rate(struct clk *clk)
 				   divider->flags, divider->width);
 }
 
-static bool _is_valid_table_div(const struct clk_div_table *table,
-				unsigned int div)
+bool clk_divider_is_valid_table_div(const struct clk_div_table *table,
+				    unsigned int div)
 {
 	const struct clk_div_table *clkt;
 
@@ -98,18 +104,18 @@ static bool _is_valid_table_div(const struct clk_div_table *table,
 	return false;
 }
 
-static bool _is_valid_div(const struct clk_div_table *table, unsigned int div,
-			  unsigned long flags)
+bool clk_divider_is_valid_div(const struct clk_div_table *table,
+			      unsigned int div, unsigned long flags)
 {
 	if (flags & CLK_DIVIDER_POWER_OF_TWO)
 		return is_power_of_2(div);
 	if (table)
-		return _is_valid_table_div(table, div);
+		return clk_divider_is_valid_table_div(table, div);
 	return true;
 }
 
-static unsigned int _get_table_val(const struct clk_div_table *table,
-				   unsigned int div)
+unsigned int clk_divider_get_table_val(const struct clk_div_table *table,
+				       unsigned int div)
 {
 	const struct clk_div_table *clkt;
 
@@ -129,7 +135,7 @@ static unsigned int _get_val(const struct clk_div_table *table,
 	if (flags & CLK_DIVIDER_MAX_AT_ZERO)
 		return (div == clk_div_mask(width) + 1) ? 0 : div;
 	if (table)
-		return  _get_table_val(table, div);
+		return clk_divider_get_table_val(table, div);
 	return div - 1;
 }
 int divider_get_val(unsigned long rate, unsigned long parent_rate,
@@ -140,7 +146,7 @@ int divider_get_val(unsigned long rate, unsigned long parent_rate,
 
 	div = DIV_ROUND_UP_ULL((u64)parent_rate, rate);
 
-	if (!_is_valid_div(table, div, flags))
+	if (!clk_divider_is_valid_div(table, div, flags))
 		return -EINVAL;
 
 	value = _get_val(table, div, flags, width);
@@ -150,8 +156,7 @@ int divider_get_val(unsigned long rate, unsigned long parent_rate,
 
 static ulong clk_divider_set_rate(struct clk *clk, unsigned long rate)
 {
-	struct clk_divider *divider = to_clk_divider(clk_dev_binded(clk) ?
-			dev_get_clk_ptr(clk->dev) : clk);
+	struct clk_divider *divider = to_clk_divider(clk);
 	unsigned long parent_rate = clk_get_parent_rate(clk);
 	int value;
 	u32 val;
@@ -178,7 +183,7 @@ const struct clk_ops clk_divider_ops = {
 	.set_rate = clk_divider_set_rate,
 };
 
-static struct clk *_register_divider(struct device *dev, const char *name,
+static struct clk *_register_divider(struct udevice *dev, const char *name,
 		const char *parent_name, unsigned long flags,
 		void __iomem *reg, u8 shift, u8 width,
 		u8 clk_divider_flags, const struct clk_div_table *table)
@@ -189,7 +194,7 @@ static struct clk *_register_divider(struct device *dev, const char *name,
 
 	if (clk_divider_flags & CLK_DIVIDER_HIWORD_MASK) {
 		if (width + shift > 16) {
-			pr_warn("divider value exceeds LOWORD field\n");
+			dev_warn(dev, "divider value exceeds LOWORD field\n");
 			return ERR_PTR(-EINVAL);
 		}
 	}
@@ -205,14 +210,16 @@ static struct clk *_register_divider(struct device *dev, const char *name,
 	div->width = width;
 	div->flags = clk_divider_flags;
 	div->table = table;
-#if CONFIG_IS_ENABLED(SANDBOX_CLK_CCF)
+#if IS_ENABLED(CONFIG_SANDBOX_CLK_CCF)
 	div->io_divider_val = *(u32 *)reg;
 #endif
 
 	/* register the clock */
 	clk = &div->clk;
+	clk->flags = flags;
 
-	ret = clk_register(clk, UBOOT_DM_CLK_CCF_DIVIDER, name, parent_name);
+	ret = clk_register(clk, UBOOT_DM_CLK_CCF_DIVIDER, name,
+			   clk_resolve_parent_clk(dev, parent_name));
 	if (ret) {
 		kfree(div);
 		return ERR_PTR(ret);
@@ -221,18 +228,28 @@ static struct clk *_register_divider(struct device *dev, const char *name,
 	return clk;
 }
 
-struct clk *clk_register_divider(struct device *dev, const char *name,
+struct clk *clk_register_divider_table(struct udevice *dev, const char *name,
 		const char *parent_name, unsigned long flags,
 		void __iomem *reg, u8 shift, u8 width,
-		u8 clk_divider_flags)
+		u8 clk_divider_flags, const struct clk_div_table *table)
 {
 	struct clk *clk;
 
 	clk =  _register_divider(dev, name, parent_name, flags, reg, shift,
-				 width, clk_divider_flags, NULL);
+				 width, clk_divider_flags, table);
 	if (IS_ERR(clk))
 		return ERR_CAST(clk);
 	return clk;
+}
+
+struct clk *clk_register_divider(struct udevice *dev, const char *name,
+		const char *parent_name, unsigned long flags,
+		void __iomem *reg, u8 shift, u8 width,
+		u8 clk_divider_flags)
+{
+	return clk_register_divider_table(dev, name, parent_name, flags, reg,
+					  shift, width, clk_divider_flags,
+					  NULL);
 }
 
 U_BOOT_DRIVER(ccf_clk_divider) = {

@@ -1,31 +1,14 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Freescale DMA Controller
  *
  * Copyright 2006 Freescale Semiconductor, Inc.
- *
- * This software may be used and distributed according to the
- * terms of the GNU Public License, Version 2, incorporated
- * herein by reference.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * Version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston,
- * MA 02111-1307 USA
  */
 
 #ifndef _ASM_FSL_DMA_H_
 #define _ASM_FSL_DMA_H_
 
-#include <asm/types.h>
+#include <linux/types.h>
 
 #ifdef CONFIG_MPC83xx
 typedef struct fsl_dma {
@@ -134,7 +117,7 @@ typedef struct fsl_dma {
 void dma_init(void);
 int dmacpy(phys_addr_t dest, phys_addr_t src, phys_size_t n);
 #if (defined(CONFIG_DDR_ECC) && !defined(CONFIG_ECC_INIT_VIA_DDRCONTROLLER))
-void dma_meminit(uint val, uint size);
+void dma_meminit(uint size);
 #endif
 #endif
 

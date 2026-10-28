@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * MUSB OTG peripheral driver ep0 handling
  *
@@ -5,35 +6,11 @@
  * Copyright (C) 2005-2006 by Texas Instruments
  * Copyright (C) 2006-2007 Nokia Corporation
  * Copyright (C) 2008-2009 MontaVista Software, Inc. <source@mvista.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
- * 02110-1301 USA
- *
- * THIS SOFTWARE IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED
- * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.  IN
- * NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
- * USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
- * ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
- * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
  */
 
 #ifndef __UBOOT__
+#include <log.h>
+#include <dm/device_compat.h>
 #include <linux/kernel.h>
 #include <linux/list.h>
 #include <linux/timer.h>
@@ -41,7 +18,10 @@
 #include <linux/device.h>
 #include <linux/interrupt.h>
 #else
-#include <common.h>
+#include <dm.h>
+#include <dm/device_compat.h>
+#include <linux/printk.h>
+#include <asm/processor.h>
 #include "linux-compat.h"
 #endif
 
@@ -116,6 +96,9 @@ static int service_tx_status_request(
 		if (!epnum) {
 			result[0] = 0;
 			break;
+		} else if (epnum >= MUSB_C_NUM_EPS) {
+			handled = -EINVAL;
+			break;
 		}
 
 		is_in = epnum & USB_DIR_IN;
@@ -127,7 +110,7 @@ static int service_tx_status_request(
 		}
 		regs = musb->endpoints[epnum].regs;
 
-		if (epnum >= MUSB_C_NUM_EPS || !ep->desc) {
+		if (!ep->desc) {
 			handled = -EINVAL;
 			break;
 		}
@@ -167,7 +150,7 @@ static int service_tx_status_request(
  * that is supposed to be a standard control request. Assumes the fifo to
  * be at least 2 bytes long.
  *
- * @return 0 if the request was NOT HANDLED,
+ * Return: 0 if the request was NOT HANDLED,
  * < 0 when error
  * > 0 when the request is processed
  *
@@ -520,7 +503,6 @@ static void ep0_rxstate(struct musb *musb)
 			req = NULL;
 	} else
 		csr = MUSB_CSR0_P_SVDRXPKTRDY | MUSB_CSR0_P_SENDSTALL;
-
 
 	/* Completion handler may choose to stall, e.g. because the
 	 * message just received holds invalid data.
@@ -906,7 +888,7 @@ finish:
 
 	default:
 		/* "can't happen" */
-		WARN_ON(1);
+		assert_noisy(false);
 		musb_writew(regs, MUSB_CSR0, MUSB_CSR0_P_SENDSTALL);
 		musb->ep0_state = MUSB_EP0_STAGE_IDLE;
 		break;
@@ -914,7 +896,6 @@ finish:
 
 	return retval;
 }
-
 
 static int
 musb_g_ep0_enable(struct usb_ep *ep, const struct usb_endpoint_descriptor *desc)

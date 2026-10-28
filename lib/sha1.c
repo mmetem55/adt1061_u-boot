@@ -1,23 +1,10 @@
+// SPDX-License-Identifier: LGPL-2.1
 /*
  *  Heiko Schocher, DENX Software Engineering, hs@denx.de.
  *  based on:
  *  FIPS-180-1 compliant SHA-1 implementation
  *
  *  Copyright (C) 2003-2006  Christophe Devine
- *
- *  This library is free software; you can redistribute it and/or
- *  modify it under the terms of the GNU Lesser General Public
- *  License, version 2.1 as published by the Free Software Foundation.
- *
- *  This library is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- *  Lesser General Public License for more details.
- *
- *  You should have received a copy of the GNU Lesser General Public
- *  License along with this library; if not, write to the Free Software
- *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- *  MA  02110-1301  USA
  */
 /*
  *  The SHA-1 standard was published by NIST in 1993.
@@ -30,13 +17,17 @@
 #endif
 
 #ifndef USE_HOSTCC
-#include <common.h>
-#include <linux/string.h>
-#else
-#include <string.h>
+#include <u-boot/schedule.h>
 #endif /* USE_HOSTCC */
-#include <watchdog.h>
+#include <string.h>
 #include <u-boot/sha1.h>
+
+#include <linux/compiler_attributes.h>
+
+const uint8_t sha1_der_prefix[SHA1_DER_LEN] = {
+	0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2b, 0x0e,
+	0x03, 0x02, 0x1a, 0x05, 0x00, 0x04, 0x14
+};
 
 /*
  * 32-bit integer manipulation macros (big endian)
@@ -73,7 +64,7 @@ void sha1_starts (sha1_context * ctx)
 	ctx->state[4] = 0xC3D2E1F0;
 }
 
-static void sha1_process(sha1_context *ctx, const unsigned char data[64])
+static void __maybe_unused sha1_process_one(sha1_context *ctx, const unsigned char data[64])
 {
 	unsigned long temp, W[16], A, B, C, D, E;
 
@@ -227,6 +218,18 @@ static void sha1_process(sha1_context *ctx, const unsigned char data[64])
 	ctx->state[4] += E;
 }
 
+__weak void sha1_process(sha1_context *ctx, const unsigned char *data,
+			 unsigned int blocks)
+{
+	if (!blocks)
+		return;
+
+	while (blocks--) {
+		sha1_process_one(ctx, data);
+		data += 64;
+	}
+}
+
 /*
  * SHA-1 process buffer
  */
@@ -250,17 +253,15 @@ void sha1_update(sha1_context *ctx, const unsigned char *input,
 
 	if (left && ilen >= fill) {
 		memcpy ((void *) (ctx->buffer + left), (void *) input, fill);
-		sha1_process (ctx, ctx->buffer);
+		sha1_process(ctx, ctx->buffer, 1);
 		input += fill;
 		ilen -= fill;
 		left = 0;
 	}
 
-	while (ilen >= 64) {
-		sha1_process (ctx, input);
-		input += 64;
-		ilen -= 64;
-	}
+	sha1_process(ctx, input, ilen / 64);
+	input += ilen / 64 * 64;
+	ilen = ilen % 64;
 
 	if (ilen > 0) {
 		memcpy ((void *) (ctx->buffer + left), (void *) input, ilen);
@@ -304,19 +305,6 @@ void sha1_finish (sha1_context * ctx, unsigned char output[20])
 }
 
 /*
- * Output = SHA-1( input buffer )
- */
-void sha1_csum(const unsigned char *input, unsigned int ilen,
-	       unsigned char *output)
-{
-	sha1_context ctx;
-
-	sha1_starts (&ctx);
-	sha1_update (&ctx, input, ilen);
-	sha1_finish (&ctx, output);
-}
-
-/*
  * Output = SHA-1( input buffer ). Trigger the watchdog every 'chunk_sz'
  * bytes of input processed.
  */
@@ -324,14 +312,16 @@ void sha1_csum_wd(const unsigned char *input, unsigned int ilen,
 		  unsigned char *output, unsigned int chunk_sz)
 {
 	sha1_context ctx;
-#if defined(CONFIG_HW_WATCHDOG) || defined(CONFIG_WATCHDOG)
+#if !defined(USE_HOSTCC) && \
+    (defined(CONFIG_HW_WATCHDOG) || defined(CONFIG_WATCHDOG))
 	const unsigned char *end, *curr;
 	int chunk;
 #endif
 
 	sha1_starts (&ctx);
 
-#if defined(CONFIG_HW_WATCHDOG) || defined(CONFIG_WATCHDOG)
+#if !defined(USE_HOSTCC) && \
+    (defined(CONFIG_HW_WATCHDOG) || defined(CONFIG_WATCHDOG))
 	curr = input;
 	end = input + ilen;
 	while (curr < end) {
@@ -340,7 +330,7 @@ void sha1_csum_wd(const unsigned char *input, unsigned int ilen,
 			chunk = chunk_sz;
 		sha1_update (&ctx, curr, chunk);
 		curr += chunk;
-		WATCHDOG_RESET ();
+		schedule();
 	}
 #else
 	sha1_update (&ctx, input, ilen);

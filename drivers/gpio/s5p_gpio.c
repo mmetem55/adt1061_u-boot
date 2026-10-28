@@ -1,19 +1,18 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * (C) Copyright 2009 Samsung Electronics
  * Minkyu Kang <mk7.kang@samsung.com>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
-#include <common.h>
 #include <dm.h>
 #include <errno.h>
 #include <fdtdec.h>
+#include <log.h>
 #include <malloc.h>
+#include <asm/global_data.h>
 #include <asm/io.h>
 #include <asm/gpio.h>
 #include <dm/device-internal.h>
-#include <dt-bindings/gpio/gpio.h>
 
 DECLARE_GLOBAL_DATA_PTR;
 
@@ -35,7 +34,7 @@ DECLARE_GLOBAL_DATA_PTR;
 #define RATE_SET(gpio)			(0x1 << (gpio + 16))
 
 /* Platform data for each bank */
-struct exynos_gpio_platdata {
+struct exynos_gpio_plat {
 	struct s5p_gpio_bank *bank;
 	const char *bank_name;	/* Name of port, e.g. 'gpa0" */
 };
@@ -93,7 +92,7 @@ static void s5p_gpio_set_value(struct s5p_gpio_bank *bank, int gpio, int en)
 	writel(value, &bank->dat);
 }
 
-#ifdef CONFIG_SPL_BUILD
+#ifdef CONFIG_XPL_BUILD
 /* Common GPIO API - SPL does not support driver model yet */
 int gpio_set_value(unsigned gpio, int value)
 {
@@ -119,7 +118,7 @@ static unsigned int s5p_gpio_get_value(struct s5p_gpio_bank *bank, int gpio)
 	value = readl(&bank->dat);
 	return !!(value & DAT_MASK(gpio));
 }
-#endif /* CONFIG_SPL_BUILD */
+#endif /* CONFIG_XPL_BUILD */
 
 static void s5p_gpio_set_pull(struct s5p_gpio_bank *bank, int gpio, int mode)
 {
@@ -186,7 +185,7 @@ int s5p_gpio_get_pin(unsigned gpio)
 }
 
 /* Driver model interface */
-#ifndef CONFIG_SPL_BUILD
+#ifndef CONFIG_XPL_BUILD
 /* set GPIO pin 'gpio' as an input */
 static int exynos_gpio_direction_input(struct udevice *dev, unsigned offset)
 {
@@ -231,7 +230,7 @@ static int exynos_gpio_set_value(struct udevice *dev, unsigned offset,
 
 	return 0;
 }
-#endif /* nCONFIG_SPL_BUILD */
+#endif /* nCONFIG_XPL_BUILD */
 
 /*
  * There is no common GPIO API for pull, drv, pin, rate (yet). These
@@ -261,7 +260,7 @@ void gpio_set_rate(int gpio, int mode)
 			  s5p_gpio_get_pin(gpio), mode);
 }
 
-#ifndef CONFIG_SPL_BUILD
+#ifndef CONFIG_XPL_BUILD
 static int exynos_gpio_get_function(struct udevice *dev, unsigned offset)
 {
 	struct exynos_bank_info *state = dev_get_priv(dev);
@@ -276,29 +275,19 @@ static int exynos_gpio_get_function(struct udevice *dev, unsigned offset)
 		return GPIOF_FUNC;
 }
 
-static int exynos_gpio_xlate(struct udevice *dev, struct gpio_desc *desc,
-			     struct fdtdec_phandle_args *args)
-{
-	desc->offset = args->args[0];
-	desc->flags = args->args[1] & GPIO_ACTIVE_LOW ? GPIOD_ACTIVE_LOW : 0;
-
-	return 0;
-}
-
 static const struct dm_gpio_ops gpio_exynos_ops = {
 	.direction_input	= exynos_gpio_direction_input,
 	.direction_output	= exynos_gpio_direction_output,
 	.get_value		= exynos_gpio_get_value,
 	.set_value		= exynos_gpio_set_value,
 	.get_function		= exynos_gpio_get_function,
-	.xlate			= exynos_gpio_xlate,
 };
 
 static int gpio_exynos_probe(struct udevice *dev)
 {
 	struct gpio_dev_priv *uc_priv = dev_get_uclass_priv(dev);
-	struct exynos_bank_info *priv = dev->priv;
-	struct exynos_gpio_platdata *plat = dev->platdata;
+	struct exynos_bank_info *priv = dev_get_priv(dev);
+	struct exynos_gpio_plat *plat = dev_get_plat(dev);
 
 	/* Only child devices have ports */
 	if (!plat)
@@ -318,7 +307,7 @@ static int gpio_exynos_probe(struct udevice *dev)
  */
 static int gpio_exynos_bind(struct udevice *parent)
 {
-	struct exynos_gpio_platdata *plat = parent->platdata;
+	struct exynos_gpio_plat *plat = dev_get_plat(parent);
 	struct s5p_gpio_bank *bank, *base;
 	const void *blob = gd->fdt_blob;
 	int node;
@@ -327,12 +316,11 @@ static int gpio_exynos_bind(struct udevice *parent)
 	if (plat)
 		return 0;
 
-	base = (struct s5p_gpio_bank *)fdtdec_get_addr(gd->fdt_blob,
-						   parent->of_offset, "reg");
-	for (node = fdt_first_subnode(blob, parent->of_offset), bank = base;
+	base = dev_read_addr_ptr(parent);
+	for (node = fdt_first_subnode(blob, dev_of_offset(parent)), bank = base;
 	     node > 0;
-	     node = fdt_next_subnode(blob, node), bank++) {
-		struct exynos_gpio_platdata *plat;
+	     node = fdt_next_subnode(blob, node)) {
+		struct exynos_gpio_plat *plat;
 		struct udevice *dev;
 		fdt_addr_t reg;
 		int ret;
@@ -342,18 +330,19 @@ static int gpio_exynos_bind(struct udevice *parent)
 		plat = calloc(1, sizeof(*plat));
 		if (!plat)
 			return -ENOMEM;
-		reg = fdtdec_get_addr(blob, node, "reg");
-		if (reg != FDT_ADDR_T_NONE)
-			bank = (struct s5p_gpio_bank *)((ulong)base + reg);
-		plat->bank = bank;
-		plat->bank_name = fdt_get_name(blob, node, NULL);
-		debug("dev at %p: %s\n", bank, plat->bank_name);
 
-		ret = device_bind(parent, parent->driver,
-					plat->bank_name, plat, -1, &dev);
+		plat->bank_name = fdt_get_name(blob, node, NULL);
+		ret = device_bind(parent, parent->driver, plat->bank_name, plat,
+				  offset_to_ofnode(node), &dev);
 		if (ret)
 			return ret;
-		dev->of_offset = node;
+
+		reg = dev_read_addr(dev);
+		if (reg != FDT_ADDR_T_NONE)
+			bank = (struct s5p_gpio_bank *)((ulong)base + reg);
+
+		debug("dev at %p: %s\n", bank, plat->bank_name);
+		plat->bank = bank++;
 	}
 
 	return 0;
@@ -366,6 +355,7 @@ static const struct udevice_id exynos_gpio_ids[] = {
 	{ .compatible = "samsung,exynos4x12-pinctrl" },
 	{ .compatible = "samsung,exynos5250-pinctrl" },
 	{ .compatible = "samsung,exynos5420-pinctrl" },
+	{ .compatible = "samsung,exynos78x0-gpio" },
 	{ }
 };
 
@@ -375,7 +365,7 @@ U_BOOT_DRIVER(gpio_exynos) = {
 	.of_match = exynos_gpio_ids,
 	.bind	= gpio_exynos_bind,
 	.probe = gpio_exynos_probe,
-	.priv_auto_alloc_size = sizeof(struct exynos_bank_info),
+	.priv_auto	= sizeof(struct exynos_bank_info),
 	.ops	= &gpio_exynos_ops,
 };
 #endif

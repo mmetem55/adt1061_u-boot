@@ -1,15 +1,15 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Copyright 2012 Freescale Semiconductor, Inc.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
-#include <common.h>
+#include <config.h>
+#include <linux/kernel.h>
 #include <asm/fsl_portals.h>
 #include <asm/fsl_liodn.h>
 
 #ifdef CONFIG_SYS_DPAA_QBMAN
-struct qportal_info qp_info[CONFIG_SYS_QMAN_NUM_PORTALS] = {
+struct qportal_info qp_info[CFG_SYS_QMAN_NUM_PORTALS] = {
 	/* dqrr liodn, frame data liodn, liodn off, sdest */
 	SET_QP_INFO(1, 27, 1, 0),
 	SET_QP_INFO(2, 28, 1, 0),
@@ -62,7 +62,7 @@ struct liodn_id_table liodn_tbl[] = {
 	SET_DMA_LIODN(1, "fsl,elo3-dma", 147),
 	SET_DMA_LIODN(2, "fsl,elo3-dma", 227),
 
-#ifndef CONFIG_PPC_B4420
+#ifndef CONFIG_ARCH_B4420
 	SET_GUTS_LIODN("fsl,rapidio-delta", 199, rio1liodnr, 0),
 	SET_GUTS_LIODN(NULL, 200, rio2liodnr, 0),
 	SET_GUTS_LIODN(NULL, 201, rio1maintliodnr, 0),
@@ -74,14 +74,14 @@ struct liodn_id_table liodn_tbl[] = {
 int liodn_tbl_sz = ARRAY_SIZE(liodn_tbl);
 
 #ifdef CONFIG_SYS_DPAA_FMAN
-struct liodn_id_table fman1_liodn_tbl[] = {
+struct fman_liodn_id_table fman1_liodn_tbl[] = {
 	SET_FMAN_RX_1G_LIODN(1, 0, 88),
 	SET_FMAN_RX_1G_LIODN(1, 1, 89),
 	SET_FMAN_RX_1G_LIODN(1, 2, 90),
 	SET_FMAN_RX_1G_LIODN(1, 3, 91),
 	SET_FMAN_RX_1G_LIODN(1, 4, 92),
 	SET_FMAN_RX_1G_LIODN(1, 5, 93),
-#ifndef CONFIG_PPC_B4420
+#ifndef CONFIG_ARCH_B4420
 	SET_FMAN_RX_10G_LIODN(1, 0, 94),
 	SET_FMAN_RX_10G_LIODN(1, 1, 95),
 #endif

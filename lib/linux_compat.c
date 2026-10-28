@@ -1,5 +1,7 @@
 
-#include <common.h>
+#include <malloc.h>
+#include <memalign.h>
+#include <asm/cache.h>
 #include <linux/compat.h>
 
 struct p_current cur = {
@@ -18,16 +20,11 @@ void *kmalloc(size_t size, int flags)
 {
 	void *p;
 
-	p = memalign(ARCH_DMA_MINALIGN, size);
-	if (flags & __GFP_ZERO)
+	p = malloc_cache_aligned(size);
+	if (p && flags & __GFP_ZERO)
 		memset(p, 0, size);
 
 	return p;
-}
-
-void *vzalloc(unsigned long size)
-{
-	return kzalloc(size, 0);
 }
 
 struct kmem_cache *get_mem(int element_sz)
@@ -35,6 +32,9 @@ struct kmem_cache *get_mem(int element_sz)
 	struct kmem_cache *ret;
 
 	ret = memalign(ARCH_DMA_MINALIGN, sizeof(struct kmem_cache));
+	if (!ret)
+		return NULL;
+
 	ret->sz = element_sz;
 
 	return ret;
@@ -42,5 +42,24 @@ struct kmem_cache *get_mem(int element_sz)
 
 void *kmem_cache_alloc(struct kmem_cache *obj, int flag)
 {
-	return memalign(ARCH_DMA_MINALIGN, obj->sz);
+	return malloc_cache_aligned(obj->sz);
+}
+
+/**
+ * kmemdup - duplicate region of memory
+ *
+ * @src: memory region to duplicate
+ * @len: memory region length
+ * @gfp: GFP mask to use
+ *
+ * Return: newly allocated copy of @src or %NULL in case of error
+ */
+void *kmemdup(const void *src, size_t len, gfp_t gfp)
+{
+	void *p;
+
+	p = kmalloc(len, gfp);
+	if (p)
+		memcpy(p, src, len);
+	return p;
 }

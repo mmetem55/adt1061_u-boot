@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * ARM PrimeCell MultiMedia Card Interface - PL180
  *
@@ -6,8 +7,6 @@
  * Author: Ulf Hansson <ulf.hansson@stericsson.com>
  * Author: Martin Lundholm <martin.xa.lundholm@stericsson.com>
  * Ported to drivers/mmc/ by: Matt Waddel <matt.waddel@linaro.org>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #ifndef __ARM_PL180_MMCI_H__
@@ -44,6 +43,7 @@
 #define SDI_CLKCR_CLKEN		0x00000100
 #define SDI_CLKCR_PWRSAV	0x00000200
 #define SDI_CLKCR_BYPASS	0x00000400
+#define SDI_CLKCR_HWFCEN	0x00001000
 #define SDI_CLKCR_WIDBUS_MASK	0x00001800
 #define SDI_CLKCR_WIDBUS_1	0x00000000
 #define SDI_CLKCR_WIDBUS_4	0x00000800
@@ -140,7 +140,13 @@
 #define SDI_DCTRL_DBLOCKSIZE_V2_MASK   0x7fff0000
 #define SDI_DCTRL_DBLOCKSIZE_V2_SHIFT  16
 
-#define SDI_FIFO_BURST_SIZE	8
+#define SDI_FIFO_SIZE_ARM	(16 * sizeof(u32))
+#define SDI_FIFO_SIZE_STM32	(32 * sizeof(u32))
+#define SDI_FIFO_SIZE_UX500	(30 * sizeof(u32))
+#define SDI_FIFO_HALF_SIZE	(8 * sizeof(u32))
+
+#define STM32_MMCI_ID		0x00880180
+#define UX500V2_MMCI_ID		0x10480180
 
 struct sdi_registers {
 	u32 power;		/* 0x00*/
@@ -186,10 +192,15 @@ struct pl180_mmc_host {
 	unsigned int clock_max;
 	unsigned int clkdiv_init;
 	unsigned int pwr_init;
+	unsigned int fifo_size;
+	unsigned int fifo_half_size;
 	int version2;
 	struct mmc_config cfg;
+#ifdef CONFIG_DM_MMC
+	struct gpio_desc cd_gpio;
+#endif
 };
 
-int arm_pl180_mmci_init(struct pl180_mmc_host *);
+int arm_pl180_mmci_init(struct pl180_mmc_host *host, struct mmc **mmc);
 
 #endif

@@ -1,15 +1,13 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * (C) Copyright 2001
  * Denis Peter, MPL AG Switzerland, d.peter@mpl.ch.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 #ifndef _PART_CD_H
 #define _PART_CD_H
 
 #define BRVD	0x11
 #define PVD_OFFSET 0x10
-
 
 typedef struct iso_boot_rec {
 	unsigned char desctype;			/* type of Volume descriptor: 0 = boot record, 1 = primary, 2 = Supplement, 3 = volume part 0xff trminator */
@@ -20,7 +18,6 @@ typedef struct iso_boot_rec {
 	unsigned char pointer[4];		/* absolute pointer to Boot Catalog */
 } iso_boot_rec_t;
 
-
 typedef struct iso_pri_rec {
 	unsigned char desctype;			/* type of Volume descriptor: 0 = boot record, 1 = primary, 2 = Supplement, 3 = volume part 0xff trminator */
 	unsigned char stand_ident[5]; /* "CD001" */
@@ -29,8 +26,8 @@ typedef struct iso_pri_rec {
 	char					sysid[32];		/* system Identifier */
 	char					volid[32];		/* volume Identifier */
 	unsigned char zeros1[8];		/* unused */
-	unsigned long volsiz_LE;		/* volume size Little Endian */
-	unsigned long volsiz_BE;		/* volume size Big Endian */
+	unsigned int volsiz_LE;		/* volume size Little Endian */
+	unsigned int volsiz_BE;		/* volume size Big Endian */
 	unsigned char zeros2[32];		/* unused */
 	unsigned short setsize_LE;	/* volume set size LE */
 	unsigned short setsize_BE;	/* volume set size BE */
@@ -38,12 +35,12 @@ typedef struct iso_pri_rec {
 	unsigned short seqnum_BE;		/* volume sequence number BE */
 	unsigned short secsize_LE;	/* sector size LE */
 	unsigned short secsize_BE;	/* sector size BE */
-	unsigned long pathtablen_LE;/* Path Table size LE */
-	unsigned long pathtablen_BE;/* Path Table size BE */
-	unsigned long firstsek_LEpathtab1_LE; /* location of first occurrence of little endian type path table */
-	unsigned long firstsek_LEpathtab2_LE; /* location of optional occurrence of little endian type path table */
-	unsigned long firstsek_BEpathtab1_BE; /* location of first occurrence of big endian type path table */
-	unsigned long firstsek_BEpathtab2_BE; /* location of optional occurrence of big endian type path table */
+	unsigned int pathtablen_LE;/* Path Table size LE */
+	unsigned int pathtablen_BE;/* Path Table size BE */
+	unsigned int firstsek_LEpathtab1_LE; /* location of first occurrence of little endian type path table */
+	unsigned int firstsek_LEpathtab2_LE; /* location of optional occurrence of little endian type path table */
+	unsigned int firstsek_BEpathtab1_BE; /* location of first occurrence of big endian type path table */
+	unsigned int firstsek_BEpathtab2_BE; /* location of optional occurrence of big endian type path table */
 	unsigned char rootdir[34];	/* directory record for root dir */
 	char					volsetid[128];/* Volume set identifier */
 	char					pubid[128];		/* Publisher identifier */
@@ -67,8 +64,8 @@ typedef struct iso_sup_rec {
 	char					sysid[32];		/* system Identifier */
 	char					volid[32];		/* volume Identifier */
 	unsigned char zeros1[8];		/* unused */
-	unsigned long volsiz_LE;		/* volume size Little Endian */
-	unsigned long volsiz_BE;		/* volume size Big Endian */
+	unsigned int volsiz_LE;		/* volume size Little Endian */
+	unsigned int volsiz_BE;		/* volume size Big Endian */
 	unsigned char escapeseq[32];/* Escape sequences */
 	unsigned short setsize_LE;	/* volume set size LE */
 	unsigned short setsize_BE;	/* volume set size BE */
@@ -76,12 +73,12 @@ typedef struct iso_sup_rec {
 	unsigned short seqnum_BE;		/* volume sequence number BE */
 	unsigned short secsize_LE;	/* sector size LE */
 	unsigned short secsize_BE;	/* sector size BE */
-	unsigned long pathtablen_LE;/* Path Table size LE */
-	unsigned long pathtablen_BE;/* Path Table size BE */
-	unsigned long firstsek_LEpathtab1_LE; /* location of first occurrence of little endian type path table */
-	unsigned long firstsek_LEpathtab2_LE; /* location of optional occurrence of little endian type path table */
-	unsigned long firstsek_BEpathtab1_BE; /* location of first occurrence of big endian type path table */
-	unsigned long firstsek_BEpathtab2_BE; /* location of optional occurrence of big endian type path table */
+	unsigned int pathtablen_LE;/* Path Table size LE */
+	unsigned int pathtablen_BE;/* Path Table size BE */
+	unsigned int firstsek_LEpathtab1_LE; /* location of first occurrence of little endian type path table */
+	unsigned int firstsek_LEpathtab2_LE; /* location of optional occurrence of little endian type path table */
+	unsigned int firstsek_BEpathtab1_BE; /* location of first occurrence of big endian type path table */
+	unsigned int firstsek_BEpathtab2_BE; /* location of optional occurrence of big endian type path table */
 	unsigned char rootdir[34];	/* directory record for root dir */
 	char					volsetid[128];/* Volume set identifier */
 	char					pubid[128];		/* Publisher identifier */
@@ -104,12 +101,11 @@ typedef struct iso_part_rec {
 	unsigned char unused;
 	char					sysid[32];		 /* system Identifier */
 	char					volid[32];		/* volume partition Identifier */
-	unsigned long partloc_LE;		/* volume partition location LE */
-	unsigned long partloc_BE;		/* volume partition location BE */
-	unsigned long partsiz_LE;		/* volume partition size LE */
-	unsigned long partsiz_BE;		/* volume partition size BE */
+	unsigned int partloc_LE;		/* volume partition location LE */
+	unsigned int partloc_BE;		/* volume partition location BE */
+	unsigned int partsiz_LE;		/* volume partition size LE */
+	unsigned int partsiz_BE;		/* volume partition size BE */
 }iso_part_rec_t;
-
 
 typedef struct iso_val_entry {
 	unsigned char	header_id;		/* Header ID must be 0x01 */
@@ -127,7 +123,6 @@ typedef struct iso_header_entry {
 	char					id_str[0x1C]; /* Ident String of sectionr */
 } iso_header_entry_t;
 
-
 typedef struct iso_init_def_entry {
 	unsigned char	boot_ind;			/* Boot indicator 0x88=bootable 0=not bootable */
 	unsigned char	boot_media;		/* boot Media Type: 0=no Emulation, 1=1.2MB floppy, 2=1.44MB floppy, 3=2.88MB floppy 4=hd (0x80) */
@@ -137,7 +132,6 @@ typedef struct iso_init_def_entry {
 	unsigned char sec_cnt[2];		/* sector count in VIRTUAL Blocks (0x200) */
 	unsigned char rel_block_addr[4];	/* relative Block address */
 } iso_init_def_entry_t;
-
 
 void print_partition_cd(int dev);
 

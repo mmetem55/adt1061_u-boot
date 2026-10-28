@@ -4,10 +4,10 @@
  * Written by Simon Glass <sjg@chromium.org>
  */
 
-#include <common.h>
 #include <audio_codec.h>
 #include <dm.h>
 #include <dm/test.h>
+#include <test/test.h>
 #include <test/ut.h>
 #include <asm/test.h>
 
@@ -31,4 +31,4 @@ static int dm_test_audio(struct unit_test_state *uts)
 
 	return 0;
 }
-DM_TEST(dm_test_audio, DM_TESTF_SCAN_PDATA | DM_TESTF_SCAN_FDT);
+DM_TEST(dm_test_audio, UTF_SCAN_PDATA | UTF_SCAN_FDT);

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * ARM PrimeCell MultiMedia Card Interface - PL180
  *
@@ -6,18 +7,64 @@
  * Author: Ulf Hansson <ulf.hansson@stericsson.com>
  * Author: Martin Lundholm <martin.xa.lundholm@stericsson.com>
  * Ported to drivers/mmc/ by: Matt Waddel <matt.waddel@linaro.org>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 /* #define DEBUG */
 
-#include <asm/io.h>
-#include "common.h"
+#include <clk.h>
 #include <errno.h>
-#include <mmc.h>
-#include "arm_pl180_mmci.h"
+#include <log.h>
 #include <malloc.h>
+#include <mmc.h>
+#if CONFIG_IS_ENABLED(DM_REGULATOR)
+#include <power/regulator.h>
+#endif
+#include <dm/device_compat.h>
+#include <dm.h>
+
+#include <asm/io.h>
+#include <asm-generic/gpio.h>
+
+#include "arm_pl180_mmci.h"
+#include <linux/delay.h>
+
+#define MMC_CLOCK_MAX	48000000
+#define MMC_CLOCK_MIN	400000
+
+#if CONFIG_IS_ENABLED(DM_REGULATOR)
+#define SD_VOLTAGE_MIN_UV	2700000
+#define SD_VOLTAGE_UV		3300000
+#define SD_VOLTAGE_MAX_UV	3600000
+#endif
+
+struct arm_pl180_mmc_plat {
+	struct mmc_config cfg;
+	struct mmc mmc;
+};
+
+#if CONFIG_IS_ENABLED(DM_REGULATOR)
+static int arm_pl180_set_supply_voltage(struct udevice *supply)
+{
+	return regulator_set_value_clamp(supply, SD_VOLTAGE_MIN_UV,
+					 SD_VOLTAGE_UV, SD_VOLTAGE_MAX_UV);
+}
+#endif
+
+#if CONFIG_IS_ENABLED(DM_REGULATOR)
+static int arm_pl180_disable_supply(struct udevice *supply)
+{
+	int ret;
+
+	if (!supply)
+		return 0;
+
+	ret = regulator_set_enable_if_allowed(supply, false);
+	if (ret == -ENOSYS)
+		return 0;
+
+	return ret;
+}
+#endif
 
 static int wait_for_command_end(struct mmc *dev, struct mmc_cmd *cmd)
 {
@@ -37,7 +84,7 @@ static int wait_for_command_end(struct mmc *dev, struct mmc_cmd *cmd)
 	writel(statusmask, &host->base->status_clear);
 	if (hoststatus & SDI_STA_CTIMEOUT) {
 		debug("CMD%d time out\n", cmd->cmdidx);
-		return TIMEOUT;
+		return -ETIMEDOUT;
 	} else if ((hoststatus & SDI_STA_CCRCFAIL) &&
 		   (cmd->resp_type & MMC_RSP_CRC)) {
 		printf("CMD%d CRC error\n", cmd->cmdidx);
@@ -96,6 +143,7 @@ static int read_bytes(struct mmc *dev, u32 *dest, u32 blkcount, u32 blksize)
 	u32 *tempbuff = dest;
 	u64 xfercount = blkcount * blksize;
 	struct pl180_mmc_host *host = dev->priv;
+	unsigned int count;
 	u32 status, status_err;
 
 	debug("read_bytes: blkcount=%u blksize=%u\n", blkcount, blksize);
@@ -103,6 +151,24 @@ static int read_bytes(struct mmc *dev, u32 *dest, u32 blkcount, u32 blksize)
 	status = readl(&host->base->status);
 	status_err = status & (SDI_STA_DCRCFAIL | SDI_STA_DTIMEOUT |
 			       SDI_STA_RXOVERR);
+	while (!status_err && xfercount >= host->fifo_half_size) {
+		count = 0;
+		if (status & SDI_STA_RXFIFOF)
+			count = min_t(u64, xfercount, host->fifo_size);
+		else if (status & SDI_STA_RXFIFOBR)
+			count = host->fifo_half_size;
+
+		if (count) {
+			readsl(&host->base->fifo, tempbuff,
+			       count / sizeof(u32));
+			tempbuff += count / sizeof(u32);
+			xfercount -= count;
+		}
+		status = readl(&host->base->status);
+		status_err = status & (SDI_STA_DCRCFAIL | SDI_STA_DTIMEOUT |
+				       SDI_STA_RXOVERR);
+	}
+
 	while ((!status_err) && (xfercount >= sizeof(u32))) {
 		if (status & SDI_STA_RXDAVL) {
 			*(tempbuff) = readl(&host->base->fifo);
@@ -149,9 +215,9 @@ static int read_bytes(struct mmc *dev, u32 *dest, u32 blkcount, u32 blksize)
 static int write_bytes(struct mmc *dev, u32 *src, u32 blkcount, u32 blksize)
 {
 	u32 *tempbuff = src;
-	int i;
 	u64 xfercount = blkcount * blksize;
 	struct pl180_mmc_host *host = dev->priv;
+	unsigned int count;
 	u32 status, status_err;
 
 	debug("write_bytes: blkcount=%u blksize=%u\n", blkcount, blksize);
@@ -159,20 +225,17 @@ static int write_bytes(struct mmc *dev, u32 *src, u32 blkcount, u32 blksize)
 	status = readl(&host->base->status);
 	status_err = status & (SDI_STA_DCRCFAIL | SDI_STA_DTIMEOUT);
 	while (!status_err && xfercount) {
-		if (status & SDI_STA_TXFIFOBW) {
-			if (xfercount >= SDI_FIFO_BURST_SIZE * sizeof(u32)) {
-				for (i = 0; i < SDI_FIFO_BURST_SIZE; i++)
-					writel(*(tempbuff + i),
-						&host->base->fifo);
-				tempbuff += SDI_FIFO_BURST_SIZE;
-				xfercount -= SDI_FIFO_BURST_SIZE * sizeof(u32);
-			} else {
-				while (xfercount >= sizeof(u32)) {
-					writel(*(tempbuff), &host->base->fifo);
-					tempbuff++;
-					xfercount -= sizeof(u32);
-				}
-			}
+		count = 0;
+		if (status & SDI_STA_TXFIFOE)
+			count = min_t(u64, xfercount, host->fifo_size);
+		else if (status & SDI_STA_TXFIFOBW)
+			count = min_t(u64, xfercount, host->fifo_half_size);
+
+		if (count) {
+			writesl(&host->base->fifo, tempbuff,
+				count / sizeof(u32));
+			tempbuff += count / sizeof(u32);
+			xfercount -= count;
 		}
 		status = readl(&host->base->status);
 		status_err = status & (SDI_STA_DCRCFAIL | SDI_STA_DTIMEOUT);
@@ -214,6 +277,7 @@ static int do_data_transfer(struct mmc *dev,
 	u32 blksz = 0;
 	u32 data_ctrl = 0;
 	u32 data_len = (u32) (data->blocks * data->blocksize);
+	assert(data_len < U16_MAX); /* should be ensured by arm_pl180_get_b_max */
 
 	if (!host->version2) {
 		blksz = (ffs(data->blocksize) - 1);
@@ -265,22 +329,25 @@ static int host_request(struct mmc *dev,
 	return result;
 }
 
-/* MMC uses open drain drivers in the enumeration phase */
-static int mmc_host_reset(struct mmc *dev)
+static int check_peripheral_id(struct pl180_mmc_host *host, u32 periph_id)
 {
-	struct pl180_mmc_host *host = dev->priv;
-
-	writel(host->pwr_init, &host->base->power);
-
-	return 0;
+	return readl(&host->base->periph_id0) == (periph_id & 0xFF) &&
+		readl(&host->base->periph_id1) == ((periph_id >> 8) & 0xFF)  &&
+		readl(&host->base->periph_id2) == ((periph_id >> 16) & 0xFF) &&
+		readl(&host->base->periph_id3) == ((periph_id >> 24) & 0xFF);
 }
 
-static void host_set_ios(struct mmc *dev)
+static int  host_set_ios(struct mmc *dev)
 {
 	struct pl180_mmc_host *host = dev->priv;
 	u32 sdi_clkcr;
 
 	sdi_clkcr = readl(&host->base->clock);
+	sdi_clkcr |= SDI_CLKCR_PWRSAV;
+	if (dev->clk_disable)
+		sdi_clkcr &= ~SDI_CLKCR_CLKEN;
+	else
+		sdi_clkcr |= SDI_CLKCR_CLKEN;
 
 	/* Ramp up the clock rate */
 	if (dev->clock) {
@@ -330,25 +397,29 @@ static void host_set_ios(struct mmc *dev)
 		sdi_clkcr &= ~(SDI_CLKCR_WIDBUS_MASK);
 		sdi_clkcr |= buswidth;
 	}
+	/* For MMCs' with peripheral id 0x02041180 and 0x03041180, H/W flow control
+	 * needs to be enabled for multi block writes (MMC CMD 18).
+	 */
+	if (check_peripheral_id(host, 0x02041180) ||
+		check_peripheral_id(host, 0x03041180))
+		sdi_clkcr |= SDI_CLKCR_HWFCEN;
 
 	writel(sdi_clkcr, &host->base->clock);
 	udelay(CLK_CHANGE_DELAY);
+
+	return 0;
 }
 
-static const struct mmc_ops arm_pl180_mmci_ops = {
-	.send_cmd = host_request,
-	.set_ios = host_set_ios,
-	.init = mmc_host_reset,
-};
-
-/*
- * mmc_host_init - initialize the mmc controller.
- * Set initial clock and power for mmc slot.
- * Initialize mmc struct and register with mmc framework.
- */
-int arm_pl180_mmci_init(struct pl180_mmc_host *host)
+static int arm_pl180_get_b_max(struct udevice *dev, void *dst, lbaint_t blkcnt)
 {
-	struct mmc *mmc;
+	struct mmc_uclass_priv *upriv = dev_get_uclass_priv(dev);
+	struct mmc *mmc = upriv->mmc;
+
+	return U16_MAX / mmc->read_bl_len;
+}
+
+static void arm_pl180_mmc_init(struct pl180_mmc_host *host)
+{
 	u32 sdi_u32;
 
 	writel(host->pwr_init, &host->base->power);
@@ -358,24 +429,194 @@ int arm_pl180_mmci_init(struct pl180_mmc_host *host)
 	/* Disable mmc interrupts */
 	sdi_u32 = readl(&host->base->mask0) & ~SDI_MASK0_MASK;
 	writel(sdi_u32, &host->base->mask0);
+}
 
-	host->cfg.name = host->name;
-	host->cfg.ops = &arm_pl180_mmci_ops;
-	/* TODO remove the duplicates */
-	host->cfg.host_caps = host->caps;
-	host->cfg.voltages = host->voltages;
-	host->cfg.f_min = host->clock_min;
-	host->cfg.f_max = host->clock_max;
-	if (host->b_max != 0)
-		host->cfg.b_max = host->b_max;
-	else
-		host->cfg.b_max = CONFIG_SYS_MMC_MAX_BLK_COUNT;
+static int arm_pl180_mmc_probe(struct udevice *dev)
+{
+	struct arm_pl180_mmc_plat *pdata = dev_get_plat(dev);
+	struct mmc_uclass_priv *upriv = dev_get_uclass_priv(dev);
+	struct mmc *mmc = &pdata->mmc;
+	struct pl180_mmc_host *host = dev_get_priv(dev);
+	struct mmc_config *cfg = &pdata->cfg;
+	struct clk clk;
+	u32 periphid;
+	int ret;
 
-	mmc = mmc_create(&host->cfg, host);
-	if (mmc == NULL)
-		return -1;
+	ret = clk_get_by_index(dev, 0, &clk);
+	if (ret < 0)
+		return ret;
 
-	debug("registered mmc interface number is:%d\n", mmc->block_dev.dev);
+	ret = clk_enable(&clk);
+	if (ret) {
+		dev_err(dev, "failed to enable clock\n");
+		return ret;
+	}
+
+	host->pwr_init = INIT_PWR;
+	host->clkdiv_init = SDI_CLKCR_CLKDIV_INIT_V1 | SDI_CLKCR_CLKEN |
+			    SDI_CLKCR_PWRSAV | SDI_CLKCR_HWFC_EN;
+	host->clock_in = clk_get_rate(&clk);
+	host->fifo_size = SDI_FIFO_SIZE_ARM;
+	host->fifo_half_size = SDI_FIFO_HALF_SIZE;
+
+	cfg->name = dev->name;
+	cfg->voltages = VOLTAGE_WINDOW_SD;
+	cfg->host_caps = 0;
+	cfg->f_min = host->clock_in / (2 * (SDI_CLKCR_CLKDIV_INIT_V1 + 1));
+	cfg->f_max = MMC_CLOCK_MAX;
+	cfg->b_max = CONFIG_SYS_MMC_MAX_BLK_COUNT;
+
+	periphid = dev_read_u32_default(dev, "arm,primecell-periphid", 0);
+	switch (periphid) {
+	case STM32_MMCI_ID: /* stm32 variant */
+		host->fifo_size = SDI_FIFO_SIZE_STM32;
+		host->version2 = false;
+		break;
+	case UX500V2_MMCI_ID:
+		host->fifo_size = SDI_FIFO_SIZE_UX500;
+		host->pwr_init = SDI_PWR_OPD | SDI_PWR_PWRCTRL_ON;
+		host->clkdiv_init = SDI_CLKCR_CLKDIV_INIT_V2 | SDI_CLKCR_CLKEN |
+				    SDI_CLKCR_PWRSAV | SDI_CLKCR_HWFC_EN;
+		cfg->voltages = VOLTAGE_WINDOW_MMC;
+		cfg->f_min = host->clock_in / (2 + SDI_CLKCR_CLKDIV_INIT_V2);
+		host->version2 = true;
+		break;
+	default:
+		host->version2 = false; /* ARM variant */
+	}
+
+	if (dev_read_bool(dev, "st,sig-dir-dat0"))
+		host->pwr_init |= SDI_PWR_DAT0DIREN;
+	if (dev_read_bool(dev, "st,sig-dir-dat2"))
+		host->pwr_init |= SDI_PWR_DAT2DIREN;
+	if (dev_read_bool(dev, "st,sig-dir-dat31"))
+		host->pwr_init |= SDI_PWR_DAT31DIREN;
+	if (dev_read_bool(dev, "st,sig-dir-dat74"))
+		host->pwr_init |= SDI_PWR_DAT74DIREN;
+	if (dev_read_bool(dev, "st,sig-dir-cmd"))
+		host->pwr_init |= SDI_PWR_CMDDIREN;
+	if (dev_read_bool(dev, "st,sig-pin-fbclk"))
+		host->pwr_init |= SDI_PWR_FBCLKEN;
+
+#if CONFIG_IS_ENABLED(DM_REGULATOR)
+	ret = device_get_supply_regulator(dev, "vmmc-supply",
+					  &mmc->vmmc_supply);
+	if (!ret) {
+		ret = arm_pl180_set_supply_voltage(mmc->vmmc_supply);
+		if (ret && ret != -ENOSYS)
+			return ret;
+	}
+
+	ret = device_get_supply_regulator(dev, "vqmmc-supply",
+					  &mmc->vqmmc_supply);
+	if (!ret) {
+		ret = arm_pl180_set_supply_voltage(mmc->vqmmc_supply);
+		if (ret && ret != -ENOSYS)
+			return ret;
+	}
+#endif
+
+	gpio_request_by_name(dev, "cd-gpios", 0, &host->cd_gpio, GPIOD_IS_IN);
+
+	ret = mmc_of_parse(dev, cfg);
+	if (ret)
+		return ret;
+
+	arm_pl180_mmc_init(host);
+	mmc->priv = host;
+	mmc->dev = dev;
+	upriv->mmc = mmc;
 
 	return 0;
 }
+
+#if CONFIG_IS_ENABLED(DM_REGULATOR)
+static int arm_pl180_mmc_remove(struct udevice *dev)
+{
+	struct mmc *mmc = mmc_get_mmc_dev(dev);
+	int ret, vmmc_ret;
+
+	ret = arm_pl180_disable_supply(mmc->vqmmc_supply);
+	if (mmc->vmmc_supply != mmc->vqmmc_supply)
+		vmmc_ret = arm_pl180_disable_supply(mmc->vmmc_supply);
+	else
+		vmmc_ret = 0;
+
+	return ret ? ret : vmmc_ret;
+}
+#endif
+
+int arm_pl180_mmc_bind(struct udevice *dev)
+{
+	struct arm_pl180_mmc_plat *plat = dev_get_plat(dev);
+
+	return mmc_bind(dev, &plat->mmc, &plat->cfg);
+}
+
+static int dm_host_request(struct udevice *dev, struct mmc_cmd *cmd,
+			   struct mmc_data *data)
+{
+	struct mmc *mmc = mmc_get_mmc_dev(dev);
+
+	return host_request(mmc, cmd, data);
+}
+
+static int dm_host_set_ios(struct udevice *dev)
+{
+	struct mmc *mmc = mmc_get_mmc_dev(dev);
+
+	return host_set_ios(mmc);
+}
+
+static int dm_mmc_getcd(struct udevice *dev)
+{
+	struct pl180_mmc_host *host = dev_get_priv(dev);
+	int value = 1;
+
+	if (dm_gpio_is_valid(&host->cd_gpio))
+		value = dm_gpio_get_value(&host->cd_gpio);
+
+	return value;
+}
+
+static const struct dm_mmc_ops arm_pl180_dm_mmc_ops = {
+	.send_cmd = dm_host_request,
+	.set_ios = dm_host_set_ios,
+	.get_cd = dm_mmc_getcd,
+	.get_b_max = arm_pl180_get_b_max,
+};
+
+static int arm_pl180_mmc_of_to_plat(struct udevice *dev)
+{
+	struct pl180_mmc_host *host = dev_get_priv(dev);
+
+	host->base = dev_read_addr_ptr(dev);
+	if (!host->base)
+		return -EINVAL;
+
+	return 0;
+}
+
+static const struct udevice_id arm_pl180_mmc_match[] = {
+	{ .compatible = "arm,pl180" },
+	{ .compatible = "arm,pl18x" },
+	{ /* sentinel */ }
+};
+
+U_BOOT_DRIVER(arm_pl180_mmc) = {
+	.name = "arm_pl180_mmc",
+	.id = UCLASS_MMC,
+	.of_match = arm_pl180_mmc_match,
+	.ops = &arm_pl180_dm_mmc_ops,
+	.probe = arm_pl180_mmc_probe,
+#if CONFIG_IS_ENABLED(DM_REGULATOR)
+	.remove = arm_pl180_mmc_remove,
+#endif
+	.of_to_plat = arm_pl180_mmc_of_to_plat,
+	.bind = arm_pl180_mmc_bind,
+	.priv_auto	= sizeof(struct pl180_mmc_host),
+	.plat_auto	= sizeof(struct arm_pl180_mmc_plat),
+#if CONFIG_IS_ENABLED(DM_REGULATOR)
+	.flags = DM_FLAG_OS_PREPARE,
+#endif
+};

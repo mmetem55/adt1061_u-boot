@@ -1,26 +1,27 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  *	Copied from LiMon - BOOTP.
  *
  *	Copyright 1994, 1995, 2000 Neil Russell.
- *	(See License)
  *	Copyright 2000 Paolo Scaffardi
  */
 
 #ifndef __NET_RAND_H__
 #define __NET_RAND_H__
 
-#include <common.h>
+#include <dm/uclass.h>
+#include <rng.h>
 
 /*
  * Return a seed for the PRNG derived from the eth0 MAC address.
  */
 static inline unsigned int seed_mac(void)
 {
-	unsigned char enetaddr[6];
+	unsigned char enetaddr[ARP_HLEN];
 	unsigned int seed;
 
 	/* get our mac */
-	eth_getenv_enetaddr("ethaddr", enetaddr);
+	memcpy(enetaddr, eth_get_ethaddr(), ARP_HLEN);
 
 	seed = enetaddr[5];
 	seed ^= enetaddr[4] << 8;
@@ -37,7 +38,22 @@ static inline unsigned int seed_mac(void)
  */
 static inline void srand_mac(void)
 {
-	srand(seed_mac());
+	int ret;
+	struct udevice *devp;
+	u32 randv = 0;
+
+	if (CONFIG_IS_ENABLED(DM_RNG)) {
+		ret = uclass_get_device(UCLASS_RNG, 0, &devp);
+		if (!ret) {
+			ret = dm_rng_read(devp, &randv, sizeof(randv));
+			if (ret < 0)
+				randv = 0;
+		}
+	}
+	if (randv)
+		srand(randv);
+	else
+		srand(seed_mac());
 }
 
 #endif /* __NET_RAND_H__ */

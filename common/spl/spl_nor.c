@@ -1,54 +1,101 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Copyright (C) 2012 Stefan Roese <sr@denx.de>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
-#include <common.h>
+#include <config.h>
+#include <image.h>
+#include <imx_container.h>
+#include <log.h>
 #include <spl.h>
+#include <spl_load.h>
 
-void spl_nor_load_image(void)
+static ulong spl_nor_load_read(struct spl_load_info *load, ulong sector,
+			       ulong count, void *buf)
 {
+	debug("%s: sector %lx, count %lx, buf %p\n",
+	      __func__, sector, count, buf);
+	memcpy(buf, map_sysmem(sector, count), count);
+
+	return count;
+}
+
+unsigned long __weak spl_nor_get_uboot_base(void)
+{
+	return CFG_SYS_UBOOT_BASE;
+}
+
+#if IS_ENABLED(CONFIG_SPL_OS_BOOT)
+static int spl_nor_load_image_os(struct spl_image_info *spl_image,
+				 struct spl_boot_device *bootdev)
+{
+	/*
+	 * Load Linux from its location in NOR flash to its defined
+	 * location in SDRAM
+	 */
+	const struct legacy_img_hdr *header =
+		(const struct legacy_img_hdr *)CONFIG_SYS_OS_BASE;
+	struct spl_load_info load;
+
+#ifdef CONFIG_SPL_LOAD_FIT
+	if (image_get_magic(header) == FDT_MAGIC) {
+		int ret;
+
+		debug("Found FIT\n");
+		spl_load_init(&load, spl_nor_load_read, NULL, 1);
+
+		ret = spl_load_simple_fit(spl_image, &load, CONFIG_SYS_OS_BASE,
+					  (void *)header);
+
+#if defined CONFIG_SPL_PAYLOAD_ARGS_ADDR && defined CONFIG_CMD_SPL_NOR_OFS
+		memcpy((void *)CONFIG_SPL_PAYLOAD_ARGS_ADDR,
+		       (void *)CONFIG_CMD_SPL_NOR_OFS,
+		       CONFIG_CMD_SPL_WRITE_SIZE);
+#endif
+		return ret;
+	}
+#endif
+	if (image_get_os(header) != IH_OS_LINUX)
+		return -EINVAL;
+
+	/* happy - was a Linux */
+	int ret;
+
+	ret = spl_parse_image_header(spl_image, bootdev, header);
+	if (ret)
+		return ret;
+
+	memcpy((void *)spl_image->load_addr,
+	       (void *)(CONFIG_SYS_OS_BASE + sizeof(struct legacy_img_hdr)),
+	       spl_image->size);
+
+	return 0;
+}
+#endif
+
+static int spl_nor_load_image(struct spl_image_info *spl_image,
+			      struct spl_boot_device *bootdev)
+{
+	struct spl_load_info load;
+
 	/*
 	 * Loading of the payload to SDRAM is done with skipping of
 	 * the mkimage header in this SPL NOR driver
 	 */
-	spl_image.flags |= SPL_COPY_PAYLOAD_ONLY;
+	spl_image->flags |= SPL_COPY_PAYLOAD_ONLY;
 
-#ifdef CONFIG_SPL_OS_BOOT
+#if IS_ENABLED(CONFIG_SPL_OS_BOOT)
+	int err;
+
 	if (!spl_start_uboot()) {
-		const struct image_header *header;
+		err = spl_nor_load_image_os(spl_image, bootdev);
+		if (!err)
+			return 0;
 
-		/*
-		 * Load Linux from its location in NOR flash to its defined
-		 * location in SDRAM
-		 */
-		header = (const struct image_header *)CONFIG_SYS_OS_BASE;
-
-		if (image_get_os(header) == IH_OS_LINUX) {
-			/* happy - was a Linux */
-
-			spl_parse_image_header(header);
-
-			memcpy((void *)spl_image.load_addr,
-			       (void *)(CONFIG_SYS_OS_BASE +
-					sizeof(struct image_header)),
-			       spl_image.size);
-
-			/*
-			 * Copy DT blob (fdt) to SDRAM. Passing pointer to
-			 * flash doesn't work (16 KiB should be enough for DT)
-			 */
-			memcpy((void *)CONFIG_SYS_SPL_ARGS_ADDR,
-			       (void *)(CONFIG_SYS_FDT_BASE),
-			       (16 << 10));
-
-			return;
-		} else {
-			puts("The Expected Linux image was not found.\n"
-			     "Please check your NOR configuration.\n"
-			     "Trying to start u-boot now...\n");
-		}
+		printf("%s: Failed in falcon boot: %d", __func__, err);
+		if (IS_ENABLED(CONFIG_SPL_OS_BOOT_SECURE))
+			return err;
+		printf("Fallback to U-Boot\n");
 	}
 #endif
 
@@ -56,10 +103,7 @@ void spl_nor_load_image(void)
 	 * Load real U-Boot from its location in NOR flash to its
 	 * defined location in SDRAM
 	 */
-	spl_parse_image_header(
-			(const struct image_header *)CONFIG_SYS_UBOOT_BASE);
-
-	memcpy((void *)spl_image.load_addr,
-	       (void *)(CONFIG_SYS_UBOOT_BASE + sizeof(struct image_header)),
-	       spl_image.size);
+	spl_load_init(&load, spl_nor_load_read, NULL, 1);
+	return spl_load(spl_image, bootdev, &load, 0, spl_nor_get_uboot_base());
 }
+SPL_LOAD_IMAGE_METHOD("NOR", 0, BOOT_DEVICE_NOR, spl_nor_load_image);

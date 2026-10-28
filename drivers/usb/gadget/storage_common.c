@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * storage_common.c -- Common definitions for mass storage functionality
  *
@@ -10,10 +11,7 @@
  *
  * Code refactoring & cleanup:
  * Łukasz Majewski <l.majewski@samsung.com>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
-
 
 /*
  * This file requires the following identifiers used in USB strings to
@@ -47,9 +45,7 @@
  * characters rather then a pointer to void.
  */
 
-
 /* #include <asm/unaligned.h> */
-
 
 /*
  * Thanks to NetChip Technologies for donating this product ID.
@@ -125,7 +121,7 @@
 # define dump_msg(fsg, label, buf, length) do {                         \
 	if (length < 512) {						\
 		DBG(fsg, "%s, length %u:\n", label, length);		\
-		print_hex_dump(KERN_DEBUG, "", DUMP_PREFIX_OFFSET,	\
+		print_hex_dump("", DUMP_PREFIX_OFFSET,	\
 			       16, 1, buf, length, 0);			\
 	}								\
 } while (0)
@@ -140,7 +136,7 @@
 #  ifdef VERBOSE_DEBUG
 
 #    define dump_cdb(fsg)						\
-	print_hex_dump(KERN_DEBUG, "SCSI CDB: ", DUMP_PREFIX_NONE,	\
+	print_hex_dump("SCSI CDB: ", DUMP_PREFIX_NONE,	\
 		       16, 1, (fsg)->cmnd, (fsg)->cmnd_size, 0)		\
 
 #  else
@@ -267,14 +263,12 @@ struct interrupt_data {
 #define ASCQ(x)		((u8) (x))
 
 struct device_attribute { int i; };
-struct rw_semaphore { int i; };
-#define down_write(...)			do { } while (0)
-#define up_write(...)			do { } while (0)
-#define down_read(...)			do { } while (0)
-#define up_read(...)			do { } while (0)
 #define ETOOSMALL	525
 
+#include <log.h>
+#include <linux/log2.h>
 #include <usb_mass_storage.h>
+#include <dm/device_compat.h>
 
 /*-------------------------------------------------------------------------*/
 
@@ -294,6 +288,8 @@ struct fsg_lun {
 	u32		sense_data;
 	u32		sense_data_info;
 	u32		unit_attention_data;
+	unsigned int	blkbits;
+	unsigned int	blksize; /* logical block size of bound block device */
 
 	struct device	dev;
 };
@@ -314,7 +310,7 @@ static struct fsg_lun *fsg_lun_from_dev(struct device *dev)
 #define FSG_NUM_BUFFERS	2
 
 /* Default size of buffer length. */
-#define FSG_BUFLEN	((u32)16384)
+#define FSG_BUFLEN	((u32)131072)
 
 /* Maximal number of LUNs supported in mass storage function */
 #define FSG_MAX_LUNS	8
@@ -569,7 +565,8 @@ static struct usb_gadget_strings	fsg_stringtab = {
  * the caller must own fsg->filesem for writing.
  */
 
-static int fsg_lun_open(struct fsg_lun *curlun, const char *filename)
+static int fsg_lun_open(struct fsg_lun *curlun, unsigned int num_sectors,
+			unsigned int sector_size, const char *filename)
 {
 	int				ro;
 
@@ -577,9 +574,12 @@ static int fsg_lun_open(struct fsg_lun *curlun, const char *filename)
 	ro = curlun->initially_ro;
 
 	curlun->ro = ro;
-	curlun->file_length = ums->num_sectors << 9;
-	curlun->num_sectors = ums->num_sectors;
-	debug("open backing file: %s\n", filename);
+	curlun->file_length = num_sectors * sector_size;
+	curlun->num_sectors = num_sectors;
+	curlun->blksize = sector_size;
+	curlun->blkbits = order_base_2(sector_size >> 9) + 9;
+	debug("blksize: %u\n", sector_size);
+	debug("open backing file: '%s'\n", filename);
 
 	return 0;
 }

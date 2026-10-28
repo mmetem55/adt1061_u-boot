@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * work_92105 display support
  *
@@ -7,19 +8,21 @@
  * The work_92105 display is a HD44780-compatible module
  * controlled through a MAX6957AAX SPI port expander, two
  * MAX518 I2C DACs and native LPC32xx GPO 15.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
-#include <common.h>
+#include <command.h>
+#include <log.h>
 #include <asm/arch/sys_proto.h>
 #include <asm/arch/cpu.h>
 #include <asm/arch/emc.h>
 #include <asm/gpio.h>
+#include <env.h>
 #include <spi.h>
 #include <i2c.h>
+#include <timestamp.h>
 #include <version.h>
 #include <vsprintf.h>
+#include <linux/delay.h>
 
 /*
  * GPO 15 in port 3 is gpio 3*32+15 = 111
@@ -228,10 +231,9 @@ void work_92105_display_init(void)
 	i2c_write(0x2c, 0x01, 1, &enable_backlight, 1);
 
 	/* set display contrast */
-	display_contrast_str = getenv("fwopt_dispcontrast");
+	display_contrast_str = env_get("fwopt_dispcontrast");
 	if (display_contrast_str)
-		display_contrast = simple_strtoul(display_contrast_str,
-			NULL, 10);
+		display_contrast = dectoul(display_contrast_str, NULL);
 	i2c_write(0x2c, 0x00, 1, &display_contrast, 1);
 
 	/* request GPO_15 as an output initially set to 1 */
@@ -266,7 +268,7 @@ void work_92105_display_init(void)
 
 #ifdef CONFIG_CMD_MAX6957
 
-static int do_max6957aax(cmd_tbl_t *cmdtp, int flag, int argc,
+static int do_max6957aax(struct cmd_tbl *cmdtp, int flag, int argc,
 			 char *const argv[])
 {
 	int reg, val;
@@ -290,12 +292,10 @@ static int do_max6957aax(cmd_tbl_t *cmdtp, int flag, int argc,
 	return 1;
 }
 
-#ifdef CONFIG_SYS_LONGHELP
-static char max6957aax_help_text[] =
+U_BOOT_LONGHELP(max6957aax,
 	"max6957aax - write or read display register:\n"
 		"\tmax6957aax R|r reg - read display register;\n"
-		"\tmax6957aax reg val - write display register.";
-#endif
+		"\tmax6957aax reg val - write display register.");
 
 U_BOOT_CMD(
 	max6957aax, 6, 1, do_max6957aax,
@@ -311,11 +311,12 @@ U_BOOT_CMD(
  * only HUSH can understand them.
  */
 
-#if !defined(CONFIG_SYS_HUSH_PARSER)
-#error CONFIG_CMD_HD44760 requires CONFIG_SYS_HUSH_PARSER
+#if !defined(CONFIG_HUSH_PARSER)
+#error CONFIG_CMD_HD44760 requires CONFIG_HUSH_PARSER
 #endif
 
-static int do_hd44780(cmd_tbl_t *cmdtp, int flag, int argc, char *const argv[])
+static int do_hd44780(struct cmd_tbl *cmdtp, int flag, int argc,
+		      char *const argv[])
 {
 	char *cmd;
 
@@ -333,17 +334,15 @@ static int do_hd44780(cmd_tbl_t *cmdtp, int flag, int argc, char *const argv[])
 	return 0;
 }
 
-#ifdef CONFIG_SYS_LONGHELP
-static char hd44780_help_text[] =
+U_BOOT_LONGHELP(hd44780,
 	"hd44780 - control LCD driver:\n"
 		"\thd44780 cmd <val> - send command <val> to driver;\n"
 		"\thd44780 data <val> - send data <val> to driver;\n"
-		"\thd44780 str \"<text>\" - send \"<text>\" to driver.";
-#endif
+		"\thd44780 str \"<text>\" - send \"<text>\" to driver.");
 
 U_BOOT_CMD(
 	hd44780, 6, 1, do_hd44780,
 	"HD44780 LCD driver control",
 	hd44780_help_text
 );
-#endif /* CONFIG_CMD_HD44780 */
+#endif /* CONFIG_CMD_HD44760 */

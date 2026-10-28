@@ -1,7 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * (C) 2015 Siarhei Siamashka <siarhei.siamashka@gmail.com>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 /*
@@ -10,10 +9,10 @@
  * interface for driving a MIPI compatible TFT display.
  */
 
-#include <common.h>
+#include <malloc.h>
 #include <mipi_display.h>
-#include <asm/arch/gpio.h>
 #include <asm/gpio.h>
+#include <linux/delay.h>
 
 #include "videomodes.h"
 #include "ssd2828.h"

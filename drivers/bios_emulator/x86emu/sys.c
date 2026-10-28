@@ -35,15 +35,16 @@
 * Description:  This file includes subroutines which are related to
 *               programmed I/O and memory access. Included in this module
 *               are default functions that do nothing. For real uses these
-*               functions will have to be overriden by the user library.
+*               functions will have to be overridden by the user library.
 *
 ****************************************************************************/
 
-#include <common.h>
+#include <linux/printk.h>
 #include "x86emu/x86emui.h"
 
 /*------------------------- Global Variables ------------------------------*/
 
+/* Note: bios.c defines this if the emulator is not enabled */
 X86EMU_sysEnv _X86EMU_env;	/* Global emulator machine state */
 X86EMU_intrFuncs _X86EMU_intrTab[256];
 

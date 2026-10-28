@@ -1,11 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * (C) Copyright 2010
  * Heiko Schocher, DENX Software Engineering, hs@denx.de.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
-#include <common.h>
+#include <cpu_func.h>
+#include <asm/cache.h>
+#include <asm/global_data.h>
 #include <asm/io.h>
 
 DECLARE_GLOBAL_DATA_PTR;
@@ -26,15 +27,19 @@ void bootcount_store(ulong a)
 	int i;
 
 	for (i = 0; i < CONFIG_NR_DRAM_BANKS; i++)
-		size += gd->bd->bi_dram[i].size;
+		size += gd->dram[i].size;
 	save_addr = (ulong *)(size - BOOTCOUNT_ADDR);
 	writel(a, save_addr);
-	writel(BOOTCOUNT_MAGIC, &save_addr[1]);
+	writel(CONFIG_SYS_BOOTCOUNT_MAGIC, &save_addr[1]);
 
 	for (i = 0; i < REPEAT_PATTERN; i++)
 		writel(patterns[i % NBR_OF_PATTERNS],
 			&save_addr[i + OFFS_PATTERN]);
 
+	/* Make sure the data is written to RAM */
+	flush_dcache_range((ulong)&save_addr[0],
+			   (((ulong)&save_addr[REPEAT_PATTERN + OFFS_PATTERN] &
+			     ~(ARCH_DMA_MINALIGN - 1)) + ARCH_DMA_MINALIGN));
 }
 
 ulong bootcount_load(void)
@@ -45,7 +50,7 @@ ulong bootcount_load(void)
 	int i, tmp;
 
 	for (i = 0; i < CONFIG_NR_DRAM_BANKS; i++)
-		size += gd->bd->bi_dram[i].size;
+		size += gd->dram[i].size;
 	save_addr = (ulong *)(size - BOOTCOUNT_ADDR);
 
 	counter = readl(&save_addr[0]);

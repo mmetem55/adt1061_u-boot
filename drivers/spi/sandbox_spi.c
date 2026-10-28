@@ -8,45 +8,108 @@
  * Licensed under the GPL-2 or later.
  */
 
-#include <common.h>
+#define LOG_CATEGORY UCLASS_SPI
+
 #include <dm.h>
+#include <log.h>
 #include <malloc.h>
 #include <spi.h>
 #include <spi_flash.h>
 #include <os.h>
 
-#include <asm/errno.h>
+#include <linux/errno.h>
 #include <asm/spi.h>
 #include <asm/state.h>
+#include <dm/acpi.h>
 #include <dm/device-internal.h>
 
-DECLARE_GLOBAL_DATA_PTR;
-
-#ifndef CONFIG_SPI_IDLE_VAL
-# define CONFIG_SPI_IDLE_VAL 0xFF
-#endif
-
-const char *sandbox_spi_parse_spec(const char *arg, unsigned long *bus,
-				   unsigned long *cs)
-{
-	char *endp;
-
-	*bus = simple_strtoul(arg, &endp, 0);
-	if (*endp != ':' || *bus >= CONFIG_SANDBOX_SPI_MAX_BUS)
-		return NULL;
-
-	*cs = simple_strtoul(endp + 1, &endp, 0);
-	if (*endp != ':' || *cs >= CONFIG_SANDBOX_SPI_MAX_CS)
-		return NULL;
-
-	return endp + 1;
-}
+/**
+ * struct sandbox_spi_priv - Sandbox SPI private data
+ *
+ * Helper struct to keep track of the sandbox SPI bus internal state. It is
+ * used in unit tests to verify that dm spi functions update the bus
+ * speed/mode properly (for instance, when jumping back and forth between spi
+ * slaves claiming the bus, we need to make sure that the bus speed is updated
+ * accordingly for each slave).
+ *
+ * @speed:	Current bus speed.
+ * @mode:	Current bus mode.
+ */
+struct sandbox_spi_priv {
+	uint speed;
+	uint mode;
+};
 
 __weak int sandbox_spi_get_emul(struct sandbox_state *state,
 				struct udevice *bus, struct udevice *slave,
 				struct udevice **emulp)
 {
 	return -ENOENT;
+}
+
+uint sandbox_spi_get_speed(struct udevice *dev)
+{
+	struct sandbox_spi_priv *priv = dev_get_priv(dev);
+
+	return priv->speed;
+}
+
+uint sandbox_spi_get_mode(struct udevice *dev)
+{
+	struct sandbox_spi_priv *priv = dev_get_priv(dev);
+
+	return priv->mode;
+}
+
+uint sandbox_spi_get_wordlen(struct udevice *dev)
+{
+	struct spi_slave *slave = dev_get_parent_priv(dev);
+
+	return slave->wordlen;
+}
+
+static int sandbox_spi_set_wordlen(struct udevice *dev, unsigned int wordlen)
+{
+	struct spi_slave *slave = dev_get_parent_priv(dev);
+
+	slave->wordlen = wordlen;
+
+	return 0;
+}
+
+/**
+ * sandbox_spi_emul_get() - find the emulator for a SPI slave
+ *
+ * A slave can name a dedicated emulator through a "sandbox,emul" phandle (for
+ * example an SPI EEPROM). When no such phandle is present we fall back to the
+ * built-in SPI flash emulator, preserving the previous behaviour.
+ *
+ * @state: Sandbox state, used to cache the bound emulator per chip select
+ * @bus: SPI bus the slave is attached to
+ * @slave: SPI slave to find the emulator for
+ * @emulp: Returns the emulator device on success
+ * Return: 0 if OK, -ve on error
+ */
+static int sandbox_spi_emul_get(struct sandbox_state *state, struct udevice *bus,
+				struct udevice *slave, struct udevice **emulp)
+{
+	struct sandbox_spi_info *info;
+	int ret;
+
+	info = &state->spi[dev_seq(bus)][spi_chip_select(slave)];
+	if (info->emul) {
+		*emulp = info->emul;
+		return 0;
+	}
+
+	ret = uclass_get_device_by_phandle(UCLASS_SPI_EMUL, slave, "sandbox,emul",
+					   emulp);
+	if (!ret) {
+		info->emul = *emulp;
+		return 0;
+	}
+
+	return sandbox_spi_get_emul(state, bus, slave, emulp);
 }
 
 static int sandbox_spi_xfer(struct udevice *slave, unsigned int bitlen,
@@ -58,7 +121,6 @@ static int sandbox_spi_xfer(struct udevice *slave, unsigned int bitlen,
 	struct udevice *emul;
 	uint bytes = bitlen / 8, i;
 	int ret;
-	u8 *tx = (void *)dout, *rx = din;
 	uint busnum, cs;
 
 	if (bitlen == 0)
@@ -71,7 +133,7 @@ static int sandbox_spi_xfer(struct udevice *slave, unsigned int bitlen,
 		return -EINVAL;
 	}
 
-	busnum = bus->seq;
+	busnum = dev_seq(bus);
 	cs = spi_chip_select(slave);
 	if (busnum >= CONFIG_SANDBOX_SPI_MAX_BUS ||
 	    cs >= CONFIG_SANDBOX_SPI_MAX_CS) {
@@ -79,7 +141,7 @@ static int sandbox_spi_xfer(struct udevice *slave, unsigned int bitlen,
 		       busnum, cs);
 		return -ENOENT;
 	}
-	ret = sandbox_spi_get_emul(state, bus, slave, &emul);
+	ret = sandbox_spi_emul_get(state, bus, slave, &emul);
 	if (ret) {
 		printf("%s: busnum=%u, cs=%u: no emulation available (err=%d)\n",
 		       __func__, busnum, cs, ret);
@@ -89,57 +151,54 @@ static int sandbox_spi_xfer(struct udevice *slave, unsigned int bitlen,
 	if (ret)
 		return ret;
 
-	/* make sure rx/tx buffers are full so clients can assume */
-	if (!tx) {
-		debug("sandbox_spi: xfer: auto-allocating tx scratch buffer\n");
-		tx = malloc(bytes);
-		if (!tx) {
-			debug("sandbox_spi: Out of memory\n");
-			return -ENOMEM;
-		}
-	}
-	if (!rx) {
-		debug("sandbox_spi: xfer: auto-allocating rx scratch buffer\n");
-		rx = malloc(bytes);
-		if (!rx) {
-			debug("sandbox_spi: Out of memory\n");
-			return -ENOMEM;
-		}
-	}
-
 	ops = spi_emul_get_ops(emul);
 	ret = ops->xfer(emul, bitlen, dout, din, flags);
 
-	debug("sandbox_spi: xfer: got back %i (that's %s)\n rx:",
-	      ret, ret ? "bad" : "good");
-	for (i = 0; i < bytes; ++i)
-		debug(" %u:%02x", i, rx[i]);
-	debug("\n");
-
-	if (tx != dout)
-		free(tx);
-	if (rx != din)
-		free(rx);
+	log_content("sandbox_spi: xfer: got back %i (that's %s)\n rx:",
+		    ret, ret ? "bad" : "good");
+	if (din) {
+		for (i = 0; i < bytes; ++i)
+			log_content(" %u:%02x", i, ((u8 *)din)[i]);
+	}
+	log_content("\n");
 
 	return ret;
 }
 
 static int sandbox_spi_set_speed(struct udevice *bus, uint speed)
 {
+	struct sandbox_spi_priv *priv = dev_get_priv(bus);
+
+	priv->speed = speed;
+
 	return 0;
 }
 
 static int sandbox_spi_set_mode(struct udevice *bus, uint mode)
 {
+	struct sandbox_spi_priv *priv = dev_get_priv(bus);
+
+	priv->mode = mode;
+
 	return 0;
 }
 
 static int sandbox_cs_info(struct udevice *bus, uint cs,
 			   struct spi_cs_info *info)
 {
-	/* Always allow activity on CS 0 */
-	if (cs >= 1)
-		return -ENODEV;
+	/* Always allow activity on CS 0, CS 1 */
+	if (cs >= 2)
+		return -EINVAL;
+
+	return 0;
+}
+
+static int sandbox_spi_get_mmap(struct udevice *dev, ulong *map_basep,
+				uint *map_sizep, uint *offsetp)
+{
+	*map_basep = 0x1000;
+	*map_sizep = 0x2000;
+	*offsetp = 0x100;
 
 	return 0;
 }
@@ -149,6 +208,8 @@ static const struct dm_spi_ops sandbox_spi_ops = {
 	.set_speed	= sandbox_spi_set_speed,
 	.set_mode	= sandbox_spi_set_mode,
 	.cs_info	= sandbox_cs_info,
+	.get_mmap	= sandbox_spi_get_mmap,
+	.set_wordlen	= sandbox_spi_set_wordlen,
 };
 
 static const struct udevice_id sandbox_spi_ids[] = {
@@ -156,9 +217,10 @@ static const struct udevice_id sandbox_spi_ids[] = {
 	{ }
 };
 
-U_BOOT_DRIVER(spi_sandbox) = {
-	.name	= "spi_sandbox",
+U_BOOT_DRIVER(sandbox_spi) = {
+	.name	= "sandbox_spi",
 	.id	= UCLASS_SPI,
 	.of_match = sandbox_spi_ids,
 	.ops	= &sandbox_spi_ops,
+	.priv_auto = sizeof(struct sandbox_spi_priv),
 };

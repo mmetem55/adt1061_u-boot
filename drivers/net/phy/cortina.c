@@ -1,32 +1,33 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Cortina CS4315/CS4340 10G PHY drivers
  *
- * SPDX-License-Identifier:     GPL-2.0+
- *
  * Copyright 2014 Freescale Semiconductor, Inc.
+ * Copyright 2018, 2020 NXP
  *
  */
 
 #include <config.h>
-#include <common.h>
+#include <log.h>
 #include <malloc.h>
 #include <linux/ctype.h>
+#include <linux/delay.h>
 #include <linux/string.h>
 #include <linux/err.h>
 #include <phy.h>
 #include <cortina.h>
-#ifdef CONFIG_SYS_CORTINA_FW_IN_NAND
 #include <nand.h>
-#elif defined(CONFIG_SYS_CORTINA_FW_IN_SPIFLASH)
 #include <spi_flash.h>
-#elif defined(CONFIG_SYS_CORTINA_FW_IN_MMC)
 #include <mmc.h>
+#ifdef CONFIG_ARM64
+#include <asm/arch/cpu.h>
 #endif
 
 #ifndef CONFIG_PHYLIB_10G
 #error The Cortina PHY needs 10G support
 #endif
 
+#ifndef CONFIG_SYS_CORTINA_NO_FW_UPLOAD
 struct cortina_reg_config cortina_reg_cfg[] = {
 	/* CS4315_enable_sr_mode */
 	{VILLA_GLOBAL_MSEQCLKCTRL, 0x8004},
@@ -121,6 +122,11 @@ struct cortina_reg_config cortina_reg_cfg[] = {
 	{VILLA_LINE_SDS_COMMON_STX0_TX_OUTPUT_CTRLB, 0xc01E},
 };
 
+__weak ulong *cs4340_get_fw_addr(void)
+{
+	return (ulong *)CONFIG_CORTINA_FW_ADDR;
+}
+
 void cs4340_upload_firmware(struct phy_device *phydev)
 {
 	char line_temp[0x50] = {0};
@@ -129,55 +135,122 @@ void cs4340_upload_firmware(struct phy_device *phydev)
 	int i, line_cnt = 0, column_cnt = 0;
 	struct cortina_reg_config fw_temp;
 	char *addr = NULL;
+	char *to_be_freed = NULL;
+	ulong cortina_fw_addr = (ulong)cs4340_get_fw_addr();
 
+#ifdef CONFIG_TFABOOT
+	enum boot_src src = get_boot_src();
+
+	if (src == BOOT_SOURCE_IFC_NOR) {
+		addr = (char *)cortina_fw_addr;
+	} else if (src == BOOT_SOURCE_IFC_NAND) {
+		int ret;
+		size_t fw_length = CONFIG_CORTINA_FW_LENGTH;
+
+		addr = malloc(CONFIG_CORTINA_FW_LENGTH);
+		to_be_freed = addr;
+		ret = nand_read(get_nand_dev_by_index(0),
+					   (loff_t)cortina_fw_addr,	&fw_length, (u_char *)addr);
+		if (ret == -EUCLEAN) {
+			printf("NAND read of Cortina firmware at 0x%lx failed %d\n",
+				   cortina_fw_addr, ret);
+		}
+	} else if (src == BOOT_SOURCE_QSPI_NOR) {
+		int ret;
+		struct spi_flash *ucode_flash;
+
+		addr = malloc(CONFIG_CORTINA_FW_LENGTH);
+		to_be_freed = addr;
+		ucode_flash = spi_flash_probe(CONFIG_SF_DEFAULT_BUS, CONFIG_SF_DEFAULT_CS,
+									 CONFIG_SF_DEFAULT_SPEED, CONFIG_SF_DEFAULT_MODE);
+		if (!ucode_flash) {
+			puts("SF: probe for Cortina ucode failed\n");
+		} else {
+			ret = spi_flash_read(ucode_flash, cortina_fw_addr,
+								CONFIG_CORTINA_FW_LENGTH, addr);
+			if (ret)
+				puts("SF: read for Cortina ucode failed\n");
+			spi_flash_free(ucode_flash);
+		}
+	} else if (src == BOOT_SOURCE_SD_MMC) {
+		int dev = CONFIG_ENV_MMC_DEVICE_INDEX;
+		u32 cnt = CONFIG_CORTINA_FW_LENGTH / 512;
+		u32 blk = cortina_fw_addr / 512;
+		struct mmc *mmc = find_mmc_device(CONFIG_ENV_MMC_DEVICE_INDEX);
+
+		if (!mmc) {
+			puts("Failed to find MMC device for Cortina ucode\n");
+		} else {
+			addr = malloc(CONFIG_CORTINA_FW_LENGTH);
+			to_be_freed = addr;
+			printf("MMC read: dev # %u, block # %u, count %u ...\n",
+				  dev, blk, cnt);
+			mmc_init(mmc);
+#ifdef CONFIG_BLK
+			(void)blk_dread(mmc_get_blk_desc(mmc), blk, cnt, addr);
+#else
+			(void)mmc->block_dev.block_read(&mmc->block_dev, blk, cnt, addr);
+#endif
+		}
+	}
+#else /* CONFIG_TFABOOT */
 #if defined(CONFIG_SYS_CORTINA_FW_IN_NOR) || \
 	defined(CONFIG_SYS_CORTINA_FW_IN_REMOTE)
 
-	addr = (char *)CONFIG_CORTINA_FW_ADDR;
+	addr = (char *)cortina_fw_addr;
 #elif defined(CONFIG_SYS_CORTINA_FW_IN_NAND)
 	int ret;
 	size_t fw_length = CONFIG_CORTINA_FW_LENGTH;
 
 	addr = malloc(CONFIG_CORTINA_FW_LENGTH);
-	ret = nand_read(&nand_info[0], (loff_t)CONFIG_CORTINA_FW_ADDR,
-		       &fw_length, (u_char *)addr);
+	to_be_freed = addr;
+	ret = nand_read(get_nand_dev_by_index(0),
+			(loff_t)cortina_fw_addr,
+			&fw_length, (u_char *)addr);
 	if (ret == -EUCLEAN) {
-		printf("NAND read of Cortina firmware at 0x%x failed %d\n",
-		       CONFIG_CORTINA_FW_ADDR, ret);
+		printf("NAND read of Cortina firmware at 0x%lx failed %d\n",
+		       cortina_fw_addr, ret);
 	}
 #elif defined(CONFIG_SYS_CORTINA_FW_IN_SPIFLASH)
 	int ret;
 	struct spi_flash *ucode_flash;
 
 	addr = malloc(CONFIG_CORTINA_FW_LENGTH);
-	ucode_flash = spi_flash_probe(CONFIG_ENV_SPI_BUS, CONFIG_ENV_SPI_CS,
-				CONFIG_ENV_SPI_MAX_HZ, CONFIG_ENV_SPI_MODE);
+	to_be_freed = addr;
+	ucode_flash = spi_flash_probe(CONFIG_SF_DEFAULT_BUS, CONFIG_SF_DEFAULT_CS,
+				CONFIG_SF_DEFAULT_SPEED, CONFIG_SF_DEFAULT_MODE);
 	if (!ucode_flash) {
 		puts("SF: probe for Cortina ucode failed\n");
 	} else {
-		ret = spi_flash_read(ucode_flash, CONFIG_CORTINA_FW_ADDR,
+		ret = spi_flash_read(ucode_flash, cortina_fw_addr,
 				     CONFIG_CORTINA_FW_LENGTH, addr);
 		if (ret)
 			puts("SF: read for Cortina ucode failed\n");
 		spi_flash_free(ucode_flash);
 	}
 #elif defined(CONFIG_SYS_CORTINA_FW_IN_MMC)
-	int dev = CONFIG_SYS_MMC_ENV_DEV;
+	int dev = CONFIG_ENV_MMC_DEVICE_INDEX;
 	u32 cnt = CONFIG_CORTINA_FW_LENGTH / 512;
-	u32 blk = CONFIG_CORTINA_FW_ADDR / 512;
-	struct mmc *mmc = find_mmc_device(CONFIG_SYS_MMC_ENV_DEV);
+	u32 blk = cortina_fw_addr / 512;
+	struct mmc *mmc = find_mmc_device(CONFIG_ENV_MMC_DEVICE_INDEX);
 
 	if (!mmc) {
 		puts("Failed to find MMC device for Cortina ucode\n");
 	} else {
 		addr = malloc(CONFIG_CORTINA_FW_LENGTH);
+		to_be_freed = addr;
 		printf("MMC read: dev # %u, block # %u, count %u ...\n",
 		       dev, blk, cnt);
 		mmc_init(mmc);
-		(void)mmc->block_dev.block_read(dev, blk, cnt, addr);
-		/* flush cache after read */
-		flush_cache((ulong)addr, cnt * 512);
+#ifdef CONFIG_BLK
+		(void)blk_dread(mmc_get_blk_desc(mmc), blk, cnt,
+						addr);
+#else
+		(void)mmc->block_dev.block_read(&mmc->block_dev, blk, cnt,
+						addr);
+#endif
 	}
+#endif
 #endif
 
 	while (*addr != 'Q') {
@@ -187,7 +260,7 @@ void cs4340_upload_firmware(struct phy_device *phydev)
 			line_temp[i++] = *addr++;
 			if (0x50 < i) {
 				printf("Not found Cortina PHY ucode at 0x%p\n",
-				       (char *)CONFIG_CORTINA_FW_ADDR);
+				       (char *)cortina_fw_addr);
 				return;
 			}
 		}
@@ -214,13 +287,25 @@ void cs4340_upload_firmware(struct phy_device *phydev)
 				     0xffff;
 		phy_write(phydev, 0x00, fw_temp.reg_addr, fw_temp.reg_value);
 	}
+	if (to_be_freed)
+		free(to_be_freed);
 }
+#endif
 
 int cs4340_phy_init(struct phy_device *phydev)
 {
+#ifndef CONFIG_SYS_CORTINA_NO_FW_UPLOAD
 	int timeout = 100;  /* 100ms */
+#endif
 	int reg_value;
 
+	/*
+	 * Cortina phy has provision to store
+	 * phy firmware in attached dedicated EEPROM.
+	 * Boards designed with EEPROM attached to Cortina
+	 * does not require FW upload.
+	 */
+#ifndef CONFIG_SYS_CORTINA_NO_FW_UPLOAD
 	/* step1: BIST test */
 	phy_write(phydev, 0x00, VILLA_GLOBAL_MSEQCLKCTRL,     0x0004);
 	phy_write(phydev, 0x00, VILLA_GLOBAL_LINE_SOFT_RESET, 0x0000);
@@ -241,6 +326,7 @@ int cs4340_phy_init(struct phy_device *phydev)
 
 	/* setp2: upload ucode */
 	cs4340_upload_firmware(phydev);
+#endif
 	reg_value = phy_read(phydev, 0x00, VILLA_GLOBAL_DWNLD_CHECKSUM_STATUS);
 	if (reg_value) {
 		debug("%s checksum status failed.\n", __func__);
@@ -256,6 +342,12 @@ int cs4340_config(struct phy_device *phydev)
 	return 0;
 }
 
+int cs4340_probe(struct phy_device *phydev)
+{
+	phydev->flags = PHY_FLAG_BROKEN_RESET;
+	return 0;
+}
+
 int cs4340_startup(struct phy_device *phydev)
 {
 	phydev->link = 1;
@@ -266,7 +358,39 @@ int cs4340_startup(struct phy_device *phydev)
 	return 0;
 }
 
-struct phy_driver cs4340_driver = {
+int cs4223_phy_init(struct phy_device *phydev)
+{
+	int reg_value;
+
+	reg_value = phy_read(phydev, 0x00, CS4223_EEPROM_STATUS);
+	if (!(reg_value & CS4223_EEPROM_FIRMWARE_LOADDONE)) {
+		printf("%s CS4223 Firmware not present in EERPOM\n", __func__);
+		return -ENOSYS;
+	}
+
+	return 0;
+}
+
+int cs4223_config(struct phy_device *phydev)
+{
+	return cs4223_phy_init(phydev);
+}
+
+int cs4223_probe(struct phy_device *phydev)
+{
+	phydev->flags = PHY_FLAG_BROKEN_RESET;
+	return 0;
+}
+
+int cs4223_startup(struct phy_device *phydev)
+{
+	phydev->link = 1;
+	phydev->speed = SPEED_10000;
+	phydev->duplex = DUPLEX_FULL;
+	return 0;
+}
+
+U_BOOT_PHY_DRIVER(cs4340) = {
 	.name = "Cortina CS4315/CS4340",
 	.uid = PHY_UID_CS4340,
 	.mask = 0xfffffff0,
@@ -275,58 +399,54 @@ struct phy_driver cs4340_driver = {
 		 MDIO_DEVS_PHYXS | MDIO_DEVS_AN |
 		 MDIO_DEVS_VEND1 | MDIO_DEVS_VEND2),
 	.config = &cs4340_config,
+	.probe	= &cs4340_probe,
 	.startup = &cs4340_startup,
 	.shutdown = &gen10g_shutdown,
 };
 
-int phy_cortina_init(void)
-{
-	phy_register(&cs4340_driver);
-	return 0;
-}
+U_BOOT_PHY_DRIVER(cs4223) = {
+	.name = "Cortina CS4223",
+	.uid = PHY_UID_CS4223,
+	.mask = 0x0ffff00f,
+	.features = PHY_10G_FEATURES,
+	.mmds = (MDIO_DEVS_PMAPMD | MDIO_DEVS_PCS |
+		 MDIO_DEVS_AN),
+	.config = &cs4223_config,
+	.probe	= &cs4223_probe,
+	.startup = &cs4223_startup,
+	.shutdown = &gen10g_shutdown,
+};
 
 int get_phy_id(struct mii_dev *bus, int addr, int devad, u32 *phy_id)
 {
 	int phy_reg;
-	bool is_cortina_phy = false;
-
-	switch (addr) {
-#ifdef CORTINA_PHY_ADDR1
-	case CORTINA_PHY_ADDR1:
-#endif
-#ifdef CORTINA_PHY_ADDR2
-	case CORTINA_PHY_ADDR2:
-#endif
-#ifdef CORTINA_PHY_ADDR3
-	case CORTINA_PHY_ADDR3:
-#endif
-#ifdef CORTINA_PHY_ADDR4
-	case CORTINA_PHY_ADDR4:
-#endif
-		is_cortina_phy = true;
-		break;
-	default:
-		break;
-	}
 
 	/* Cortina PHY has non-standard offset of PHY ID registers */
-	if (is_cortina_phy)
-		phy_reg = bus->read(bus, addr, 0, VILLA_GLOBAL_CHIP_ID_LSB);
-	else
-		phy_reg = bus->read(bus, addr, devad, MII_PHYSID1);
-
+	phy_reg = bus->read(bus, addr, 0, VILLA_GLOBAL_CHIP_ID_LSB);
 	if (phy_reg < 0)
 		return -EIO;
-
 	*phy_id = (phy_reg & 0xffff) << 16;
-	if (is_cortina_phy)
-		phy_reg = bus->read(bus, addr, 0, VILLA_GLOBAL_CHIP_ID_MSB);
-	else
-		phy_reg = bus->read(bus, addr, devad, MII_PHYSID2);
 
+	phy_reg = bus->read(bus, addr, 0, VILLA_GLOBAL_CHIP_ID_MSB);
 	if (phy_reg < 0)
 		return -EIO;
+	*phy_id |= (phy_reg & 0xffff);
 
+	if ((*phy_id == PHY_UID_CS4340) || (*phy_id == PHY_UID_CS4223))
+		return 0;
+
+	/*
+	 * If Cortina PHY not detected,
+	 * try generic way to find PHY ID registers
+	 */
+	phy_reg = bus->read(bus, addr, devad, MII_PHYSID1);
+	if (phy_reg < 0)
+		return -EIO;
+	*phy_id = (phy_reg & 0xffff) << 16;
+
+	phy_reg = bus->read(bus, addr, devad, MII_PHYSID2);
+	if (phy_reg < 0)
+		return -EIO;
 	*phy_id |= (phy_reg & 0xffff);
 
 	return 0;

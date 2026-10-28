@@ -1,20 +1,20 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * (C) Copyright 2012
  * Lei Wen <leiwen@marvell.com>, Marvell Inc.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
-#include <common.h>
 #include <watchdog.h>
 #include <command.h>
+#include <gzip.h>
 #include <image.h>
 #include <malloc.h>
+#include <memalign.h>
 #include <u-boot/zlib.h>
 #include "zlib/zutil.h"
 
-#ifndef CONFIG_GZIP_COMPRESS_DEF_SZ
-#define CONFIG_GZIP_COMPRESS_DEF_SZ	0x200
+#ifndef CFG_GZIP_COMPRESS_DEF_SZ
+#define CFG_GZIP_COMPRESS_DEF_SZ	0x200
 #endif
 #define ZALLOC_ALIGNMENT		16
 
@@ -25,7 +25,7 @@ static void *zalloc(void *x, unsigned items, unsigned size)
 	size *= items;
 	size = (size + ZALLOC_ALIGNMENT - 1) & ~(ZALLOC_ALIGNMENT - 1);
 
-	p = malloc (size);
+	p = malloc_cache_aligned(size);
 
 	return (p);
 }
@@ -65,27 +65,26 @@ int zzip(void *dst, unsigned long *lenp, unsigned char *src,
 	s.zfree = zfree;
 	s.opaque = Z_NULL;
 
-	//printf("level : %d method : %d , windowBits : %d , memLevel : %d , strategy : %d \n", Z_BEST_SPEED, Z_DEFLATED, window, DEF_MEM_LEVEL, Z_DEFAULT_STRATEGY);
 	r = deflateInit2_(&s, Z_BEST_SPEED, Z_DEFLATED,	window,
 			DEF_MEM_LEVEL, Z_DEFAULT_STRATEGY,
-			ZLIB_VERSION, sizeof(z_stream));
+			sizeof(z_stream));
 	if (r != Z_OK) {
 		printf ("Error: deflateInit2_() returned %d\n", r);
 		return -1;
 	}
 
 	while (srclen > 0) {
-		comp_len = (srclen > CONFIG_GZIP_COMPRESS_DEF_SZ) ?
-				CONFIG_GZIP_COMPRESS_DEF_SZ : srclen;
+		comp_len = (srclen > CFG_GZIP_COMPRESS_DEF_SZ) ?
+				CFG_GZIP_COMPRESS_DEF_SZ : srclen;
 
 		s.next_in = src;
 		s.avail_in = comp_len;
-		flush = (srclen > CONFIG_GZIP_COMPRESS_DEF_SZ)?
+		flush = (srclen > CFG_GZIP_COMPRESS_DEF_SZ)?
 			Z_NO_FLUSH : Z_FINISH;
 
 		do {
-			left_len = (*lenp > CONFIG_GZIP_COMPRESS_DEF_SZ) ?
-					CONFIG_GZIP_COMPRESS_DEF_SZ : *lenp;
+			left_len = (*lenp > CFG_GZIP_COMPRESS_DEF_SZ) ?
+					CFG_GZIP_COMPRESS_DEF_SZ : *lenp;
 			s.next_out = dst;
 			s.avail_out = left_len;
 			r = deflate(&s, flush);

@@ -22,16 +22,16 @@
 #ifndef __ZFS_COMMON__
 #define __ZFS_COMMON__
 
+#include <part.h>
+
 #define SECTOR_SIZE			0x200
 #define SECTOR_BITS			9
-
 
 typedef enum zfs_endian {
 	UNKNOWN_ENDIAN = -2,
 	LITTLE_ENDIAN = -1,
 	BIG_ENDIAN = 0
 } zfs_endian_t;
-
 
 /* Endian macros. */
 #define zfs_to_cpu16(x, a) (((a) == BIG_ENDIAN) ? be16_to_cpu(x) \
@@ -49,7 +49,6 @@ typedef enum zfs_endian {
 #define cpu_to_zfs64(x, a) (((a) == BIG_ENDIAN) ? cpu_to_be64(x) \
 								: cpu_to_le64(x))
 
-
 enum zfs_errors {
 	ZFS_ERR_NONE = 0,
 	ZFS_ERR_NOT_IMPLEMENTED_YET = -1,
@@ -63,7 +62,7 @@ enum zfs_errors {
 struct zfs_filesystem {
 
 	/* Block Device Descriptor */
-	block_dev_desc_t *dev_desc;
+	struct blk_desc *dev_desc;
 };
 
 struct device_s {
@@ -87,9 +86,6 @@ struct zfs_dirhook_info {
 	time_t mtime2;
 };
 
-
-
-
 struct zfs_filesystem *zfsget_fs(void);
 int zfs_open(zfs_file_t, const char *filename);
 uint64_t zfs_read(zfs_file_t, char *buf, uint64_t len);
@@ -98,7 +94,7 @@ int zfs_close(zfs_file_t);
 int zfs_ls(device_t dev, const char *path,
 		   int (*hook) (const char *, const struct zfs_dirhook_info *));
 int zfs_devread(int sector, int byte_offset, int byte_len, char *buf);
-void zfs_set_blk_dev(block_dev_desc_t *rbdd, disk_partition_t *info);
+void zfs_set_blk_dev(struct blk_desc *rbdd, struct disk_partition *info);
 void zfs_unmount(struct zfs_data *data);
 int lzjb_decompress(void *, void *, uint32_t, uint32_t);
 #endif

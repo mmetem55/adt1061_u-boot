@@ -14,7 +14,6 @@
 #ifndef __UBOOT_UBI_H
 #define __UBOOT_UBI_H
 
-#include <common.h>
 #include <compiler.h>
 #include <linux/compat.h>
 #include <malloc.h>
@@ -32,36 +31,7 @@
 #include <onenand_uboot.h>
 #endif
 
-#include <asm/errno.h>
-
-/* configurable */
-#if !defined(CONFIG_MTD_UBI_WL_THRESHOLD)
-#define CONFIG_MTD_UBI_WL_THRESHOLD	4096
-#endif
-#define CONFIG_MTD_UBI_BEB_RESERVE	1
-
-/* debug options (Linux: drivers/mtd/ubi/Kconfig.debug) */
-#undef CONFIG_MTD_UBI_DEBUG
-#undef CONFIG_MTD_UBI_DEBUG_PARANOID
-#undef CONFIG_MTD_UBI_DEBUG_MSG
-#undef CONFIG_MTD_UBI_DEBUG_MSG_EBA
-#undef CONFIG_MTD_UBI_DEBUG_MSG_WL
-#undef CONFIG_MTD_UBI_DEBUG_MSG_IO
-#undef CONFIG_MTD_UBI_DEBUG_MSG_BLD
-
-#undef CONFIG_MTD_UBI_BLOCK
-
-/* ubi_init() disables returning error codes when built into the Linux
- * kernel so that it doesn't hang the Linux kernel boot process.  Since
- * the U-Boot driver code depends on getting valid error codes from this
- * function we just tell the UBI layer that we are building as a module
- * (which only enables the additional error reporting).
- */
-#define CONFIG_MTD_UBI_MODULE
-
-#if !defined(CONFIG_MTD_UBI_BEB_LIMIT)
-#define CONFIG_MTD_UBI_BEB_LIMIT	20
-#endif
+#include <linux/errno.h>
 
 /* build.c */
 #define get_device(...)
@@ -74,13 +44,116 @@
 #endif
 
 /* functions */
-extern int ubi_mtd_param_parse(const char *val, struct kernel_param *kp);
-extern int ubi_init(void);
-extern void ubi_exit(void);
-extern int ubi_part(char *part_name, const char *vid_header_offset);
-extern int ubi_volume_write(char *volume, void *buf, size_t size);
-extern int ubi_volume_read(char *volume, char *buf, size_t size);
+int ubi_mtd_param_parse(const char *val, struct kernel_param *kp);
+int ubi_init(void);
+void ubi_exit(void);
+
+/**
+ * ubi_detach() - detach UBI from MTD partition
+ *
+ * This function performs the cleanup of the UBI subsystem to make sure the
+ * MTD partition can be safely used for another purpose, or be attached again
+ * with ubi_part().
+ *
+ * Any mounted UBIFS will be unmounted automatically.
+ *
+ * Return: 0
+ */
+int ubi_detach(void);
+
+/**
+ * ubi_part() - attach UBI to MTD partition
+ * @part_name: name of the MTD partition to attach
+ * @vid_header_offset: VID header offset (string)
+ *
+ * This function detaches any existing UBI device, then probes for the
+ * specified MTD partition, and then scans it to initialize UBI.
+ *
+ * @vid_header_offset is optional and is usually set to NULL.
+ *
+ * Return: 0 on success, or -ve on error.
+ */
+int ubi_part(const char *part_name, const char *vid_header_offset);
+
+/**
+ * ubi_volume_write() - write data to UBI volume
+ * @volume: name of the volume to write to
+ * @buf: data buffer to be written
+ * @offset: start offset for writing
+ * @size: number of bytes to write
+ *
+ * This function writes data to the specific UBI volume. If the offset is zero,
+ * it initiates a full volume update. Otherwise, it performs an offset-based
+ * write using LEB changes.
+ *
+ * Return: 0 on success, or -ve on error.
+ */
+int ubi_volume_write(const char *volume, const void *buf, loff_t offset,
+		     size_t size);
+
+/**
+ * ubi_volume_read() - read data from UBI volume
+ * @volume: name of the volume to read from
+ * @buf: buffer to hold the read data
+ * @offset: start offset for reading
+ * @size: number of bytes to read
+ *
+ * This function reads data from the specified UBI volume. If @size is zero,
+ * the function reads the entire volume content starting from @offset.
+ *
+ * Return: 0 on success, or -ve on error.
+ */
+int ubi_volume_read(const char *volume, void *buf, loff_t offset, size_t size);
+
+/**
+ * ubi_create_vol() - create UBI volume
+ * @volume: name of the volume to create
+ * @size: size of the volume in bytes
+ * @dynamic: create dynamic volume if set to true
+ * @vol_id: volume ID
+ * @skipcheck: skip CRC check on this volume if set to true
+ *
+ * This function creates a new UBI volume with the specified parameters.
+ * If @size is negative, all available space will be used.
+ * For volume ID auto assignment, pass %UBI_VOL_NUM_AUTO to @vol_id.
+ *
+ * Return: 0 on success, or -ve on error.
+ */
+int ubi_create_vol(const char *volume, int64_t size, bool dynamic, int vol_id,
+		   bool skipcheck);
+
+/**
+ * ubi_find_volume() - find UBI volume by name
+ * @volume: name of the volume to find
+ *
+ * This function searches for a UBI volume with the specified name in the
+ * current UBI device.
+ *
+ * Return: pointer to the UBI volume structure, or %NULL if not found.
+ */
+struct ubi_volume *ubi_find_volume(const char *volume);
+
+/**
+ * ubi_remove_vol() - remove UBI volume
+ * @volume: name of the volume to remove
+ *
+ * This function removes an existing UBI volume from the current UBI device.
+ *
+ * Return: 0 on success, or -ve on error.
+ */
+int ubi_remove_vol(const char *volume);
 
 extern struct ubi_device *ubi_devices[];
+int cmd_ubifs_mount(const char *vol_name);
+int cmd_ubifs_umount(void);
+
+#if IS_ENABLED(CONFIG_UBI_BLOCK)
+int ubi_bind(struct udevice *dev, struct udevice **bdevp);
+#else
+static inline int ubi_bind(struct udevice *dev, struct udevice **bdevp)
+{
+	return -EOPNOTSUPP;
+}
+#endif
 
 #endif

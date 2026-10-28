@@ -1,7 +1,7 @@
 /*
  * mux.c
  *
- * Copyright (C) 2011 Texas Instruments Incorporated - http://www.ti.com/
+ * Copyright (C) 2011 Texas Instruments Incorporated - https://www.ti.com/
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -13,12 +13,13 @@
  * GNU General Public License for more details.
  */
 
-#include <common.h>
+#include <config.h>
 #include <asm/arch/sys_proto.h>
 #include <asm/arch/hardware.h>
 #include <asm/arch/mux.h>
 #include <asm/io.h>
 #include <i2c.h>
+#include "../common/board_detect.h"
 #include "board.h"
 
 static struct module_pin_mux uart0_pin_mux[] = {
@@ -65,7 +66,7 @@ static struct module_pin_mux mmc0_pin_mux[] = {
 	{OFFSET(mmc0_clk), (MODE(0) | RXACTIVE | PULLUP_EN)},	/* MMC0_CLK */
 	{OFFSET(mmc0_cmd), (MODE(0) | RXACTIVE | PULLUP_EN)},	/* MMC0_CMD */
 	{OFFSET(mcasp0_aclkr), (MODE(4) | RXACTIVE)},		/* MMC0_WP */
-	{OFFSET(spi0_cs1), (MODE(5) | RXACTIVE | PULLUP_EN)},	/* MMC0_CD */
+	{OFFSET(spi0_cs1), (MODE(7) | RXACTIVE | PULLUP_EN)},	/* GPIO0_6 */
 	{-1},
 };
 
@@ -92,6 +93,10 @@ static struct module_pin_mux mmc0_pin_mux_sk_evm[] = {
 };
 
 static struct module_pin_mux mmc1_pin_mux[] = {
+	{OFFSET(gpmc_ad7), (MODE(1) | RXACTIVE | PULLUP_EN)},	/* MMC1_DAT7 */
+	{OFFSET(gpmc_ad6), (MODE(1) | RXACTIVE | PULLUP_EN)},	/* MMC1_DAT6 */
+	{OFFSET(gpmc_ad5), (MODE(1) | RXACTIVE | PULLUP_EN)},	/* MMC1_DAT5 */
+	{OFFSET(gpmc_ad4), (MODE(1) | RXACTIVE | PULLUP_EN)},	/* MMC1_DAT4 */
 	{OFFSET(gpmc_ad3), (MODE(1) | RXACTIVE | PULLUP_EN)},	/* MMC1_DAT3 */
 	{OFFSET(gpmc_ad2), (MODE(1) | RXACTIVE | PULLUP_EN)},	/* MMC1_DAT2 */
 	{OFFSET(gpmc_ad1), (MODE(1) | RXACTIVE | PULLUP_EN)},	/* MMC1_DAT1 */
@@ -119,6 +124,14 @@ static struct module_pin_mux i2c1_pin_mux[] = {
 	{-1},
 };
 
+static struct module_pin_mux i2c2_pin_mux[] = {
+	{OFFSET(uart1_ctsn), (MODE(3) | RXACTIVE |
+			PULLUDEN | PULLUP_EN | SLEWCTRL)},	/* I2C_DATA */
+	{OFFSET(uart1_rtsn), (MODE(3) | RXACTIVE |
+			PULLUDEN | PULLUP_EN | SLEWCTRL)},	/* I2C_SCLK */
+	{-1},
+};
+
 static struct module_pin_mux spi0_pin_mux[] = {
 	{OFFSET(spi0_sclk), (MODE(0) | RXACTIVE | PULLUDEN)},	/* SPI0_SCLK */
 	{OFFSET(spi0_d0), (MODE(0) | RXACTIVE |
@@ -131,6 +144,11 @@ static struct module_pin_mux spi0_pin_mux[] = {
 
 static struct module_pin_mux gpio0_7_pin_mux[] = {
 	{OFFSET(ecap0_in_pwm0_out), (MODE(7) | PULLUDEN)},	/* GPIO0_7 */
+	{-1},
+};
+
+static struct module_pin_mux gpio0_18_pin_mux[] = {
+	{OFFSET(usb0_drvvbus), (MODE(7) | PULLUDEN)},	/* GPIO0_18 */
 	{-1},
 };
 
@@ -171,7 +189,19 @@ static struct module_pin_mux mii1_pin_mux[] = {
 	{-1},
 };
 
-#ifdef CONFIG_NAND
+static struct module_pin_mux rmii1_pin_mux[] = {
+	{OFFSET(mii1_crs), MODE(1) | RXACTIVE},		/* MII1_CRS */
+	{OFFSET(mii1_rxerr), MODE(1) | RXACTIVE},	/* MII1_RXERR */
+	{OFFSET(mii1_txen), MODE(1)},			/* MII1_TXEN */
+	{OFFSET(mii1_txd1), MODE(1)},			/* MII1_TXD1 */
+	{OFFSET(mii1_txd0), MODE(1)},			/* MII1_TXD0 */
+	{OFFSET(mii1_rxd1), MODE(1) | RXACTIVE},	/* MII1_RXD1 */
+	{OFFSET(mii1_rxd0), MODE(1) | RXACTIVE},	/* MII1_RXD0 */
+	{OFFSET(rmii1_refclk), MODE(0) | RXACTIVE},	/* RMII1_REFCLK */
+	{-1},
+};
+
+#ifdef CONFIG_MTD_RAW_NAND
 static struct module_pin_mux nand_pin_mux[] = {
 	{OFFSET(gpmc_ad0),	(MODE(0) | PULLUDDIS | RXACTIVE)}, /* AD0  */
 	{OFFSET(gpmc_ad1),	(MODE(0) | PULLUDDIS | RXACTIVE)}, /* AD1  */
@@ -236,6 +266,53 @@ static struct module_pin_mux bone_norcape_pin_mux[] = {
 };
 #endif
 
+static struct module_pin_mux uart3_icev2_pin_mux[] = {
+	{OFFSET(mii1_rxd3), (MODE(1) | PULLUP_EN | RXACTIVE)},	/* UART3_RXD */
+	{OFFSET(mii1_rxd2), MODE(1) | PULLUDEN},		/* UART3_TXD */
+	{-1},
+};
+
+#if (IS_ENABLED(CONFIG_AM335X_LCD))
+static struct module_pin_mux lcd_pin_mux[] = {
+	{OFFSET(lcd_data0), (MODE(0))},		/* LCD-Data(0) */
+	{OFFSET(lcd_data1), (MODE(0))},		/* LCD-Data(1) */
+	{OFFSET(lcd_data2), (MODE(0))},		/* LCD-Data(2) */
+	{OFFSET(lcd_data3), (MODE(0))},		/* LCD-Data(3) */
+	{OFFSET(lcd_data4), (MODE(0))},		/* LCD-Data(4) */
+	{OFFSET(lcd_data5), (MODE(0))},		/* LCD-Data(5) */
+	{OFFSET(lcd_data6), (MODE(0))},		/* LCD-Data(6) */
+	{OFFSET(lcd_data7), (MODE(0))},		/* LCD-Data(7) */
+	{OFFSET(lcd_data8), (MODE(0))},		/* LCD-Data(8) */
+	{OFFSET(lcd_data9), (MODE(0))},		/* LCD-Data(9) */
+	{OFFSET(lcd_data10), (MODE(0))},	/* LCD-Data(10) */
+	{OFFSET(lcd_data11), (MODE(0))},	/* LCD-Data(11) */
+	{OFFSET(lcd_data12), (MODE(0))},	/* LCD-Data(12) */
+	{OFFSET(lcd_data13), (MODE(0))},	/* LCD-Data(13) */
+	{OFFSET(lcd_data14), (MODE(0))},	/* LCD-Data(14) */
+	{OFFSET(lcd_data15), (MODE(0))},	/* LCD-Data(15) */
+	{OFFSET(gpmc_ad15), (MODE(1))},		/* LCD-Data(16) */
+	{OFFSET(gpmc_ad14), (MODE(1))},		/* LCD-Data(17) */
+	{OFFSET(gpmc_ad13), (MODE(1))},		/* LCD-Data(18) */
+	{OFFSET(gpmc_ad12), (MODE(1))},		/* LCD-Data(19) */
+	{OFFSET(gpmc_ad11), (MODE(1))},		/* LCD-Data(20) */
+	{OFFSET(gpmc_ad10), (MODE(1))},		/* LCD-Data(21) */
+	{OFFSET(gpmc_ad9), (MODE(1))},		/* LCD-Data(22) */
+	{OFFSET(gpmc_ad8), (MODE(1))},		/* LCD-Data(23) */
+	{OFFSET(lcd_vsync), (MODE(0))},		/* LCD-VSync */
+	{OFFSET(lcd_hsync), (MODE(0))},		/* LCD-HSync */
+	{OFFSET(lcd_ac_bias_en), (MODE(0))},	/* LCD-DE */
+	{OFFSET(lcd_pclk), (MODE(0))},		/* LCD-CLK */
+	{-1},
+};
+#endif
+
+#if (IS_ENABLED(CONFIG_PWM_TI_ECAP))
+static struct module_pin_mux ecap_pin_mux[] = {
+	{OFFSET(ecap0_in_pwm0_out), (MODE(0))},         /* ecap0_in_pwm0_out */
+	{-1},
+};
+#endif
+
 #if defined(CONFIG_NOR_BOOT)
 void enable_norboot_pin_mux(void)
 {
@@ -278,6 +355,11 @@ void enable_i2c0_pin_mux(void)
 	configure_module_pin_mux(i2c0_pin_mux);
 }
 
+void enable_i2c2_pin_mux(void)
+{
+	configure_module_pin_mux(i2c2_pin_mux);
+}
+
 /*
  * The AM335x GP EVM, if daughter card(s) are connected, can have 8
  * different profiles.  These profiles determine what peripherals are
@@ -302,32 +384,34 @@ void enable_i2c0_pin_mux(void)
 static unsigned short detect_daughter_board_profile(void)
 {
 	unsigned short val;
+	struct udevice *dev = NULL;
+	int rc;
 
-	if (i2c_probe(I2C_CPLD_ADDR))
+	rc = i2c_get_chip_for_busnum(0, I2C_CPLD_ADDR, 1, &dev);
+	if (rc)
 		return PROFILE_NONE;
-
-	if (i2c_read(I2C_CPLD_ADDR, CFG_REG, 1, (unsigned char *)(&val), 2))
+	rc = dm_i2c_read(dev, CFG_REG, (unsigned char *)(&val), 2);
+	if (rc)
 		return PROFILE_NONE;
-
 	return (1 << (val & PROFILE_MASK));
 }
 
-void enable_board_pin_mux(struct am335x_baseboard_id *header)
+void enable_board_pin_mux(void)
 {
 	/* Do board-specific muxes. */
-	if (board_is_bone(header)) {
+	if (board_is_bone()) {
 		/* Beaglebone pinmux */
-		configure_module_pin_mux(i2c1_pin_mux);
 		configure_module_pin_mux(mii1_pin_mux);
 		configure_module_pin_mux(mmc0_pin_mux);
-#if defined(CONFIG_NAND)
+#if defined(CONFIG_MTD_RAW_NAND)
 		configure_module_pin_mux(nand_pin_mux);
 #elif defined(CONFIG_NOR)
 		configure_module_pin_mux(bone_norcape_pin_mux);
 #else
 		configure_module_pin_mux(mmc1_pin_mux);
 #endif
-	} else if (board_is_gp_evm(header)) {
+		configure_module_pin_mux(i2c2_pin_mux);
+	} else if (board_is_gp_evm()) {
 		/* General Purpose EVM */
 		unsigned short profile = detect_daughter_board_profile();
 		configure_module_pin_mux(rgmii1_pin_mux);
@@ -336,7 +420,7 @@ void enable_board_pin_mux(struct am335x_baseboard_id *header)
 		if (profile & ~PROFILE_2)
 			configure_module_pin_mux(i2c1_pin_mux);
 		/* Profiles 2 & 3 don't have NAND */
-#ifdef CONFIG_NAND
+#ifdef CONFIG_MTD_RAW_NAND
 		if (profile & ~(PROFILE_2 | PROFILE_3))
 			configure_module_pin_mux(nand_pin_mux);
 #endif
@@ -344,30 +428,60 @@ void enable_board_pin_mux(struct am335x_baseboard_id *header)
 			configure_module_pin_mux(mmc1_pin_mux);
 			configure_module_pin_mux(spi0_pin_mux);
 		}
-	} else if (board_is_idk(header)) {
+		#if IS_ENABLED(CONFIG_AM335X_LCD)
+			configure_module_pin_mux(lcd_pin_mux);
+		#endif
+
+		#if IS_ENABLED(CONFIG_PWM_TI_ECAP)
+			configure_module_pin_mux(ecap_pin_mux);
+		#endif
+	} else if (board_is_idk()) {
 		/* Industrial Motor Control (IDK) */
 		configure_module_pin_mux(mii1_pin_mux);
 		configure_module_pin_mux(mmc0_no_cd_pin_mux);
-	} else if (board_is_evm_sk(header)) {
+	} else if (board_is_evm_sk()) {
 		/* Starter Kit EVM */
 		configure_module_pin_mux(i2c1_pin_mux);
 		configure_module_pin_mux(gpio0_7_pin_mux);
 		configure_module_pin_mux(rgmii1_pin_mux);
 		configure_module_pin_mux(mmc0_pin_mux_sk_evm);
-	} else if (board_is_bone_lt(header)) {
+	} else if (board_is_bone_lt()) {
+		if (board_is_bben()) {
+			char subtype_id = board_ti_get_config()[1];
+
+			/* SanCloud Beaglebone LT Enhanced pinmux */
+			configure_module_pin_mux(rgmii1_pin_mux);
+
+			if (subtype_id == 'L')
+				configure_module_pin_mux(spi0_pin_mux);
+		} else if (board_is_bbge()) {
+			/* Beaglebone Green Eco pinmux */
+			configure_module_pin_mux(rgmii1_pin_mux);
+		} else {
+			/* Beaglebone LT pinmux */
+			configure_module_pin_mux(mii1_pin_mux);
+		}
 		/* Beaglebone LT pinmux */
-		configure_module_pin_mux(i2c1_pin_mux);
-		configure_module_pin_mux(mii1_pin_mux);
 		configure_module_pin_mux(mmc0_pin_mux);
-#if defined(CONFIG_NAND) && defined(CONFIG_EMMC_BOOT)
+#if defined(CONFIG_MTD_RAW_NAND) && defined(CONFIG_EMMC_BOOT)
 		configure_module_pin_mux(nand_pin_mux);
 #elif defined(CONFIG_NOR) && defined(CONFIG_EMMC_BOOT)
 		configure_module_pin_mux(bone_norcape_pin_mux);
 #else
 		configure_module_pin_mux(mmc1_pin_mux);
 #endif
+		configure_module_pin_mux(i2c2_pin_mux);
+	} else if (board_is_pb()) {
+		configure_module_pin_mux(mii1_pin_mux);
+		configure_module_pin_mux(mmc0_pin_mux);
+	} else if (board_is_icev2()) {
+		configure_module_pin_mux(mmc0_pin_mux);
+		configure_module_pin_mux(gpio0_18_pin_mux);
+		configure_module_pin_mux(uart3_icev2_pin_mux);
+		configure_module_pin_mux(rmii1_pin_mux);
+		configure_module_pin_mux(spi0_pin_mux);
 	} else {
-		puts("Unknown board, cannot configure pinmux.");
-		hang();
+		/* Unknown board. We might still be able to boot. */
+		puts("Bad EEPROM or unknown board, cannot configure pinmux.");
 	}
 }

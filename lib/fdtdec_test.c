@@ -6,9 +6,9 @@
  * Copyright (c) 2011 The Chromium OS Authors.
  */
 
-#include <common.h>
+#include <command.h>
 #include <fdtdec.h>
-#include <libfdt.h>
+#include <linux/libfdt.h>
 #include <malloc.h>
 #include <os.h>
 
@@ -138,6 +138,7 @@ static int run_test(const char *aliases, const char *nodes, const char *expect)
 	}
 
 	printf("pass\n");
+	free(blob);
 	return 0;
 }
 
@@ -187,8 +188,8 @@ static int make_fdt_carveout_device(void *fdt, uint32_t na, uint32_t ns)
 	offset = CHECK(fdt_add_subnode(fdt, 0, name + 1));
 	CHECK(fdt_setprop(fdt, offset, "reg", cells, (na + ns) * sizeof(*cells)));
 
-	return fdtdec_set_carveout(fdt, name, "memory-region", 0,
-				   "framebuffer", &carveout);
+	return fdtdec_set_carveout(fdt, name, "memory-region", 0, &carveout,
+				   "framebuffer", NULL, 0, 0);
 }
 
 static int check_fdt_carveout(void *fdt, uint32_t address_cells,
@@ -212,7 +213,8 @@ static int check_fdt_carveout(void *fdt, uint32_t address_cells,
 	printf("carveout: %pap-%pap na=%u ns=%u: ", &expected.start,
 	       &expected.end, address_cells, size_cells);
 
-	CHECK(fdtdec_get_carveout(fdt, name, "memory-region", 0, &carveout));
+	CHECK(fdtdec_get_carveout(fdt, name, "memory-region", 0, &carveout,
+				  NULL, NULL, NULL, NULL));
 
 	if ((carveout.start != expected.start) ||
 	    (carveout.end != expected.end)) {
@@ -292,11 +294,12 @@ static int check_carveout(void)
 	CHECKVAL(make_fdt_carveout(fdt, FDT_SIZE, 2, 2), 0);
 	CHECKOK(check_fdt_carveout(fdt, 2, 2));
 
+	free(fdt);
 	return 0;
 }
 
-static int do_test_fdtdec(cmd_tbl_t *cmdtp, int flag, int argc,
-			  char * const argv[])
+static int do_test_fdtdec(struct cmd_tbl *cmdtp, int flag, int argc,
+			  char *const argv[])
 {
 	/* basic tests */
 	CHECKOK(run_test("", "", ""));

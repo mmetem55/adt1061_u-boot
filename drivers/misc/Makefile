@@ -1,118 +1,97 @@
+# SPDX-License-Identifier: GPL-2.0+
 #
 # (C) Copyright 2000-2007
 # Wolfgang Denk, DENX Software Engineering, wd@denx.de.
-#
-# SPDX-License-Identifier:	GPL-2.0+
-#
 
-obj-$(CONFIG_ALI152X) += ali512x.o
-obj-$(CONFIG_DS4510)  += ds4510.o
-obj-$(CONFIG_CBMEM_CONSOLE) += cbmem_console.o
-obj-$(CONFIG_CROS_EC) += cros_ec.o
-obj-$(CONFIG_CROS_EC_LPC) += cros_ec_lpc.o
+obj-$(CONFIG_$(PHASE_)MISC) += misc-uclass.o
+obj-$(CONFIG_$(PHASE_)NVMEM) += nvmem.o
+
+obj-$(CONFIG_$(PHASE_)CROS_EC) += cros_ec.o
+obj-$(CONFIG_$(PHASE_)CROS_EC_SANDBOX) += cros_ec_sandbox.o
+obj-$(CONFIG_$(PHASE_)CROS_EC_LPC) += cros_ec_lpc.o
+
+ifndef CONFIG_XPL_BUILD
+obj-$(CONFIG_SANDBOX) += sandbox_adder.o
 obj-$(CONFIG_CROS_EC_I2C) += cros_ec_i2c.o
-obj-$(CONFIG_CROS_EC_SANDBOX) += cros_ec_sandbox.o
 obj-$(CONFIG_CROS_EC_SPI) += cros_ec_spi.o
-obj-$(CONFIG_FSL_DEBUG_SERVER) += fsl_debug_server.o
-obj-$(CONFIG_FSL_IIM) += fsl_iim.o
-obj-$(CONFIG_GPIO_LED) += gpio_led.o
-obj-$(CONFIG_I2C_EEPROM) += i2c_eeprom.o
-obj-$(CONFIG_FSL_MC9SDZ60) += mc9sdz60.o
-obj-$(CONFIG_MXC_OCOTP) += mxc_ocotp.o
-obj-$(CONFIG_MXS_OCOTP) += mxs_ocotp.o
-obj-$(CONFIG_NS87308) += ns87308.o
-obj-$(CONFIG_PDSP188x) += pdsp188x.o
-ifdef CONFIG_DM_I2C
-obj-$(CONFIG_SANDBOX) += i2c_eeprom_emul.o
-endif
-obj-$(CONFIG_SMSC_LPC47M) += smsc_lpc47m.o
-obj-$(CONFIG_STATUS_LED) += status_led.o
+obj-$(CONFIG_SANDBOX) += p2sb_sandbox.o p2sb_emul.o
 obj-$(CONFIG_SANDBOX) += swap_case.o
-obj-$(CONFIG_TWL4030_LED) += twl4030_led.o
+obj-$(CONFIG_SANDBOX) += spi_eeprom_emul.o
+endif
+
+ifdef CONFIG_$(PHASE_)DM_I2C
+ifndef CONFIG_XPL_BUILD
+obj-$(CONFIG_SANDBOX) += i2c_eeprom_emul.o
+obj-$(CONFIG_USB_HUB_USB251XB) += usb251xb.o
+endif
+endif
+ifdef CONFIG_SPL_OF_PLATDATA
+ifdef CONFIG_XPL_BUILD
+obj-$(CONFIG_SANDBOX) += spltest_sandbox.o
+endif
+endif
+obj-$(CONFIG_ALTERA_SYSID) += altera_sysid.o
+obj-$(CONFIG_ATSHA204A) += atsha204a-i2c.o
+obj-$(CONFIG_CBMEM_CONSOLE) += cbmem_console.o
+obj-$(CONFIG_FSL_DEVICE_DISABLE) += fsl_devdis.o
 obj-$(CONFIG_FSL_IFC) += fsl_ifc.o
+obj-$(CONFIG_FSL_IIM) += fsl_iim.o
 obj-$(CONFIG_FSL_SEC_MON) += fsl_sec_mon.o
-obj-$(CONFIG_PCA9551_LED) += pca9551_led.o
-obj-$(CONFIG_SPRD_ADI) += adi.o check_reboot.o reset.o
-# use haptic as vibrator if sc2705 exists
-ifdef CONFIG_SPRD2705_CHARGE_IC
-obj-y += sc2705_haptic.o
-else
-ifdef CONFIG_VIBRATOR 
-obj-$(CONFIG_SPRD_ADI) += vibrator.o
+obj-$(CONFIG_$(PHASE_)FS_LOADER) += fs_loader.o
+obj-$(CONFIG_GATEWORKS_SC) += gsc.o
+obj-$(CONFIG_GXP_EEPROM) += gxp_eeprom.o
+obj-$(CONFIG_GDSYS_IOEP) += gdsys_ioep.o
+obj-$(CONFIG_GDSYS_RXAUI_CTRL) += gdsys_rxaui_ctrl.o
+obj-$(CONFIG_GDSYS_SOC) += gdsys_soc.o
+obj-$(CONFIG_IRQ) += irq-uclass.o
+obj-$(CONFIG_SANDBOX) += irq_sandbox.o irq_sandbox_test.o
+obj-$(CONFIG_$(PHASE_)I2C_EEPROM) += i2c_eeprom.o
+obj-$(CONFIG_$(PHASE_)SPI_EEPROM) += spi_eeprom.o
+obj-$(CONFIG_IHS_FPGA) += ihs_fpga.o
+obj-$(CONFIG_IMX8) += imx8/
+obj-$(CONFIG_IMX_ELE) += imx_ele/
+obj-$(CONFIG_K3_FUSE) += k3_fuse.o
+obj-$(CONFIG_MPC83XX_SERDES) += mpc83xx_serdes.o
+obj-$(CONFIG_$(PHASE_)LS2_SFP) += ls2_sfp.o
+obj-$(CONFIG_$(PHASE_)MXC_OCOTP) += mxc_ocotp.o
+obj-$(CONFIG_MXS_OCOTP) += mxs_ocotp.o
+obj-$(CONFIG_NPCM_OTP) += npcm_otp.o
+obj-$(CONFIG_NPCM_HOST) += npcm_host_intf.o
+obj-$(CONFIG_NUVOTON_NCT6102D) += nuvoton_nct6102d.o
+obj-$(CONFIG_P2SB) += p2sb-uclass.o
+obj-$(CONFIG_$(PHASE_)PWRSEQ) += pwrseq-uclass.o
+ifdef CONFIG_QFW
+obj-y += qfw.o
+obj-$(CONFIG_QFW_ACPI) += qfw_acpi.o
+obj-$(CONFIG_QFW_PIO) += qfw_pio.o
+obj-$(CONFIG_QFW_MMIO) += qfw_mmio.o
+obj-$(CONFIG_QFW_SMBIOS) += qfw_smbios.o
+obj-$(CONFIG_SANDBOX) += qfw_sandbox.o
 endif
-endif
-obj-$(CONFIG_SPRD_ADC) += sprd_adc.o
-obj-y += sprd_glb.o
-ifdef CONFIG_SPRD_AP_NORMAL_EFUSE
-obj-y += ap_public_efuse.o ap_secure_efuse.o otp_helper.o
-else
-ifdef CONFIG_SPRD_AP_IEFUSE_R1P0
-obj-y += ap_iefuse.o otp_helper.o
-else
-obj-y += ap_efuse.o otp_helper.o
-endif
-endif
-ifneq ($(CONFIG_ADIE_SC2723)$(CONFIG_ADIE_SC2723S)$(CONFIG_ADIE_SC2731)$(CONFIG_ADIE_SC2721)$(CONFIG_ADIE_SC2720)$(CONFIG_ADIE_SC2730)$(CONFIG_ADIE_UMP9620),)
-obj-y += pmic_efuse.o
-endif
-obj-y += pmic27xx_misc.o
-obj-y += sprd_led.o
-# board id for isharkl2
-ifdef CONFIG_SPRD_SOC_SP9853I
-obj-y += sprd_boardid_isharkl2.o
-endif
-# board id for sharkl2
-ifdef CONFIG_SC9833
-obj-y += sprd_boardid_sharkl2.o
-endif
-# board id for sharklj1
-ifdef CONFIG_SOC_SHARKLJ1
-obj-y += sprd_boardid_sharklj1.o
-endif
-# board id for 9820e(sharkle)
-ifdef CONFIG_SPRD_SP9820E
-obj-y += sprd_boardid_sp9820e.o
-endif
-# board id for 9832e(sharkle)
-ifdef CONFIG_SPRD_SP9832E
-obj-y += sprd_boardid_sp9832e.o
-endif
-# board id for 9850e(sharklep)
-ifdef CONFIG_SPRD_SP9850E
-obj-y += sprd_boardid_sp9850e.o
-endif
-# board id for pike2
-ifdef CONFIG_SOC_PIKE2
-obj-$(CONFIG_BOARDID_NATIVE) += sprd_boardid_pike2.o
-obj-$(CONFIG_BOARDID_ITEL) += sprd_boardid_pike2_itel.o
-endif
-# board id for 9863a(sharkl3)
-ifdef CONFIG_SOC_SHARKL3
-obj-y += sprd_boardid_sharkl3.o
-endif
-# board id for orca
-ifdef CONFIG_SOC_ORCA
-obj-y += sprd_boardid_orca.o
-endif
-ifdef CONFIG_ADIE_SC2730
-obj-y += sprd_clk_crystal_adaption.o
-endif
-ifdef CONFIG_ADIE_UMP9620
-obj-y += sprd_clk_crystal_adaption.o
-endif
-
-#rfti for shakl2
-ifdef CONFIG_SC9833
-obj-y += sprd_rfti_sharkl2.o
-endif
-
-# feature of direct access prot for sharkl5pro haps
-ifdef CONFIG_DIRECT_ACC_PROT
-obj-y += sprd_apb_direct_acc_prot.o
-endif
-
-obj-$(CONFIG_DM_SC27XX_ADC) += sc27xx_adc.o
-obj-$(CONFIG_DM_SC27XX_EFUSE) += sc27xx_efuse.o
-obj-$(CONFIG_DM_SPRD_EFUSE) += sprd_efuse.o
-obj-$(CONFIG_MISC) += misc-uclass.o
-obj-$(CONFIG_DM_SC27XX_VIBRA) += sc27xx_vibra.o
+obj-$(CONFIG_QCOM_GENI) += qcom_geni.o
+obj-$(CONFIG_$(PHASE_)ROCKCHIP_EFUSE) += rockchip-efuse.o
+obj-$(CONFIG_$(PHASE_)ROCKCHIP_OTP) += rockchip-otp.o
+obj-$(CONFIG_$(PHASE_)ROCKCHIP_IODOMAIN) += rockchip-io-domain.o
+obj-$(CONFIG_SANDBOX) += syscon_sandbox.o misc_sandbox.o
+obj-$(CONFIG_SIFIVE_OTP) += sifive-otp.o
+obj-$(CONFIG_SMSC_LPC47M) += smsc_lpc47m.o
+obj-$(CONFIG_SMSC_SIO1007) += smsc_sio1007.o
+obj-$(CONFIG_STM32MP_FUSE) += stm32mp_fuse.o
+obj-$(CONFIG_STM32_RCC) += stm32_rcc.o
+obj-$(CONFIG_SYS_DPAA_QBMAN) += fsl_portals.o
+obj-$(CONFIG_TEGRA186_BPMP) += tegra186_bpmp.o
+obj-$(CONFIG_TEGRA_CAR) += tegra_car.o
+obj-$(CONFIG_TEST_DRV) += test_drv.o
+obj-$(CONFIG_$(PHASE_)TURRIS_OMNIA_MCU) += turris_omnia_mcu.o
+obj-$(CONFIG_TWL4030_LED) += twl4030_led.o
+obj-$(CONFIG_VEXPRESS_CONFIG) += vexpress_config.o
+obj-$(CONFIG_WINBOND_W83627) += winbond_w83627.o
+obj-$(CONFIG_JZ4780_EFUSE) += jz4780_efuse.o
+obj-$(CONFIG_MICROCHIP_FLEXCOM) += microchip_flexcom.o
+obj-$(CONFIG_MPFS_SYSCONTROLLER) += mpfs_syscontroller.o
+obj-$(CONFIG_K3_AVS0) += k3_avs.o
+obj-$(CONFIG_ESM_K3) += k3_esm.o
+obj-$(CONFIG_K3_BIST) += k3_bist.o
+obj-$(CONFIG_ESM_PMIC) += esm_pmic.o
+obj-$(CONFIG_SL28CPLD) += sl28cpld.o
+obj-$(CONFIG_SPL_SOCFPGA_DT_REG) += socfpga_dtreg.o

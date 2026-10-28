@@ -1,10 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * MCF5329 Internal Memory Map
  *
  * Copyright (C) 2004-2007 Freescale Semiconductor, Inc.
  * TsiChung Liew (Tsi-Chung.Liew@freescale.com)
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #ifndef __IMMAP_5329__
@@ -52,6 +51,7 @@
 #define MMAP_SSI	0xFC0BC000
 #define MMAP_PLL	0xFC0C0000
 
+#include <linux/types.h>
 #include <asm/coldfire/crossbar.h>
 #include <asm/coldfire/edma.h>
 #include <asm/coldfire/eport.h>

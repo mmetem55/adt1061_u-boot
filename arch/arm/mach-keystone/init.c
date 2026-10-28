@@ -1,19 +1,21 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Keystone2: Architecture initialization
  *
  * (C) Copyright 2012-2014
  *     Texas Instruments Incorporated, <www.ti.com>
- *
- * SPDX-License-Identifier:     GPL-2.0+
  */
 
-#include <common.h>
+#include <cpu_func.h>
+#include <init.h>
 #include <ns16550.h>
+#include <asm/cache.h>
 #include <asm/io.h>
 #include <asm/arch/msmc.h>
 #include <asm/arch/clock.h>
 #include <asm/arch/hardware.h>
 #include <asm/arch/psc_defs.h>
+#include <linux/bitops.h>
 
 #define MAX_PCI_PORTS		2
 enum pci_mode	{
@@ -96,20 +98,79 @@ static void config_pcie_mode(int pcie_port,  enum pci_mode mode)
 	__raw_writel(val, KS2_DEVCFG);
 }
 
+static void msmc_k2hkle_common_setup(void)
+{
+	msmc_share_all_segments(KS2_MSMC_SEGMENT_C6X_0);
+	msmc_share_all_segments(K2HKLE_MSMC_SEGMENT_ARM);
+	msmc_share_all_segments(K2HKLE_MSMC_SEGMENT_NETCP);
+	msmc_share_all_segments(K2HKLE_MSMC_SEGMENT_QM_PDSP);
+	msmc_share_all_segments(K2HKLE_MSMC_SEGMENT_PCIE0);
+	msmc_share_all_segments(KS2_MSMC_SEGMENT_DEBUG);
+}
+
+static void msmc_k2hk_setup(void)
+{
+	msmc_share_all_segments(KS2_MSMC_SEGMENT_C6X_1);
+	msmc_share_all_segments(KS2_MSMC_SEGMENT_C6X_2);
+	msmc_share_all_segments(KS2_MSMC_SEGMENT_C6X_3);
+	msmc_share_all_segments(KS2_MSMC_SEGMENT_C6X_4);
+	msmc_share_all_segments(KS2_MSMC_SEGMENT_C6X_5);
+	msmc_share_all_segments(KS2_MSMC_SEGMENT_C6X_6);
+	msmc_share_all_segments(KS2_MSMC_SEGMENT_C6X_7);
+	msmc_share_all_segments(K2HKE_MSMC_SEGMENT_HYPERLINK);
+}
+
+static inline void msmc_k2l_setup(void)
+{
+	msmc_share_all_segments(KS2_MSMC_SEGMENT_C6X_1);
+	msmc_share_all_segments(KS2_MSMC_SEGMENT_C6X_2);
+	msmc_share_all_segments(KS2_MSMC_SEGMENT_C6X_3);
+	msmc_share_all_segments(K2L_MSMC_SEGMENT_PCIE1);
+}
+
+static inline void msmc_k2e_setup(void)
+{
+	msmc_share_all_segments(K2E_MSMC_SEGMENT_PCIE1);
+	msmc_share_all_segments(K2HKE_MSMC_SEGMENT_HYPERLINK);
+	msmc_share_all_segments(K2E_MSMC_SEGMENT_TSIP);
+}
+
+static void msmc_k2g_setup(void)
+{
+	msmc_share_all_segments(KS2_MSMC_SEGMENT_C6X_0);
+	msmc_share_all_segments(K2G_MSMC_SEGMENT_ARM);
+	msmc_share_all_segments(K2G_MSMC_SEGMENT_ICSS0);
+	msmc_share_all_segments(K2G_MSMC_SEGMENT_ICSS1);
+	msmc_share_all_segments(K2G_MSMC_SEGMENT_NSS);
+	msmc_share_all_segments(K2G_MSMC_SEGMENT_PCIE);
+	msmc_share_all_segments(K2G_MSMC_SEGMENT_USB);
+	msmc_share_all_segments(K2G_MSMC_SEGMENT_MLB);
+	msmc_share_all_segments(K2G_MSMC_SEGMENT_PMMC);
+	msmc_share_all_segments(K2G_MSMC_SEGMENT_DSS);
+	msmc_share_all_segments(K2G_MSMC_SEGMENT_MMC);
+	msmc_share_all_segments(KS2_MSMC_SEGMENT_DEBUG);
+}
+
 int arch_cpu_init(void)
 {
 	chip_configuration_unlock();
 	icache_enable();
 
-	msmc_share_all_segments(KS2_MSMC_SEGMENT_TETRIS);
-	msmc_share_all_segments(KS2_MSMC_SEGMENT_NETCP);
-	msmc_share_all_segments(KS2_MSMC_SEGMENT_QM_PDSP);
-	msmc_share_all_segments(KS2_MSMC_SEGMENT_PCIE0);
+	if (cpu_is_k2g()) {
+		msmc_k2g_setup();
+	} else {
+		msmc_k2hkle_common_setup();
+		if (cpu_is_k2e())
+			msmc_k2e_setup();
+		else if (cpu_is_k2l())
+			msmc_k2l_setup();
+		else
+			msmc_k2hk_setup();
+	}
 
 	/* Initialize the PCIe-0 to work as Root Complex */
 	config_pcie_mode(0, ROOTCOMPLEX);
 #if defined(CONFIG_SOC_K2E) || defined(CONFIG_SOC_K2L)
-	msmc_share_all_segments(KS2_MSMC_SEGMENT_PCIE1);
 	/* Initialize the PCIe-1 to work as Root Complex */
 	config_pcie_mode(1, ROOTCOMPLEX);
 #endif
@@ -122,13 +183,15 @@ int arch_cpu_init(void)
 	 * UART register PWREMU_MGMT is initialized. Linux UART
 	 * driver doesn't handle this.
 	 */
-	NS16550_init((NS16550_t)(CONFIG_SYS_NS16550_COM2),
-		     CONFIG_SYS_NS16550_CLK / 16 / CONFIG_BAUDRATE);
+#ifndef CONFIG_DM_SERIAL
+	ns16550_init((struct ns16550 *)(CFG_SYS_NS16550_COM2),
+		     CFG_SYS_NS16550_CLK / 16 / CONFIG_BAUDRATE);
+#endif
 
 	return 0;
 }
 
-void reset_cpu(ulong addr)
+void reset_cpu(void)
 {
 	volatile u32 *rstctrl = (volatile u32 *)(KS2_RSTCTRL);
 	u32 tmp;
@@ -144,8 +207,56 @@ void reset_cpu(ulong addr)
 
 void enable_caches(void)
 {
-#ifndef CONFIG_SYS_DCACHE_OFF
+#if !CONFIG_IS_ENABLED(SYS_DCACHE_OFF)
 	/* Enable D-cache. I-cache is already enabled in start.S */
 	dcache_enable();
 #endif
 }
+
+#if defined(CONFIG_DISPLAY_CPUINFO)
+int print_cpuinfo(void)
+{
+	u16 cpu = get_part_number();
+	u8 rev = cpu_revision();
+
+	puts("CPU: ");
+	switch (cpu) {
+	case CPU_66AK2Hx:
+		puts("66AK2Hx SR");
+		break;
+	case CPU_66AK2Lx:
+		puts("66AK2Lx SR");
+		break;
+	case CPU_66AK2Ex:
+		puts("66AK2Ex SR");
+		break;
+	case CPU_66AK2Gx:
+		puts("66AK2Gx");
+#ifdef CONFIG_SOC_K2G
+		{
+			int speed = get_max_arm_speed(speeds);
+			if (speed == SPD1000)
+				puts("-100 ");
+			else if (speed == SPD600)
+				puts("-60 ");
+			else
+				puts("-xx ");
+		}
+#endif
+		puts("SR");
+		break;
+	default:
+		puts("Unknown\n");
+	}
+
+	if (rev == 2)
+		puts("2.0\n");
+	else if (rev == 1)
+		puts("1.1\n");
+	else if (rev == 0)
+		puts("1.0\n");
+	else if (rev == 8)
+		puts("1.0\n");
+	return 0;
+}
+#endif

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * (C) Copyright 2003
  * Gerry Hamel, geh@ti.com, Texas Instruments
@@ -11,34 +12,29 @@
  *	Stuart Lynne <sl@lineo.com>,
  *	Tom Rushworth <tbr@lineo.com>,
  *	Bruce Balden <balden@lineo.com>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #ifndef __USBDCORE_H__
 #define __USBDCORE_H__
 
-#include <common.h>
 #include "usbdescriptors.h"
-
 
 #define MAX_URBS_QUEUED 5
 
-
 #if 1
-#define usberr(fmt,args...) serial_printf("ERROR: %s(), %d: "fmt"\n",__FUNCTION__,__LINE__,##args)
+#define usberr(fmt, args...) serial_printf("ERROR: %s(), %d: " fmt "\n", __func__, __LINE__, ##args)
 #else
 #define usberr(fmt,args...) do{}while(0)
 #endif
 
 #if 0
-#define usbdbg(fmt,args...) serial_printf("debug: %s(), %d: "fmt"\n",__FUNCTION__,__LINE__,##args)
+#define usbdbg(fmt, args...) serial_printf("debug: %s(), %d: " fmt "\n", __func__, __LINE__, ##args)
 #else
 #define usbdbg(fmt,args...) do{}while(0)
 #endif
 
 #if 0
-#define usbinfo(fmt,args...) serial_printf("info: %s(), %d: "fmt"\n",__FUNCTION__,__LINE__,##args)
+#define usbinfo(fmt, args...) serial_printf("info: %s(), %d: " fmt "\n", __func__, __LINE__, ##args)
 #else
 #define usbinfo(fmt,args...) do{}while(0)
 #endif
@@ -197,10 +193,6 @@ struct usb_bus_instance;
 #define USB_DT_INTERFACE		0x04
 #define USB_DT_ENDPOINT			0x05
 
-#if defined(CONFIG_USBD_HS)
-#define USB_DT_QUAL			0x06
-#endif
-
 #define USB_DT_HID			(USB_TYPE_CLASS | 0x01)
 #define USB_DT_REPORT			(USB_TYPE_CLASS | 0x02)
 #define USB_DT_PHYSICAL			(USB_TYPE_CLASS | 0x03)
@@ -265,8 +257,6 @@ struct usb_bus_instance;
 #define USB_REQ_SET_INTERFACE		0x0B
 #define USB_REQ_SYNCH_FRAME		0x0C
 
-#define USBD_DEVICE_REQUESTS(x) (((unsigned int)x <= USB_REQ_SYNCH_FRAME) ? usbd_device_requests[x] : "UNKNOWN")
-
 /*
  * HID requests
  */
@@ -277,17 +267,11 @@ struct usb_bus_instance;
 #define USB_REQ_SET_IDLE		0x0A
 #define USB_REQ_SET_PROTOCOL		0x0B
 
-
 /*
  * USB Spec Release number
  */
 
-#if defined(CONFIG_USBD_HS)
-#define USB_BCD_VERSION			0x0200
-#else
 #define USB_BCD_VERSION			0x0110
-#endif
-
 
 /*
  * Device Requests	(c.f Table 9-2)
@@ -333,16 +317,12 @@ struct usb_bus_instance;
 #define USB_DESCRIPTOR_TYPE_HID				0x21
 #define USB_DESCRIPTOR_TYPE_REPORT			0x22
 
-#define USBD_DEVICE_DESCRIPTORS(x) (((unsigned int)x <= USB_DESCRIPTOR_TYPE_INTERFACE_POWER) ? \
-		usbd_device_descriptors[x] : "UNKNOWN")
-
 /*
  * standard feature selectors
  */
 #define USB_ENDPOINT_HALT		0x00
 #define USB_DEVICE_REMOTE_WAKEUP	0x01
 #define USB_TEST_MODE			0x02
-
 
 /* USB Requests
  *
@@ -355,7 +335,6 @@ struct usb_device_request {
 	u16 wIndex;
 	u16 wLength;
 } __attribute__ ((packed));
-
 
 /* USB Status
  *
@@ -389,8 +368,6 @@ typedef enum usb_device_state {
 	STATE_UNKNOWN,		/* destroyed */
 } usb_device_state_t;
 
-#define USBD_DEVICE_STATE(x) (((unsigned int)x <= STATE_UNKNOWN) ? usbd_device_states[x] : "UNKNOWN")
-
 /*
  * Device status
  *
@@ -402,8 +379,6 @@ typedef enum usb_device_status {
 	USBD_SUSPENDED,		/* we are currently suspended */
 	USBD_CLOSING,		/* we are currently closing */
 } usb_device_status_t;
-
-#define USBD_DEVICE_STATUS(x) (((unsigned int)x <= USBD_CLOSING) ? usbd_device_status[x] : "UNKNOWN")
 
 /*
  * Device Events
@@ -438,12 +413,11 @@ typedef enum usb_device_event {
 	DEVICE_HUB_RESET,	/* bi  - bus has been unplugged */
 	DEVICE_DESTROY,		/* bi  - device instance should be destroyed */
 
-	DEVICE_HOTPLUG,		/* bi  - a hotplug event has occured */
+	DEVICE_HOTPLUG,		/* bi  - a hotplug event has occurred */
 
 	DEVICE_FUNCTION_PRIVATE,	/* function - private */
 
 } usb_device_event_t;
-
 
 typedef struct urb_link {
 	struct urb_link *next;
@@ -538,7 +512,6 @@ struct usb_configuration_instance {
 	struct usb_interface_instance *interface_instance_array;
 };
 
-
 /* USB Device Instance
  *
  * For each physical bus interface we create a logical device structure. This
@@ -562,9 +535,6 @@ struct usb_device_instance {
 	/* generic */
 	char *name;
 	struct usb_device_descriptor *device_descriptor;	/* per device descriptor */
-#if defined(CONFIG_USBD_HS)
-	struct usb_qualifier_descriptor *qualifier_descriptor;
-#endif
 
 	void (*event) (struct usb_device_instance *device, usb_device_event_t event, int data);
 
@@ -618,12 +588,6 @@ struct usb_bus_instance {
 
 };
 
-extern char *usbd_device_events[];
-extern char *usbd_device_states[];
-extern char *usbd_device_status[];
-extern char *usbd_device_requests[];
-extern char *usbd_device_descriptors[];
-
 void urb_link_init (urb_link * ul);
 void urb_detach (struct urb *urb);
 urb_link *first_urb_link (urb_link * hd);
@@ -660,14 +624,6 @@ struct usb_string_descriptor *usbd_get_string (u8);
 struct usb_device_descriptor *usbd_device_device_descriptor(struct
 		usb_device_instance *, int);
 
-#if defined(CONFIG_USBD_HS)
-/*
- * is_usbd_high_speed routine needs to be defined by specific gadget driver
- * It returns true if device enumerates at High speed
- * Retuns false otherwise
- */
-int is_usbd_high_speed(void);
-#endif
 int usbd_endpoint_halted (struct usb_device_instance *device, int endpoint);
 void usbd_rcv_complete(struct usb_endpoint_instance *endpoint, int len, int urb_bad);
 void usbd_tx_complete (struct usb_endpoint_instance *endpoint);

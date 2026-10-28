@@ -1,23 +1,14 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  *  linux/arch/arm/lib/memcpy.S
  *
  *  Author:	Nicolas Pitre
  *  Created:	Sep 28, 2005
  *  Copyright:	MontaVista Software, Inc.
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation.
  */
 
 #include <linux/linkage.h>
 #include <asm/assembler.h>
-
-#ifdef CONFIG_SYS_THUMB_BUILD
-#define W(instr)	instr.w
-#else
-#define W(instr)	instr
-#endif
 
 #define LDR1W_SHIFT	0
 #define STR1W_SHIFT	0
@@ -62,13 +53,13 @@
 
 /* Prototype: void *memcpy(void *dest, const void *src, size_t n); */
 	.syntax unified
-#ifdef CONFIG_SYS_THUMB_BUILD
+#if CONFIG_IS_ENABLED(SYS_THUMB_BUILD) && !defined(MEMCPY_NO_THUMB_BUILD)
 	.thumb
 	.thumb_func
 #endif
 ENTRY(memcpy)
 		cmp	r0, r1
-		moveq	pc, lr
+		reteq	lr
 
 		enter	r4, lr
 
@@ -156,7 +147,8 @@ ENTRY(memcpy)
 		str1b	r0, r4, cs, abort=21f
 		str1b	r0, ip, cs, abort=21f
 
-		exit	r4, pc
+		exit	r4, lr
+		ret	lr
 
 9:		rsb	ip, ip, #4
 		cmp	ip, #2
@@ -218,7 +210,7 @@ ENTRY(memcpy)
 		orr	r9, r9, ip, lspush #\push
 		mov	ip, ip, lspull #\pull
 		orr	ip, ip, lr, lspush #\push
-		str8w	r0, r3, r4, r5, r6, r7, r8, r9, ip, , abort=19f
+		str8w	r0, r3, r4, r5, r6, r7, r8, r9, ip, abort=19f
 		bge	12b
 	PLD(	cmn	r2, #96			)
 	PLD(	bge	13b			)
@@ -265,7 +257,8 @@ ENTRY(memcpy)
 	.endm
 
 	.macro	copy_abort_end
-	ldmfd	sp!, {r4, pc}
+	ldmfd	sp!, {r4, lr}
+	ret	lr
 	.endm
 
 ENDPROC(memcpy)

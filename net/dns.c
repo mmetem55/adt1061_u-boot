@@ -22,8 +22,9 @@
  * this stuff is worth it, you can buy me a beer in return.
  */
 
-#include <common.h>
 #include <command.h>
+#include <env.h>
+#include <log.h>
 #include <net.h>
 #include <asm/unaligned.h>
 
@@ -33,6 +34,16 @@ char *net_dns_resolve;	/* The host to resolve  */
 char *net_dns_env_var;	/* The envvar to store the answer in */
 
 static int dns_our_port;
+
+/*
+ * make port a little random (1024-17407)
+ * This keeps the math somewhat trivial to compute, and seems to work with
+ * all supported protocols/clients/servers
+ */
+static unsigned int random_port(void)
+{
+	return 1024 + (get_timer(0) % 0x4000);
+}
 
 static void dns_send(void)
 {
@@ -110,7 +121,6 @@ static void dns_handler(uchar *pkt, unsigned dest, struct in_addr sip,
 	char ip_str[22];
 	struct in_addr ip_addr;
 
-
 	debug("%s\n", __func__);
 	if (dest != dns_our_port)
 		return;
@@ -184,7 +194,7 @@ static void dns_handler(uchar *pkt, unsigned dest, struct in_addr sip,
 			ip_to_string(ip_addr, ip_str);
 			printf("%s\n", ip_str);
 			if (net_dns_env_var)
-				setenv(net_dns_env_var, ip_str);
+				env_set(net_dns_env_var, ip_str);
 		} else {
 			puts("server responded with invalid IP number\n");
 		}

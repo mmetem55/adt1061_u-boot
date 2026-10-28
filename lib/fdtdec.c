@@ -1,24 +1,41 @@
 // SPDX-License-Identifier: GPL-2.0+
 /*
  * Copyright (c) 2011 The Chromium OS Authors.
+ *
+ * NOTE: Please do not add new devicetree-reading functionality into this file.
+ * Add it to the ofnode API instead, since that is compatible with livetree.
  */
 
 #ifndef USE_HOSTCC
-//#undef DEBUG
 
-#include <common.h>
+#define LOG_CATEGORY	LOGC_DT
+
+#include <bloblist.h>
 #include <boot_fit.h>
+#include <display_options.h>
 #include <dm.h>
-#include <dm/of_extra.h>
+#include <hang.h>
+#include <init.h>
+#include <log.h>
+#include <malloc.h>
+#include <net.h>
+#include <spl.h>
+#include <env.h>
 #include <errno.h>
 #include <fdtdec.h>
 #include <fdt_support.h>
+#include <gzip.h>
 #include <mapmem.h>
-#include <libfdt.h>
+#include <linux/libfdt.h>
 #include <serial.h>
+#include <asm/global_data.h>
 #include <asm/sections.h>
+#include <dm/ofnode.h>
+#include <dm/of_extra.h>
 #include <linux/ctype.h>
 #include <linux/lzo.h>
+#include <linux/ioport.h>
+#include <asm/global_data.h>
 
 DECLARE_GLOBAL_DATA_PTR;
 
@@ -40,8 +57,6 @@ static const char * const compat_names[COMPAT_COUNT] = {
 	COMPAT(NVIDIA_TEGRA20_NAND, "nvidia,tegra20-nand"),
 	COMPAT(NVIDIA_TEGRA124_XUSB_PADCTL, "nvidia,tegra124-xusb-padctl"),
 	COMPAT(NVIDIA_TEGRA210_XUSB_PADCTL, "nvidia,tegra210-xusb-padctl"),
-	COMPAT(SMSC_LAN9215, "smsc,lan9215"),
-	COMPAT(SAMSUNG_EXYNOS5_SROMC, "samsung,exynos-sromc"),
 	COMPAT(SAMSUNG_EXYNOS_USB_PHY, "samsung,exynos-usb-phy"),
 	COMPAT(SAMSUNG_EXYNOS5_USB3_PHY, "samsung,exynos5250-usb3-phy"),
 	COMPAT(SAMSUNG_EXYNOS_TMU, "samsung,exynos-tmu"),
@@ -57,7 +72,6 @@ static const char * const compat_names[COMPAT_COUNT] = {
 	COMPAT(INTEL_BAYTRAIL_FSP, "intel,baytrail-fsp"),
 	COMPAT(INTEL_BAYTRAIL_FSP_MDP, "intel,baytrail-fsp-mdp"),
 	COMPAT(INTEL_IVYBRIDGE_FSP, "intel,ivybridge-fsp"),
-	COMPAT(COMPAT_SUNXI_NAND, "allwinner,sun4i-a10-nand"),
 	COMPAT(ALTERA_SOCFPGA_CLK, "altr,clk-mgr"),
 	COMPAT(ALTERA_SOCFPGA_PINCTRL_SINGLE, "pinctrl-single"),
 	COMPAT(ALTERA_SOCFPGA_H2F_BRG, "altr,socfpga-hps2fpga-bridge"),
@@ -70,6 +84,37 @@ static const char * const compat_names[COMPAT_COUNT] = {
 	COMPAT(ALTERA_SOCFPGA_NOC, "altr,socfpga-a10-noc"),
 	COMPAT(ALTERA_SOCFPGA_CLK_INIT, "altr,socfpga-a10-clk-init")
 };
+
+static const char *const fdt_src_name[] = {
+	[FDTSRC_SEPARATE] = "separate",
+	[FDTSRC_FIT] = "fit",
+	[FDTSRC_BOARD] = "board",
+	[FDTSRC_EMBED] = "embed",
+	[FDTSRC_ENV] = "env",
+	[FDTSRC_BLOBLIST] = "bloblist",
+};
+
+extern u8 __dtb_dt_begin[];	/* embedded device tree blob */
+extern u8 __dtb_dt_spl_begin[];	/* embedded device tree blob for SPL/TPL */
+
+/* Get a pointer to the embedded devicetree, if there is one, else NULL */
+static u8 *dtb_dt_embedded(void)
+{
+	u8 *addr = NULL;
+
+	if (IS_ENABLED(CONFIG_OF_EMBED)) {
+		addr = __dtb_dt_begin;
+
+		if (IS_ENABLED(CONFIG_XPL_BUILD))
+			addr = __dtb_dt_spl_begin;
+	}
+	return addr;
+}
+
+const char *fdtdec_get_srcname(void)
+{
+	return fdt_src_name[gd->fdt_src];
+}
 
 const char *fdtdec_get_compatible(enum fdt_compat_id id)
 {
@@ -185,61 +230,6 @@ fdt_addr_t fdtdec_get_addr(const void *blob, int node, const char *prop_name)
 	return fdtdec_get_addr_size(blob, node, prop_name, NULL);
 }
 
-#if CONFIG_IS_ENABLED(PCI) && defined(CONFIG_DM_PCI)
-int fdtdec_get_pci_addr(const void *blob, int node, enum fdt_pci_space type,
-			const char *prop_name, struct fdt_pci_addr *addr)
-{
-	const u32 *cell;
-	int len;
-	int ret = -ENOENT;
-
-	debug("%s: %s: ", __func__, prop_name);
-
-	/*
-	 * If we follow the pci bus bindings strictly, we should check
-	 * the value of the node's parent node's #address-cells and
-	 * #size-cells. They need to be 3 and 2 accordingly. However,
-	 * for simplicity we skip the check here.
-	 */
-	cell = fdt_getprop(blob, node, prop_name, &len);
-	if (!cell)
-		goto fail;
-
-	if ((len % FDT_PCI_REG_SIZE) == 0) {
-		int num = len / FDT_PCI_REG_SIZE;
-		int i;
-
-		for (i = 0; i < num; i++) {
-			debug("pci address #%d: %08lx %08lx %08lx\n", i,
-			      (ulong)fdt32_to_cpu(cell[0]),
-			      (ulong)fdt32_to_cpu(cell[1]),
-			      (ulong)fdt32_to_cpu(cell[2]));
-			if ((fdt32_to_cpu(*cell) & type) == type) {
-				addr->phys_hi = fdt32_to_cpu(cell[0]);
-				addr->phys_mid = fdt32_to_cpu(cell[1]);
-				addr->phys_lo = fdt32_to_cpu(cell[1]);
-				break;
-			}
-
-			cell += (FDT_PCI_ADDR_CELLS +
-				 FDT_PCI_SIZE_CELLS);
-		}
-
-		if (i == num) {
-			ret = -ENXIO;
-			goto fail;
-		}
-
-		return 0;
-	}
-
-	ret = -EINVAL;
-
-fail:
-	debug("(not found)\n");
-	return ret;
-}
-
 int fdtdec_get_pci_vendev(const void *blob, int node, u16 *vendor, u16 *device)
 {
 	const char *list, *end;
@@ -276,7 +266,7 @@ int fdtdec_get_pci_vendev(const void *blob, int node, u16 *vendor, u16 *device)
 	return -ENOENT;
 }
 
-int fdtdec_get_pci_bar32(struct udevice *dev, struct fdt_pci_addr *addr,
+int fdtdec_get_pci_bar32(const struct udevice *dev, struct fdt_pci_addr *addr,
 			 u32 *bar)
 {
 	int barnum;
@@ -287,16 +277,32 @@ int fdtdec_get_pci_bar32(struct udevice *dev, struct fdt_pci_addr *addr,
 		return -EINVAL;
 
 	barnum = (barnum - PCI_BASE_ADDRESS_0) / 4;
+
 	*bar = dm_pci_read_bar32(dev, barnum);
 
 	return 0;
 }
-#endif
+
+int fdtdec_get_pci_bus_range(const void *blob, int node,
+			     struct fdt_resource *res)
+{
+	const u32 *values;
+	int len;
+
+	values = fdt_getprop(blob, node, "bus-range", &len);
+	if (!values || len < sizeof(*values) * 2)
+		return -EINVAL;
+
+	res->start = fdt32_to_cpu(*values++);
+	res->end = fdt32_to_cpu(*values);
+
+	return 0;
+}
 
 uint64_t fdtdec_get_uint64(const void *blob, int node, const char *prop_name,
 			   uint64_t default_val)
 {
-	const uint64_t *cell64;
+	const unaligned_fdt64_t *cell64;
 	int length;
 
 	cell64 = fdt_getprop(blob, node, prop_name, &length);
@@ -436,7 +442,7 @@ int fdtdec_add_aliases_for_id(const void *blob, const char *name,
 			continue;
 
 		/* Get the alias number */
-		number = simple_strtoul(path + name_len, NULL, 10);
+		number = dectoul(path + name_len, NULL);
 		if (number < 0 || number >= maxcount) {
 			debug("%s: warning: alias '%s' is out of range\n",
 			      __func__, path);
@@ -532,6 +538,17 @@ int fdtdec_get_alias_seq(const void *blob, const char *base, int offset,
 		slash = strrchr(prop, '/');
 		if (strcmp(slash + 1, find_name))
 			continue;
+
+		/*
+		 * Adding an extra check to distinguish DT nodes with
+		 * same name
+		 */
+		if (IS_ENABLED(CONFIG_PHANDLE_CHECK_SEQ)) {
+			if (fdt_get_phandle(blob, offset) !=
+			    fdt_get_phandle(blob, fdt_path_offset(blob, prop)))
+				continue;
+		}
+
 		val = trailing_strtol(name);
 		if (val != -1) {
 			*seqp = val;
@@ -597,6 +614,34 @@ int fdtdec_get_chosen_node(const void *blob, const char *name)
 	return fdt_path_offset(blob, prop);
 }
 
+/**
+ * fdtdec_prepare_fdt() - Check we have a valid fdt available to control U-Boot
+ *
+ * @blob: Blob to check
+ *
+ * If not, a message is printed to the console if the console is ready.
+ *
+ * Return: 0 if all ok, -ENOENT if not
+ */
+static int fdtdec_prepare_fdt(const void *blob)
+{
+	if (!blob || ((uintptr_t)blob & 3) || fdt_check_header(blob)) {
+		if (xpl_phase() <= PHASE_SPL) {
+			puts("Missing DTB\n");
+		} else {
+			printf("No valid device tree binary found at %p\n",
+			       blob);
+			if (_DEBUG && blob) {
+				printf("fdt_blob=%p\n", blob);
+				print_buffer((ulong)blob, blob, 4, 32, 0);
+			}
+		}
+		return -ENOENT;
+	}
+
+	return 0;
+}
+
 int fdtdec_check_fdt(void)
 {
 	/*
@@ -605,33 +650,7 @@ int fdtdec_check_fdt(void)
 	 * FDT (prior to console ready) will need to make their own
 	 * arrangements and do their own checks.
 	 */
-	assert(!fdtdec_prepare_fdt());
-	return 0;
-}
-
-/*
- * This function is a little odd in that it accesses global data. At some
- * point if the architecture board.c files merge this will make more sense.
- * Even now, it is common code.
- */
-int fdtdec_prepare_fdt(void)
-{
-	if (!gd->fdt_blob || ((uintptr_t)gd->fdt_blob & 3) ||
-	    fdt_check_header(gd->fdt_blob)) {
-#ifdef CONFIG_SPL_BUILD
-		puts("Missing DTB\n");
-#else
-		puts("No valid device tree binary found - please append one to U-Boot binary, use u-boot-dtb.bin or define CONFIG_OF_EMBED. For sandbox, use -d <file.dtb>\n");
-# ifdef DEBUG
-		if (gd->fdt_blob) {
-			printf("fdt_blob=%p\n", gd->fdt_blob);
-			print_buffer((ulong)gd->fdt_blob, gd->fdt_blob, 4,
-				     32, 0);
-		}
-# endif
-#endif
-		return -1;
-	}
+	assert(!fdtdec_prepare_fdt(gd->fdt_blob));
 	return 0;
 }
 
@@ -640,7 +659,7 @@ int fdtdec_lookup_phandle(const void *blob, int node, const char *prop_name)
 	const u32 *phandle;
 	int lookup;
 
-	//debug("%s: %s\n", __func__, prop_name);
+	debug("%s: %s\n", __func__, prop_name);
 	phandle = fdt_getprop(blob, node, prop_name, NULL);
 	if (!phandle)
 		return -FDT_ERR_NOTFOUND;
@@ -658,7 +677,7 @@ int fdtdec_lookup_phandle(const void *blob, int node, const char *prop_name)
  * @param min_len	minimum property length in bytes
  * @param err		0 if ok, or -FDT_ERR_NOTFOUND if the property is not
 			found, or -FDT_ERR_BADLAYOUT if not enough data
- * @return pointer to cell, which is only valid if err == 0
+ * Return: pointer to cell, which is only valid if err == 0
  */
 static const void *get_prop_check_min_len(const void *blob, int node,
 					  const char *prop_name, int min_len,
@@ -692,6 +711,24 @@ int fdtdec_get_int_array(const void *blob, int node, const char *prop_name,
 
 		for (i = 0; i < count; i++)
 			array[i] = fdt32_to_cpu(cell[i]);
+	}
+	return err;
+}
+
+int fdtdec_get_long_array(const void *blob, int node, const char *prop_name,
+			 u64 *array, int count)
+{
+	const u64 *cell;
+	int err = 0;
+
+	debug("%s: %s\n", __func__, prop_name);
+	cell = get_prop_check_min_len(blob, node, prop_name,
+				      sizeof(u64) * count, &err);
+	if (!err) {
+		int i;
+
+		for (i = 0; i < count; i++)
+			array[i] = fdt64_to_cpu(cell[i]);
 	}
 	return err;
 }
@@ -778,7 +815,7 @@ int fdtdec_parse_phandle_with_args(const void *blob, int src_node,
 			if (cells_name || cur_index == index) {
 				node = fdt_node_offset_by_phandle(blob,
 								  phandle);
-				if (!node) {
+				if (node < 0) {
 					debug("%s: could not find phandle\n",
 					      fdt_get_name(blob, src_node,
 							   NULL));
@@ -861,17 +898,6 @@ int fdtdec_parse_phandle_with_args(const void *blob, int src_node,
 	return rc;
 }
 
-int fdtdec_get_child_count(const void *blob, int node)
-{
-	int subnode;
-	int num = 0;
-
-	fdt_for_each_subnode(subnode, blob, node)
-		num++;
-
-	return num;
-}
-
 int fdtdec_get_byte_array(const void *blob, int node, const char *prop_name,
 			  u8 *array, int count)
 {
@@ -894,86 +920,6 @@ const u8 *fdtdec_locate_byte_array(const void *blob, int node,
 	if (err)
 		return NULL;
 	return cell;
-}
-
-int fdtdec_get_config_int(const void *blob, const char *prop_name,
-			  int default_val)
-{
-	int config_node;
-
-	debug("%s: %s\n", __func__, prop_name);
-	config_node = fdt_path_offset(blob, "/config");
-	if (config_node < 0)
-		return default_val;
-	return fdtdec_get_int(blob, config_node, prop_name, default_val);
-}
-
-int fdtdec_get_config_bool(const void *blob, const char *prop_name)
-{
-	int config_node;
-	const void *prop;
-
-	debug("%s: %s\n", __func__, prop_name);
-	config_node = fdt_path_offset(blob, "/config");
-	if (config_node < 0)
-		return 0;
-	prop = fdt_get_property(blob, config_node, prop_name, NULL);
-
-	return prop != NULL;
-}
-
-char *fdtdec_get_config_string(const void *blob, const char *prop_name)
-{
-	const char *nodep;
-	int nodeoffset;
-	int len;
-
-	debug("%s: %s\n", __func__, prop_name);
-	nodeoffset = fdt_path_offset(blob, "/config");
-	if (nodeoffset < 0)
-		return NULL;
-
-	nodep = fdt_getprop(blob, nodeoffset, prop_name, &len);
-	if (!nodep)
-		return NULL;
-
-	return (char *)nodep;
-}
-
-int fdtdec_decode_region(const void *blob, int node, const char *prop_name,
-			 fdt_addr_t *basep, fdt_size_t *sizep)
-{
-	const fdt_addr_t *cell;
-	int len;
-
-	/*
-	debug("%s: %s: %s\n", __func__, fdt_get_name(blob, node, NULL),
-	      prop_name);
-	*/
-	cell = fdt_getprop(blob, node, prop_name, &len);
-	if (!cell || (len < sizeof(fdt_addr_t) * 2)) {
-		debug("cell=%p, len=%d\n", cell, len);
-		return -1;
-	}
-/*
-In x86 ,we need to read 32bit address from 64bit dts for lcd frambuffer.
-*/
-#ifdef CONFIG_X86
-	*basep = fdt_addr_to_cpu(cell[1]);
-	*sizep = fdt_size_to_cpu(cell[3]);
-#else
-	/*in sharklj1 "cell" are not aligned in 8 bytes, this will cause "Synchronous Abort",
-	so we use a temporary array to force align*/
-	ulong temp[2] = {0};
-	memcpy((void *)temp, (void *)cell, 2 * sizeof(ulong));
-	*basep = fdt_addr_to_cpu(temp[0]);
-	*sizep = fdt_size_to_cpu(temp[1]);
-#endif
-	/*
-	debug(format, arg...)("%s: base=%08lx, size=%lx\n", __func__, (ulong)*basep,
-	      (ulong)*sizep);
-	*/
-	return 0;
 }
 
 u64 fdtdec_get_number(const fdt32_t *ptr, unsigned int cells)
@@ -1008,7 +954,11 @@ int fdt_get_resource(const void *fdt, int node, const char *property,
 
 	while (ptr + na + ns <= end) {
 		if (i == index) {
-			res->start = fdtdec_get_number(ptr, na);
+			if (CONFIG_IS_ENABLED(OF_TRANSLATE))
+				res->start = fdt_translate_address(fdt, node, ptr);
+			else
+				res->start = fdtdec_get_number(ptr, na);
+
 			res->end = res->start;
 			res->end += fdtdec_get_number(&ptr[na], ns) - 1;
 			return 0;
@@ -1126,18 +1076,19 @@ int fdtdec_decode_display_timing(const void *blob, int parent, int index,
 	return ret;
 }
 
-int fdtdec_setup_mem_size_base_fdt(const void *blob)
+int fdtdec_setup_mem_size_base(void)
 {
-	int ret, mem;
-	struct fdt_resource res;
+	int ret;
+	ofnode mem;
+	struct resource res;
 
-	mem = fdt_path_offset(blob, "/memory");
-	if (mem < 0) {
+	mem = ofnode_path("/memory");
+	if (!ofnode_valid(mem)) {
 		debug("%s: Missing /memory node\n", __func__);
 		return -EINVAL;
 	}
 
-	ret = fdt_get_resource(blob, mem, "reg", 0, &res);
+	ret = ofnode_read_resource(mem, 0, &res);
 	if (ret != 0) {
 		debug("%s: Unable to decode first memory bank\n", __func__);
 		return -EINVAL;
@@ -1145,97 +1096,131 @@ int fdtdec_setup_mem_size_base_fdt(const void *blob)
 
 	gd->ram_size = (phys_size_t)(res.end - res.start + 1);
 	gd->ram_base = (unsigned long)res.start;
-	debug("%s: Initial DRAM size %llx\n", __func__,
-	      (unsigned long long)gd->ram_size);
+	debug("%s: Initial DRAM size %pap\n", __func__, &gd->ram_size);
 
 	return 0;
 }
 
-int fdtdec_setup_mem_size_base(void)
-{
-	return fdtdec_setup_mem_size_base_fdt(gd->fdt_blob);
-}
-
-#if defined(CONFIG_NR_DRAM_BANKS)
-
-static int get_next_memory_node(const void *blob, int mem)
+static ofnode get_next_memory_node(ofnode mem)
 {
 	do {
-		mem = fdt_node_offset_by_prop_value(blob, mem,
-						    "device_type", "memory", 7);
-	} while (!fdtdec_get_is_enabled(blob, mem));
+		mem = ofnode_by_prop_value(mem, "device_type", "memory", 7);
+	} while (!ofnode_is_enabled(mem));
 
 	return mem;
 }
 
-int fdtdec_setup_memory_banksize_fdt(const void *blob)
+ofnode fdtdec_get_next_memory_node(ofnode mem)
 {
-	int bank, ret, mem, reg = 0;
-	struct fdt_resource res;
+	return get_next_memory_node(mem);
+}
 
-	mem = get_next_memory_node(blob, -1);
-	if (mem < 0) {
+int fdtdec_setup_memory_banksize(void)
+{
+	int bank, ret, reg = 0;
+	struct resource res;
+	ofnode mem = ofnode_null();
+
+	mem = get_next_memory_node(mem);
+	if (!ofnode_valid(mem)) {
 		debug("%s: Missing /memory node\n", __func__);
 		return -EINVAL;
 	}
 
 	for (bank = 0; bank < CONFIG_NR_DRAM_BANKS; bank++) {
-		ret = fdt_get_resource(blob, mem, "reg", reg++, &res);
-		if (ret == -FDT_ERR_NOTFOUND) {
+		ret = ofnode_read_resource(mem, reg++, &res);
+		if (ret < 0) {
 			reg = 0;
-			mem = get_next_memory_node(blob, mem);
-			if (mem == -FDT_ERR_NOTFOUND)
+			mem = get_next_memory_node(mem);
+			if (!ofnode_valid(mem))
 				break;
 
-			ret = fdt_get_resource(blob, mem, "reg", reg++, &res);
-			if (ret == -FDT_ERR_NOTFOUND)
+			ret = ofnode_read_resource(mem, reg++, &res);
+			if (ret < 0)
 				break;
 		}
-		if (ret != 0) {
+
+		if (ret != 0)
 			return -EINVAL;
-		}
 
-		gd->bd->bi_dram[bank].start = (phys_addr_t)res.start;
-		gd->bd->bi_dram[bank].size =
+		gd->dram[bank].start = (phys_addr_t)res.start;
+		gd->dram[bank].size =
 			(phys_size_t)(res.end - res.start + 1);
 
-		debug("%s: DRAM Bank #%d: start = 0x%llx, size = 0x%llx\n",
+		debug("%s: DRAM Bank #%d: start = %pap, size = %pap\n",
 		      __func__, bank,
-		      (unsigned long long)gd->bd->bi_dram[bank].start,
-		      (unsigned long long)gd->bd->bi_dram[bank].size);
+		      &gd->dram[bank].start,
+		      &gd->dram[bank].size);
 	}
 
 	return 0;
 }
 
-int fdtdec_setup_memory_banksize(void)
+int fdtdec_setup_mem_size_base_lowest(void)
 {
-	return fdtdec_setup_memory_banksize_fdt(gd->fdt_blob);
+	int bank, ret, reg = 0;
+	struct resource res;
+	unsigned long base;
+	phys_size_t size;
+	ofnode mem = ofnode_null();
 
+	gd->ram_base = (unsigned long)~0;
+
+	mem = get_next_memory_node(mem);
+	if (!ofnode_valid(mem)) {
+		debug("%s: Missing /memory node\n", __func__);
+		return -EINVAL;
+	}
+
+	for (bank = 0; bank < CONFIG_NR_DRAM_BANKS; bank++) {
+		ret = ofnode_read_resource(mem, reg++, &res);
+		if (ret < 0) {
+			reg = 0;
+			mem = get_next_memory_node(mem);
+			if (!ofnode_valid(mem))
+				break;
+
+			ret = ofnode_read_resource(mem, reg++, &res);
+			if (ret < 0)
+				break;
+		}
+
+		if (ret != 0)
+			return -EINVAL;
+
+		base = (unsigned long)res.start;
+		size = (phys_size_t)(res.end - res.start + 1);
+
+		if (gd->ram_base > base && size) {
+			gd->ram_base = base;
+			gd->ram_size = size;
+			debug("%s: Initial DRAM base %lx size %lx\n",
+			      __func__, base, (unsigned long)size);
+		}
+	}
+
+	return 0;
 }
-#endif
 
-#if CONFIG_IS_ENABLED(MULTI_DTB_FIT)
-# if CONFIG_IS_ENABLED(MULTI_DTB_FIT_GZIP) ||\
-	CONFIG_IS_ENABLED(MULTI_DTB_FIT_LZO)
 static int uncompress_blob(const void *src, ulong sz_src, void **dstp)
 {
+#if CONFIG_IS_ENABLED(MULTI_DTB_FIT_GZIP) ||\
+	CONFIG_IS_ENABLED(MULTI_DTB_FIT_LZO)
 	size_t sz_out = CONFIG_VAL(MULTI_DTB_FIT_UNCOMPRESS_SZ);
 	bool gzip = 0, lzo = 0;
 	ulong sz_in = sz_src;
 	void *dst;
 	int rc;
 
-	if (CONFIG_IS_ENABLED(GZIP))
+	if (CONFIG_IS_ENABLED(GZIP) && CONFIG_IS_ENABLED(MULTI_DTB_FIT_GZIP))
 		if (gzip_parse_header(src, sz_in) >= 0)
 			gzip = 1;
-	if (CONFIG_IS_ENABLED(LZO))
+	if (CONFIG_IS_ENABLED(LZO) && CONFIG_IS_ENABLED(MULTI_DTB_FIT_LZO))
 		if (!gzip && lzop_is_valid_header(src))
 			lzo = 1;
 
 	if (!gzip && !lzo)
 		return -EBADMSG;
-
 
 	if (CONFIG_IS_ENABLED(MULTI_DTB_FIT_DYN_ALLOC)) {
 		dst = malloc(sz_out);
@@ -1244,11 +1229,11 @@ static int uncompress_blob(const void *src, ulong sz_src, void **dstp)
 			return -ENOMEM;
 		}
 	} else  {
-#  if CONFIG_IS_ENABLED(MULTI_DTB_FIT_USER_DEFINED_AREA)
+# if CONFIG_IS_ENABLED(MULTI_DTB_FIT_USER_DEFINED_AREA)
 		dst = (void *)CONFIG_VAL(MULTI_DTB_FIT_USER_DEF_ADDR);
-#  else
+# else
 		return -ENOTSUPP;
-#  endif
+# endif
 	}
 
 	if (CONFIG_IS_ENABLED(GZIP) && gzip)
@@ -1266,38 +1251,61 @@ static int uncompress_blob(const void *src, ulong sz_src, void **dstp)
 		return -EBADMSG;
 	}
 	*dstp = dst;
-	return 0;
-}
-# else
-static int uncompress_blob(const void *src, ulong sz_src, void **dstp)
-{
+#else
 	*dstp = (void *)src;
+	*dstp = (void *)src;
+#endif
 	return 0;
 }
-# endif
-#endif
 
-#if defined(CONFIG_OF_BOARD) || defined(CONFIG_OF_SEPARATE)
-/*
- * For CONFIG_OF_SEPARATE, the board may optionally implement this to
- * provide and/or fixup the fdt.
+/**
+ * fdt_find_separate() - Find a devicetree at the end of the image
+ *
+ * Return: pointer to FDT blob
  */
-__weak void *board_fdt_blob_setup(void)
+static void *fdt_find_separate(void)
 {
 	void *fdt_blob = NULL;
-#ifdef CONFIG_SPL_BUILD
+
+	if (IS_ENABLED(CONFIG_SANDBOX))
+		return NULL;
+
+#ifdef CONFIG_XPL_BUILD
 	/* FDT is at end of BSS unless it is in a different memory region */
-	if (IS_ENABLED(CONFIG_SPL_SEPARATE_BSS))
-		fdt_blob = (ulong *)&_image_binary_end;
+	if (CONFIG_IS_ENABLED(SEPARATE_BSS))
+		fdt_blob = (ulong *)_image_binary_end;
 	else
-		fdt_blob = (ulong *)&__bss_end;
+		fdt_blob = (ulong *)__bss_end;
 #else
 	/* FDT is at end of image */
-	fdt_blob = (ulong *)&_end;
+	fdt_blob = (ulong *)_end;
+
+	if (_DEBUG && !fdtdec_prepare_fdt(fdt_blob)) {
+		int stack_ptr;
+		const void *top = fdt_blob + fdt_totalsize(fdt_blob);
+
+		/*
+		 * Perform a sanity check on the memory layout. If this fails,
+		 * it indicates that the device tree is positioned above the
+		 * global data pointer or the stack pointer. This should not
+		 * happen.
+		 *
+		 * If this fails, check that SYS_INIT_SP_ADDR has enough space
+		 * below it for SYS_MALLOC_F_LEN and global_data, as well as the
+		 * stack, without overwriting the device tree or U-Boot itself.
+		 * Since the device tree is sitting at _end (the start of the
+		 * BSS region), we need the top of the device tree to be below
+		 * any memory allocated by board_init_f_alloc_reserve().
+		 */
+		if (top > (void *)gd || top > (void *)&stack_ptr) {
+			printf("FDT %p gd %p\n", fdt_blob, gd);
+			panic("FDT overlap");
+		}
+	}
 #endif
+
 	return fdt_blob;
 }
-#endif
 
 int fdtdec_set_ethernet_mac_address(void *fdt, const u8 *mac, size_t size)
 {
@@ -1362,7 +1370,8 @@ static int fdtdec_init_reserved_memory(void *blob)
 
 int fdtdec_add_reserved_memory(void *blob, const char *basename,
 			       const struct fdt_memory *carveout,
-			       uint32_t *phandlep)
+			       const char **compatibles, unsigned int count,
+			       uint32_t *phandlep, unsigned long flags)
 {
 	fdt32_t cells[4] = {}, *ptr = cells;
 	uint32_t upper, lower, phandle;
@@ -1390,16 +1399,20 @@ int fdtdec_add_reserved_memory(void *blob, const char *basename,
 	/* find a matching node and return the phandle to that */
 	fdt_for_each_subnode(node, blob, parent) {
 		const char *name = fdt_get_name(blob, node, NULL);
-		phys_addr_t addr, size;
+		fdt_addr_t addr;
+		fdt_size_t size;
 
-		addr = fdtdec_get_addr_size(blob, node, "reg", &size);
+		addr = fdtdec_get_addr_size_fixed(blob, node, "reg", 0, na, ns,
+						  &size, false);
 		if (addr == FDT_ADDR_T_NONE) {
 			debug("failed to read address/size for %s\n", name);
 			continue;
 		}
 
-		if (addr == carveout->start && (addr + size) == carveout->end) {
-			*phandlep = fdt_get_phandle(blob, node);
+		if (addr == carveout->start && (addr + size - 1) ==
+						carveout->end) {
+			if (phandlep)
+				*phandlep = fdt_get_phandle(blob, node);
 			return 0;
 		}
 	}
@@ -1428,13 +1441,21 @@ int fdtdec_add_reserved_memory(void *blob, const char *basename,
 	if (node < 0)
 		return node;
 
-	err = fdt_generate_phandle(blob, &phandle);
-	if (err < 0)
-		return err;
+	if (flags & FDTDEC_RESERVED_MEMORY_NO_MAP) {
+		err = fdt_setprop(blob, node, "no-map", NULL, 0);
+		if (err < 0)
+			return err;
+	}
 
-	err = fdtdec_set_phandle(blob, node, phandle);
-	if (err < 0)
-		return err;
+	if (phandlep) {
+		err = fdt_generate_phandle(blob, &phandle);
+		if (err < 0)
+			return err;
+
+		err = fdtdec_set_phandle(blob, node, phandle);
+		if (err < 0)
+			return err;
+	}
 
 	/* store one or two address cells */
 	if (na > 1)
@@ -1456,6 +1477,28 @@ int fdtdec_add_reserved_memory(void *blob, const char *basename,
 	if (err < 0)
 		return err;
 
+	if (compatibles && count > 0) {
+		size_t length = 0, len = 0;
+		unsigned int i;
+		char *buffer;
+
+		for (i = 0; i < count; i++)
+			length += strlen(compatibles[i]) + 1;
+
+		buffer = malloc(length);
+		if (!buffer)
+			return -FDT_ERR_INTERNAL;
+
+		for (i = 0; i < count; i++)
+			len += strlcpy(buffer + len, compatibles[i],
+				       length - len) + 1;
+
+		err = fdt_setprop(blob, node, "compatible", buffer, length);
+		free(buffer);
+		if (err < 0)
+			return err;
+	}
+
 	/* return the phandle for the new node for the caller to use */
 	if (phandlep)
 		*phandlep = phandle;
@@ -1463,8 +1506,11 @@ int fdtdec_add_reserved_memory(void *blob, const char *basename,
 	return 0;
 }
 
-int fdtdec_get_carveout(const void *blob, const char *node, const char *name,
-			unsigned int index, struct fdt_memory *carveout)
+int fdtdec_get_carveout(const void *blob, const char *node,
+			const char *prop_name, unsigned int index,
+			struct fdt_memory *carveout, const char **name,
+			const char ***compatiblesp, unsigned int *countp,
+			unsigned long *flags)
 {
 	const fdt32_t *prop;
 	uint32_t phandle;
@@ -1475,9 +1521,9 @@ int fdtdec_get_carveout(const void *blob, const char *node, const char *name,
 	if (offset < 0)
 		return offset;
 
-	prop = fdt_getprop(blob, offset, name, &len);
+	prop = fdt_getprop(blob, offset, prop_name, &len);
 	if (!prop) {
-		debug("failed to get %s for %s\n", name, node);
+		debug("failed to get %s for %s\n", prop_name, node);
 		return -FDT_ERR_NOTFOUND;
 	}
 
@@ -1488,7 +1534,7 @@ int fdtdec_get_carveout(const void *blob, const char *node, const char *name,
 
 	if (len < (sizeof(phandle) * (index + 1))) {
 		debug("invalid phandle index\n");
-		return -FDT_ERR_BADPHANDLE;
+		return -FDT_ERR_NOTFOUND;
 	}
 
 	phandle = fdt32_to_cpu(prop[index]);
@@ -1497,6 +1543,48 @@ int fdtdec_get_carveout(const void *blob, const char *node, const char *name,
 	if (offset < 0) {
 		debug("failed to find node for phandle %u\n", phandle);
 		return offset;
+	}
+
+	if (name)
+		*name = fdt_get_name(blob, offset, NULL);
+
+	if (compatiblesp) {
+		const char **compatibles = NULL;
+		const char *start, *end, *ptr;
+		unsigned int count = 0;
+
+		prop = fdt_getprop(blob, offset, "compatible", &len);
+		if (!prop)
+			goto skip_compat;
+
+		start = ptr = (const char *)prop;
+		end = start + len;
+
+		while (ptr < end) {
+			ptr = strchrnul(ptr, '\0');
+			count++;
+			ptr++;
+		}
+
+		compatibles = malloc(sizeof(ptr) * count);
+		if (!compatibles)
+			return -FDT_ERR_INTERNAL;
+
+		ptr = start;
+		count = 0;
+
+		while (ptr < end) {
+			compatibles[count] = ptr;
+			ptr = strchrnul(ptr, '\0');
+			count++;
+			ptr++;
+		}
+
+skip_compat:
+		*compatiblesp = compatibles;
+
+		if (countp)
+			*countp = count;
 	}
 
 	carveout->start = fdtdec_get_addr_size_auto_noparent(blob, offset,
@@ -1509,24 +1597,28 @@ int fdtdec_get_carveout(const void *blob, const char *node, const char *name,
 
 	carveout->end = carveout->start + size - 1;
 
+	if (flags) {
+		*flags = 0;
+
+		if (fdtdec_get_bool(blob, offset, "no-map"))
+			*flags |= FDTDEC_RESERVED_MEMORY_NO_MAP;
+	}
+
 	return 0;
 }
 
 int fdtdec_set_carveout(void *blob, const char *node, const char *prop_name,
-			unsigned int index, const char *name,
-			const struct fdt_memory *carveout)
+			unsigned int index, const struct fdt_memory *carveout,
+			const char *name, const char **compatibles,
+			unsigned int count, unsigned long flags)
 {
 	uint32_t phandle;
-	int err, offset;
+	int err, offset, len;
 	fdt32_t value;
+	void *prop;
 
-	/* XXX implement support for multiple phandles */
-	if (index > 0) {
-		debug("invalid index %u\n", index);
-		return -FDT_ERR_BADOFFSET;
-	}
-
-	err = fdtdec_add_reserved_memory(blob, name, carveout, &phandle);
+	err = fdtdec_add_reserved_memory(blob, name, carveout, compatibles,
+					 count, &phandle, flags);
 	if (err < 0) {
 		debug("failed to add reserved memory: %d\n", err);
 		return err;
@@ -1540,76 +1632,274 @@ int fdtdec_set_carveout(void *blob, const char *node, const char *prop_name,
 
 	value = cpu_to_fdt32(phandle);
 
-	err = fdt_setprop(blob, offset, prop_name, &value, sizeof(value));
+	if (!fdt_getprop(blob, offset, prop_name, &len)) {
+		if (len == -FDT_ERR_NOTFOUND)
+			len = 0;
+		else
+			return len;
+	}
+
+	if ((index + 1) * sizeof(value) > len) {
+		err = fdt_setprop_placeholder(blob, offset, prop_name,
+					      (index + 1) * sizeof(value),
+					      &prop);
+		if (err < 0) {
+			debug("failed to resize reserved memory property: %s\n",
+			      fdt_strerror(err));
+			return err;
+		}
+	}
+
+	err = fdt_setprop_inplace_namelen_partial(blob, offset, prop_name,
+						  strlen(prop_name),
+						  index * sizeof(value),
+						  &value, sizeof(value));
 	if (err < 0) {
-		debug("failed to set %s property for node %s: %d\n", prop_name,
-		      node, err);
+		debug("failed to update %s property for node %s: %s\n",
+		      prop_name, node, fdt_strerror(err));
 		return err;
 	}
 
 	return 0;
 }
 
-int fdtdec_setup(void)
+/* TODO(sjg@chromium.org): This function should not be weak */
+__weak int fdtdec_board_setup(const void *fdt_blob)
 {
-#if CONFIG_IS_ENABLED(OF_CONTROL)
-# if CONFIG_IS_ENABLED(MULTI_DTB_FIT)
-	void *fdt_blob;
-# endif
-# ifdef CONFIG_OF_EMBED
-	/* Get a pointer to the FDT */
-#  ifdef CONFIG_SPL_BUILD
-	gd->fdt_blob = __dtb_dt_spl_begin;
-#  else
-	gd->fdt_blob = __dtb_dt_begin;
-#  endif
-# elif defined(CONFIG_OF_BOARD) || defined(CONFIG_OF_SEPARATE)
-	/* Allow the board to override the fdt address. */
-	gd->fdt_blob = board_fdt_blob_setup();
-# elif defined(CONFIG_OF_HOSTFILE)
-	if (sandbox_read_fdt_from_file()) {
-		puts("Failed to read control FDT\n");
-		return -1;
-	}
-# endif
-# ifndef CONFIG_SPL_BUILD
-	/* Allow the early environment to override the fdt address */
-#  if CONFIG_IS_ENABLED(OF_PRIOR_STAGE)
-	gd->fdt_blob = (void *)prior_stage_fdt_address;
-#  else
-	gd->fdt_blob = map_sysmem
-		(env_get_ulong("fdtcontroladdr", 16,
-			       (unsigned long)map_to_sysmem(gd->fdt_blob)), 0);
-#  endif
-# endif
+	return 0;
+}
 
-# if CONFIG_IS_ENABLED(MULTI_DTB_FIT)
+/**
+ * setup_multi_dtb_fit() - locate the correct dtb from a FIT
+ *
+ * This supports the CONFIG_MULTI_DTB_FIT feature, looking for the dtb in a
+ * supplied FIT
+ *
+ * It accepts the current value of gd->fdt_blob, which points to the FIT, then
+ * updates that gd->fdt_blob, to point to the chosen dtb so that U-Boot uses the
+ * correct one
+ */
+static void setup_multi_dtb_fit(void)
+{
+	void *blob;
+
 	/*
 	 * Try and uncompress the blob.
 	 * Unfortunately there is no way to know how big the input blob really
 	 * is. So let us set the maximum input size arbitrarily high. 16MB
 	 * ought to be more than enough for packed DTBs.
 	 */
-	if (uncompress_blob(gd->fdt_blob, 0x1000000, &fdt_blob) == 0)
-		gd->fdt_blob = fdt_blob;
+	if (uncompress_blob(gd->fdt_blob, 0x1000000, &blob) == 0)
+		gd->fdt_blob = blob;
 
 	/*
 	 * Check if blob is a FIT images containings DTBs.
 	 * If so, pick the most relevant
 	 */
-	fdt_blob = locate_dtb_in_fit(gd->fdt_blob);
-	if (fdt_blob) {
-		gd->multi_dtb_fit = gd->fdt_blob;
-		gd->fdt_blob = fdt_blob;
+	blob = locate_dtb_in_fit(gd->fdt_blob);
+	if (blob) {
+		gd_set_multi_dtb_fit(gd->fdt_blob);
+		gd->fdt_blob = blob;
+		gd->fdt_src = FDTSRC_FIT;
 	}
-
-# endif
-#endif
-
-	return fdtdec_prepare_fdt();
 }
 
-#if CONFIG_IS_ENABLED(MULTI_DTB_FIT)
+void fdtdec_setup_embed(void)
+{
+	gd->fdt_blob = dtb_dt_embedded();
+	gd->fdt_src = FDTSRC_EMBED;
+}
+
+static int fdtdec_match_dto_compatible(const void *base, const void *dto)
+{
+	const char *compat_base;
+	const char *compat_dto;
+	int len;
+
+	compat_base = (const char *)fdt_getprop(base, 0, "compatible", &len);
+	if (!compat_base || len <= 0)
+		return -ENOENT;
+
+	compat_dto = (const char *)fdt_getprop(dto, 0, "compatible", &len);
+	if (!compat_dto || len <= 0)
+		return -ENOENT;
+
+	if (strcmp(compat_base, compat_dto))
+		return -EPERM;
+
+	return 0;
+}
+
+static inline int fdtdec_ret_to_errno(int ret)
+{
+	switch (ret) {
+	case -FDT_ERR_NOTFOUND:
+		return -ENOENT;
+	case -FDT_ERR_EXISTS:
+		return -EEXIST;
+	case -FDT_ERR_NOSPACE:
+	case -FDT_ERR_NOPHANDLES:
+		return -ENOSPC;
+	default:
+		return -EINVAL;
+	}
+}
+
+static int fdtdec_apply_dto_blob(void **blob, __maybe_unused int size)
+{
+	int ret;
+
+	ret = fdt_check_header(*blob);
+	if (ret)
+		return fdtdec_ret_to_errno(ret);
+
+	ret = fdtdec_match_dto_compatible(gd->fdt_blob, *blob);
+	if (ret)
+		return ret;
+
+	ret = fdt_overlay_apply_verbose((void *)gd->fdt_blob, *blob);
+	if (ret)
+		return fdtdec_ret_to_errno(ret);
+
+	return 0;
+}
+
+static int fdtdec_apply_bloblist_dtos(void)
+{
+	int ret;
+	struct fdt_header *live_fdt;
+	int blob_size;
+	size_t padded_size, max_size;
+
+	if (!CONFIG_IS_ENABLED(OF_LIBFDT_OVERLAY) ||
+	    !CONFIG_IS_ENABLED(BLOBLIST))
+		return 0;
+
+	/* Get the total space reserved for FDT in blob */
+	live_fdt = bloblist_get_blob(BLOBLISTT_CONTROL_FDT, &blob_size);
+	if (live_fdt != gd->fdt_blob)
+		return -ENOENT;
+
+	ret = fdt_check_full(live_fdt, blob_size);
+	if (ret)
+		return fdtdec_ret_to_errno(ret);
+
+	/* Calculate the allowed padded size */
+	padded_size = fdt_totalsize(live_fdt) + CONFIG_SYS_FDT_PAD;
+	max_size = bloblist_get_total_size() - bloblist_get_size() + blob_size;
+	if (padded_size > max_size)
+		padded_size = max_size;
+
+	/* Resize if the current space is not sufficient */
+	if (blob_size < padded_size) {
+		ret = bloblist_resize(BLOBLISTT_CONTROL_FDT, padded_size);
+		if (ret)
+			return ret;
+
+		blob_size = padded_size;
+		ret = fdt_open_into(live_fdt, live_fdt, padded_size);
+		if (ret)
+			return fdtdec_ret_to_errno(ret);
+	}
+
+	ret = bloblist_apply_blobs(BLOBLISTT_FDT_OVERLAY, fdtdec_apply_dto_blob);
+	if (ret)
+		return ret;
+
+	ret = fdt_check_full(live_fdt, blob_size);
+	if (ret)
+		return fdtdec_ret_to_errno(ret);
+
+	ret = fdt_pack(live_fdt);
+	if (ret)
+		return fdtdec_ret_to_errno(ret);
+
+	/* Shrink the blob to the actual FDT size */
+	return bloblist_resize(BLOBLISTT_CONTROL_FDT, fdt_totalsize(live_fdt));
+}
+
+int fdtdec_setup(void)
+{
+	int ret = -ENOENT;
+
+	/*
+	 * If allowing a bloblist, check that first. The necessary test is
+	 * whether the previous phase passed a bloblist, not whether this phase
+	 * creates one.
+	 */
+	if (CONFIG_IS_ENABLED(BLOBLIST) && (xpl_phase() > PHASE_TPL)) {
+		if (bloblist_exists()) {
+			gd->fdt_blob = bloblist_find(BLOBLISTT_CONTROL_FDT, 0);
+			if (gd->fdt_blob) {
+				gd->fdt_src = FDTSRC_BLOBLIST;
+				log_debug("Devicetree is in bloblist at %p\n",
+					  gd->fdt_blob);
+				ret = fdtdec_apply_bloblist_dtos();
+				if (ret)
+					return ret;
+				goto setup_fdt;
+			} else {
+				log_debug("No FDT found in bloblist\n");
+				ret = -ENOENT;
+			}
+		}
+	}
+
+	/*
+	 * If we have bloblist being required to pass the FDT and we reach this
+	 * point, we have a problem and must exit.
+	 */
+	if (IS_ENABLED(CONFIG_BLOBLIST_PASSAGE_MANDATORY))
+		return ret;
+
+	/* Otherwise, the devicetree is typically appended to U-Boot */
+	if (ret) {
+		if (IS_ENABLED(CONFIG_OF_SEPARATE)) {
+			gd->fdt_blob = fdt_find_separate();
+			gd->fdt_src = FDTSRC_SEPARATE;
+		} else { /* embed dtb in ELF file for testing / development */
+			fdtdec_setup_embed();
+		}
+	}
+
+	/* Allow the board to override the fdt address. */
+	if (IS_ENABLED(CONFIG_OF_BOARD)) {
+		void *blob;
+
+		blob = (void *)gd->fdt_blob;
+		ret = board_fdt_blob_setup(&blob);
+		if (ret) {
+			if (ret != -EEXIST)
+				return ret;
+		} else {
+			gd->fdt_src = FDTSRC_BOARD;
+			gd->fdt_blob = blob;
+		}
+	}
+
+	/* Allow the early environment to override the fdt address */
+	if (!IS_ENABLED(CONFIG_XPL_BUILD)) {
+		ulong addr;
+
+		addr = env_get_hex("fdtcontroladdr", 0);
+		if (addr) {
+			gd->fdt_blob = map_sysmem(addr, 0);
+			gd->fdt_src = FDTSRC_ENV;
+		}
+	}
+
+setup_fdt:
+	if (CONFIG_IS_ENABLED(MULTI_DTB_FIT))
+		setup_multi_dtb_fit();
+
+	ret = fdtdec_prepare_fdt(gd->fdt_blob);
+	if (!ret)
+		ret = fdtdec_board_setup(gd->fdt_blob);
+	oftree_reset();
+
+	return ret;
+}
+
 int fdtdec_resetup(int *rescan)
 {
 	void *fdt_blob;
@@ -1620,8 +1910,8 @@ int fdtdec_resetup(int *rescan)
 	 * FIT image stillpresent there. Save the time and space
 	 * required to uncompress it again.
 	 */
-	if (gd->multi_dtb_fit) {
-		fdt_blob = locate_dtb_in_fit(gd->multi_dtb_fit);
+	if (gd_multi_dtb_fit()) {
+		fdt_blob = locate_dtb_in_fit(gd_multi_dtb_fit());
 
 		if (fdt_blob == gd->fdt_blob) {
 			/*
@@ -1634,7 +1924,7 @@ int fdtdec_resetup(int *rescan)
 
 		*rescan = 1;
 		gd->fdt_blob = fdt_blob;
-		return fdtdec_prepare_fdt();
+		return fdtdec_prepare_fdt(fdt_blob);
 	}
 
 	/*
@@ -1645,11 +1935,10 @@ int fdtdec_resetup(int *rescan)
 	*rescan = 0;
 	return 0;
 }
-#endif
 
-#ifdef CONFIG_NR_DRAM_BANKS
 int fdtdec_decode_ram_size(const void *blob, const char *area, int board_id,
-			   phys_addr_t *basep, phys_size_t *sizep, bd_t *bd)
+			   phys_addr_t *basep, phys_size_t *sizep,
+			   gd_t *gd_ptr)
 {
 	int addr_cells, size_cells;
 	const u32 *cell, *end;
@@ -1701,8 +1990,8 @@ int fdtdec_decode_ram_size(const void *blob, const char *area, int board_id,
 	}
 	/* Note: if no matching subnode was found we use the parent node */
 
-	if (bd) {
-		memset(bd->bi_dram, '\0', sizeof(bd->bi_dram[0]) *
+	if (gd_ptr) {
+		memset(gd_ptr->dram, '\0', sizeof(gd_ptr->dram[0]) *
 						CONFIG_NR_DRAM_BANKS);
 	}
 
@@ -1718,8 +2007,8 @@ int fdtdec_decode_ram_size(const void *blob, const char *area, int board_id,
 		if (addr_cells == 2)
 			addr += (u64)fdt32_to_cpu(*cell++) << 32UL;
 		addr += fdt32_to_cpu(*cell++);
-		if (bd)
-			bd->bi_dram[bank].start = addr;
+		if (gd_ptr)
+			gd_ptr->dram[bank].start = addr;
 		if (basep && !bank)
 			*basep = (phys_addr_t)addr;
 
@@ -1741,8 +2030,8 @@ int fdtdec_decode_ram_size(const void *blob, const char *area, int board_id,
 			}
 		}
 
-		if (bd)
-			bd->bi_dram[bank].size = size;
+		if (gd_ptr)
+			gd_ptr->dram[bank].size = size;
 		total_size += size;
 	}
 
@@ -1752,6 +2041,5 @@ int fdtdec_decode_ram_size(const void *blob, const char *area, int board_id,
 
 	return 0;
 }
-#endif /* CONFIG_NR_DRAM_BANKS */
 
 #endif /* !USE_HOSTCC */

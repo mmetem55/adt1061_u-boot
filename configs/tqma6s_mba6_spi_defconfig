@@ -1,8 +1,5 @@
-CONFIG_ARM=y
-CONFIG_ARCH_MX6=y
-CONFIG_TARGET_TQMA6=y
-CONFIG_TQMA6S=y
-CONFIG_TQMA6X_SPI_BOOT=y
-# CONFIG_CMD_IMLS is not set
-# CONFIG_CMD_FLASH is not set
-CONFIG_SPI_FLASH=y
+#include <configs/tqma6_mba6_common.defconfig>
+#include <configs/tqma6_mba6_spi.defconfig>
+
+CONFIG_MX6S=y
+CONFIG_DEFAULT_DEVICE_TREE="nxp/imx/imx6dl-mba6b"

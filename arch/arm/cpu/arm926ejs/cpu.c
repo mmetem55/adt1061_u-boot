@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * (C) Copyright 2002
  * Sysgo Real-Time Solutions, GmbH <www.elinos.com>
@@ -5,19 +6,32 @@
  *
  * (C) Copyright 2002
  * Gary Jennejohn, DENX Software Engineering, <garyj@denx.de>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 /*
  * CPU specific code
  */
 
-#include <common.h>
 #include <command.h>
+#include <cpu_func.h>
+#include <irq_func.h>
+#include <asm/cache.h>
 #include <asm/system.h>
 
 static void cache_flush(void);
+
+/************************************************************
+ * sdelay() - simple spin loop.  Will be constant time as
+ *  its generally used in bypass conditions only.  This
+ *  is necessary until timers are accessible.
+ *
+ *  not inline to increase chances its in cache when called
+ *************************************************************/
+void sdelay(unsigned long loops)
+{
+	__asm__ volatile ("1:\n" "subs %0, %1, #1\n"
+			  "bne 1b":"=r" (loops):"0"(loops));
+}
 
 int cleanup_before_linux (void)
 {
@@ -28,8 +42,7 @@ int cleanup_before_linux (void)
 	 * we turn off caches etc ...
 	 */
 
-	disable_interrupts ();
-
+	disable_interrupts();
 
 	/* turn off I/D-cache */
 	icache_disable();
@@ -45,7 +58,7 @@ int cleanup_before_linux (void)
 /* flush I/D-cache */
 static void cache_flush (void)
 {
-#if !(defined(CONFIG_SYS_ICACHE_OFF) && defined(CONFIG_SYS_DCACHE_OFF))
+#if !(CONFIG_IS_ENABLED(SYS_ICACHE_OFF) && CONFIG_IS_ENABLED(SYS_DCACHE_OFF))
 	unsigned long i = 0;
 
 	asm ("mcr p15, 0, %0, c7, c7, 0": :"r" (i));

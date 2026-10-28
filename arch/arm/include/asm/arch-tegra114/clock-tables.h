@@ -1,17 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Copyright (c) 2010-2013, NVIDIA CORPORATION.  All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 /* Tegra114 clock PLL tables */
@@ -34,13 +23,14 @@ enum clock_id {
 	CLOCK_ID_XCPU = CLOCK_ID_FIRST_SIMPLE,
 	CLOCK_ID_EPCI,
 	CLOCK_ID_SFROM32KHZ,
+	CLOCK_ID_DISPLAY2,
 
 	/* These are the base clocks (inputs to the Tegra SOC) */
 	CLOCK_ID_32KHZ,
 	CLOCK_ID_OSC,
+	CLOCK_ID_CLK_M,
 
 	CLOCK_ID_COUNT,	/* number of PLLs */
-	CLOCK_ID_DISPLAY2,	/* placeholder */
 	CLOCK_ID_NONE = -1,
 };
 
@@ -119,7 +109,7 @@ enum periph_id {
 	PERIPH_ID_UART3,
 
 	/* 56 */
-	PERIPH_ID_RESERVED56,
+	PERIPH_ID_MIPI_CAL,
 	PERIPH_ID_EMC,
 	PERIPH_ID_USB2,
 	PERIPH_ID_USB3,

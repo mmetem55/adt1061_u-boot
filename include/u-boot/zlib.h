@@ -36,7 +36,6 @@
   Jean-loup Gailly        Mark Adler
   jloup@gzip.org          madler@alumni.caltech.edu
 
-
   The data format used by the zlib library is described by RFCs (Request for
   Comments) 1950 to 1952 in the files http://www.ietf.org/rfc/rfc1950.txt
   (zlib format), rfc1951.txt (deflate format) and rfc1952.txt (gzip format).
@@ -48,9 +47,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-#define ZLIB_VERSION "1.2.3"
-#define ZLIB_VERNUM 0x1230
 
 /* #include "zconf.h" */        /* included directly here */
 /* zconf.h -- configuration of the zlib compression library
@@ -108,6 +104,12 @@ extern "C" {
 #  define uLongf                z_uLongf
 #  define voidpf                z_voidpf
 #  define voidp                 z_voidp
+#endif
+
+#if defined(ZLIB_CONST) && !defined(z_const)
+#  define z_const const
+#else
+#  define z_const
 #endif
 
 #if defined(__MSDOS__) && !defined(MSDOS)
@@ -478,7 +480,6 @@ typedef gz_header FAR *gz_headerp;
 #define Z_DATA_ERROR   (-3)
 #define Z_MEM_ERROR    (-4)
 #define Z_BUF_ERROR    (-5)
-#define Z_VERSION_ERROR (-6)
 /* Return codes for the compression/decompression functions. Negative
  * values are errors, positive values are used for special but normal events.
  */
@@ -517,11 +518,11 @@ typedef gz_header FAR *gz_headerp;
 
 ZEXTERN int ZEXPORT deflate OF((z_streamp strm, int flush));
 ZEXTERN int ZEXPORT deflateInit_ OF((z_streamp strm, int level,
-			const char *version, int stream_size));
+			int stream_size));
 ZEXTERN int ZEXPORT deflateEnd OF((z_streamp strm));
 ZEXTERN int ZEXPORT deflateInit2_ OF((z_streamp strm, int  level, int  method,
 			int windowBits, int memLevel,
-			int strategy, const char *version,
+			int strategy,
 			int stream_size));
 ZEXTERN int ZEXPORT deflateReset OF((z_streamp strm));
 ZEXTERN int ZEXPORT deflateSetDictionary OF((z_streamp strm,
@@ -545,9 +546,8 @@ ZEXTERN uLong ZEXPORT deflateBound OF((z_streamp strm,
 ZEXTERN int ZEXPORT deflateCopy OF((z_streamp dest,
 			z_streamp source));
 
-
 ZEXTERN int ZEXPORT inflateInit_ OF((z_streamp strm,
-			const char *version, int stream_size));
+			int stream_size));
 ZEXTERN int ZEXPORT inflate OF((z_streamp strm, int flush));
 /*
     inflate decompresses as much data as possible, and stops when the input
@@ -710,12 +710,38 @@ ZEXTERN  uInt ZEXPORT crc32  OF((uInt crc, const Bytef *buf, uInt len));
      if (crc != original_crc) error();
 */
 
+ZEXTERN int ZEXPORT uncompress OF((Bytef *dest, uLongf *destLen,
+				   const Bytef *source, uLong sourceLen));
+/*
+     Decompresses the source buffer into the destination buffer.  sourceLen is
+   the byte length of the source buffer.  Upon entry, destLen is the total size
+   of the destination buffer, which must be large enough to hold the entire
+   uncompressed data.  (The size of the uncompressed data must have been saved
+   previously by the compressor and transmitted to the decompressor by some
+   mechanism outside the scope of this compression library.) Upon exit, destLen
+   is the actual size of the uncompressed data.
+
+     uncompress returns Z_OK if success, Z_MEM_ERROR if there was not
+   enough memory, Z_BUF_ERROR if there was not enough room in the output
+   buffer, or Z_DATA_ERROR if the input data was corrupted or incomplete.  In
+   the case where there is not enough room, uncompress() will fill the output
+   buffer with the uncompressed data up to that point.
+*/
+
+ZEXTERN int ZEXPORT uncompress2 OF((Bytef *dest, uLongf *destLen,
+				    const Bytef *source, uLong *sourceLen));
+/*
+     Same as uncompress, except that sourceLen is a pointer, where the
+   length of the source is *sourceLen.  On return, *sourceLen is the number of
+   source bytes consumed.
+*/
+
 ZEXTERN int ZEXPORT inflateInit2_ OF((z_streamp strm, int  windowBits,
-                                      const char *version, int stream_size));
+                                      int stream_size));
 #define inflateInit(strm) \
-	inflateInit_((strm), ZLIB_VERSION, sizeof(z_stream))
+	inflateInit_((strm), sizeof(z_stream))
 #define inflateInit2(strm, windowBits) \
-	inflateInit2_((strm), (windowBits), ZLIB_VERSION, sizeof(z_stream))
+	inflateInit2_((strm), (windowBits), sizeof(z_stream))
 
 #if !defined(ZUTIL_H) && !defined(NO_DUMMY_DECL)
 	struct internal_state {int dummy;}; /* hack for buggy compilers */

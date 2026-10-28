@@ -1,17 +1,18 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Copyright (c) 2014 Google, Inc
  * Written by Simon Glass <sjg@chromium.org>
- *
- * SPDX-License-Identifier:     GPL-2.0+
  */
 
 /*
  * IO space access commands.
  */
 
-#include <common.h>
+#define LOG_CATEGORY	UCLASS_PCI
+
 #include <command.h>
 #include <dm.h>
+#include <log.h>
 #include <asm/io.h>
 
 int pci_map_physmem(phys_addr_t paddr, unsigned long *lenp,
@@ -32,10 +33,11 @@ int pci_map_physmem(phys_addr_t paddr, unsigned long *lenp,
 		if (ret)
 			continue;
 		*devp = dev;
+		log_debug("addr=%lx, dev=%s\n", (ulong)paddr, dev->name);
 		return 0;
 	}
 
-	debug("%s: failed: addr=%x\n", __func__, paddr);
+	log_debug("%s: failed: addr=%pap\n", __func__, &paddr);
 	return -ENOSYS;
 }
 
@@ -67,7 +69,7 @@ static int pci_io_read(unsigned int addr, ulong *valuep, pci_size_t size)
 		}
 	}
 
-	debug("%s: failed: addr=%x\n", __func__, addr);
+	log_debug("%s: failed: addr=%x\n", __func__, addr);
 	return -ENOSYS;
 }
 
@@ -88,11 +90,11 @@ static int pci_io_write(unsigned int addr, ulong value, pci_size_t size)
 		}
 	}
 
-	debug("%s: failed: addr=%x, value=%lx\n", __func__, addr, value);
+	log_debug("%s: failed: addr=%x, value=%lx\n", __func__, addr, value);
 	return -ENOSYS;
 }
 
-int inl(unsigned int addr)
+int _inl(unsigned int addr)
 {
 	unsigned long value;
 	int ret;
@@ -102,7 +104,7 @@ int inl(unsigned int addr)
 	return ret ? 0 : value;
 }
 
-int inw(unsigned int addr)
+int _inw(unsigned int addr)
 {
 	unsigned long value;
 	int ret;
@@ -112,7 +114,7 @@ int inw(unsigned int addr)
 	return ret ? 0 : value;
 }
 
-int inb(unsigned int addr)
+int _inb(unsigned int addr)
 {
 	unsigned long value;
 	int ret;
@@ -122,17 +124,17 @@ int inb(unsigned int addr)
 	return ret ? 0 : value;
 }
 
-void outl(unsigned int value, unsigned int addr)
+void _outl(unsigned int value, unsigned int addr)
 {
 	pci_io_write(addr, value, PCI_SIZE_32);
 }
 
-void outw(unsigned int value, unsigned int addr)
+void _outw(unsigned int value, unsigned int addr)
 {
 	pci_io_write(addr, value, PCI_SIZE_16);
 }
 
-void outb(unsigned int value, unsigned int addr)
+void _outb(unsigned int value, unsigned int addr)
 {
 	pci_io_write(addr, value, PCI_SIZE_8);
 }

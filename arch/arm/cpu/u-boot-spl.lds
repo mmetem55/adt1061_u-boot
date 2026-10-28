@@ -1,10 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * Copyright (c) 2004-2008 Texas Instruments
  *
  * (C) Copyright 2002
  * Gary Jennejohn, DENX Software Engineering, <garyj@denx.de>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 OUTPUT_FORMAT("elf32-littlearm", "elf32-littlearm", "elf32-littlearm")
@@ -15,12 +14,13 @@ SECTIONS
 	. = 0x00000000;
 
 	. = ALIGN(4);
+	__image_copy_start = ADDR(.text);
 	.text :
 	{
-		__image_copy_start = .;
 		*(.vectors)
 		CPUDIR/start.o (.text*)
 		*(.text*)
+		*(.glue*)
 	}
 
 	. = ALIGN(4);
@@ -32,41 +32,29 @@ SECTIONS
 	}
 
 	. = ALIGN(4);
-	.u_boot_list : {
-		KEEP(*(SORT(.u_boot_list*_i2c_*)));
+	.binman_sym_table : {
+		__binman_sym_start = .;
+		KEEP(*(SORT(.binman_sym*)));
+		__binman_sym_end = .;
 	}
 
-	. = .;
-#ifdef CONFIG_SPL_DM
-	.u_boot_list : {
-		KEEP(*(SORT(.u_boot_list_*_driver_*)));
-		KEEP(*(SORT(.u_boot_list_*_uclass_*)));
-	}
-#endif
 	. = ALIGN(4);
+	__u_boot_list : {
+		KEEP(*(SORT(__u_boot_list*)));
+		. = ALIGN(8);
+	}
 
 	__image_copy_end = .;
-
-	.rel.dyn : {
-		__rel_dyn_start = .;
-		*(.rel*)
-		__rel_dyn_end = .;
-	}
-
-	.end :
-	{
-		*(.__end)
-	}
-
 	_image_binary_end = .;
+	_end = .;
 
-	.bss __rel_dyn_start (OVERLAY) : {
+	.bss _image_binary_end (OVERLAY) : {
 		__bss_start = .;
 		*(.bss*)
-		 . = ALIGN(4);
+		 . = ALIGN(8);
 		__bss_end = .;
 	}
-
+	__bss_size = __bss_end - __bss_start;
 	.dynsym _image_binary_end : { *(.dynsym) }
 	.dynbss : { *(.dynbss) }
 	.dynstr : { *(.dynstr*) }
@@ -78,17 +66,20 @@ SECTIONS
 	.ARM.exidx : { *(.ARM.exidx*) }
 }
 
-#if defined(CONFIG_SPL_MAX_SIZE)
-ASSERT(__image_copy_end - __image_copy_start < (CONFIG_SPL_MAX_SIZE), \
+#if defined(IMAGE_MAX_SIZE)
+ASSERT(__image_copy_end - __image_copy_start <= (IMAGE_MAX_SIZE), \
 	"SPL image too big");
 #endif
 
+ASSERT(_image_binary_end % 8 == 0, \
+       "_image_binary_end must be 8-byte aligned for device tree");
+
 #if defined(CONFIG_SPL_BSS_MAX_SIZE)
-ASSERT(__bss_end - __bss_start < (CONFIG_SPL_BSS_MAX_SIZE), \
+ASSERT(__bss_end - __bss_start <= (CONFIG_SPL_BSS_MAX_SIZE), \
 	"SPL image BSS too big");
 #endif
 
 #if defined(CONFIG_SPL_MAX_FOOTPRINT)
-ASSERT(__bss_end - _start < (CONFIG_SPL_MAX_FOOTPRINT), \
+ASSERT(__bss_end - _start <= (CONFIG_SPL_MAX_FOOTPRINT), \
 	"SPL image plus BSS too big");
 #endif

@@ -1,18 +1,17 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Copyright 2009-2011 Freescale Semiconductor, Inc.
  *	Dave Liu <daveliu@freescale.com>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 /* MAXFRM - maximum frame length */
 #define MAXFRM_MASK	0x0000ffff
 
-#include <common.h>
 #include <phy.h>
 #include <asm/types.h>
 #include <asm/io.h>
-#include <asm/fsl_tgec.h>
+#include <fsl_tgec.h>
+#include <linux/delay.h>
 
 #include "fm.h"
 

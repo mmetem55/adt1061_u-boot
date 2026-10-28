@@ -1,9 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * (C) Copyright 2010
  * Texas Instruments, <www.ti.com>
  * Aneesh V <aneesh@ti.com>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 #ifndef ARMV7_H
 #define ARMV7_H
@@ -59,26 +58,28 @@
 #ifndef __ASSEMBLY__
 #include <linux/types.h>
 #include <asm/io.h>
+#include <asm/barriers.h>
 
-/*
- * CP15 Barrier instructions
- * Please note that we have separate barrier instructions in ARMv7
- * However, we use the CP15 based instructtions because we use
- * -march=armv5 in U-Boot
- */
-#define CP15ISB	asm volatile ("mcr     p15, 0, %0, c7, c5, 4" : : "r" (0))
-#define CP15DSB	asm volatile ("mcr     p15, 0, %0, c7, c10, 4" : : "r" (0))
-#define CP15DMB	asm volatile ("mcr     p15, 0, %0, c7, c10, 5" : : "r" (0))
+/* read L2 control register (L2CTLR) */
+static inline uint32_t read_l2ctlr(void)
+{
+	uint32_t val = 0;
 
-#ifdef __ARM_ARCH_7A__
-#define ISB	asm volatile ("isb" : : : "memory")
-#define DSB	asm volatile ("dsb" : : : "memory")
-#define DMB	asm volatile ("dmb" : : : "memory")
-#else
-#define ISB	CP15ISB
-#define DSB	CP15DSB
-#define DMB	CP15DMB
-#endif
+	asm volatile ("mrc p15, 1, %0, c9, c0, 2" : "=r" (val));
+
+	return val;
+}
+
+/* write L2 control register (L2CTLR) */
+static inline void write_l2ctlr(uint32_t val)
+{
+	/*
+	 * Note: L2CTLR can only be written when the L2 memory system
+	 * is idle, ie before the MMU is enabled.
+	 */
+	asm volatile("mcr p15, 1, %0, c9, c0, 2" : : "r" (val) : "memory");
+	isb();
+}
 
 /*
  * Workaround for ARM errata # 798870
@@ -141,10 +142,14 @@ bool armv7_boot_nonsec(void);
 unsigned int _nonsec_init(void);
 void _do_nonsec_entry(void *target_pc, unsigned long r0,
 		      unsigned long r1, unsigned long r2);
+void boot_jump_linux_via_optee(void *target_pc, unsigned long r1,
+			       unsigned long r2, unsigned long tee_entry);
 void _smp_pen(void);
 
 extern char __secure_start[];
 extern char __secure_end[];
+extern char __secure_stack_start[];
+extern char __secure_stack_end[];
 
 #endif /* CONFIG_ARMV7_NONSEC */
 
@@ -153,6 +158,7 @@ void v7_arch_cp15_set_l2aux_ctrl(u32 l2auxctrl, u32 cpu_midr,
 				 u32 cpu_rev);
 void v7_arch_cp15_set_acr(u32 acr, u32 cpu_midr, u32 cpu_rev_comb,
 			  u32 cpu_variant, u32 cpu_rev);
+void v7_arch_cp15_allow_unaligned(void);
 #endif /* ! __ASSEMBLY__ */
 
 #endif

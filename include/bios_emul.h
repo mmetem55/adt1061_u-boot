@@ -1,7 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Copyright (C) 1996-1999 SciTech Software, Inc.
- *
- * SPDX-License-Identifier:	GPL-2.0
  */
 
 #ifndef _BIOS_EMUL_H
@@ -9,7 +8,7 @@
 
 /* Include the register header directly here */
 #include "../drivers/bios_emulator/include/x86emu/regs.h"
-#include <pci.h>
+#include <linux/types.h>
 
 /****************************************************************************
 REMARKS:
@@ -31,19 +30,20 @@ typedef struct {
 	int bus;
 	u32 VendorID;
 	u32 DeviceID;
-	pci_dev_t pcidev;
+	struct udevice *pcidev;
 	void *BIOSImage;
 	u32 BIOSImageLen;
 	u8 LowMem[1536];
 } BE_VGAInfo;
 
-struct vbe_mode_info;
+struct vesa_state;
 
-int BootVideoCardBIOS(pci_dev_t pcidev, BE_VGAInfo **pVGAInfo, int cleanUp);
+int BootVideoCardBIOS(struct udevice *pcidev, BE_VGAInfo **pVGAInfo,
+		      int clean_up);
 
 /* Run a BIOS ROM natively (only supported on x86 machines) */
-void bios_run_on_x86(pci_dev_t pcidev, unsigned long addr, int vesa_mode,
-		     struct vbe_mode_info *mode_info);
+void bios_run_on_x86(struct udevice *dev, unsigned long addr, int vesa_mode,
+		     struct vesa_state *mode_info);
 
 /**
  * bios_set_interrupt_handler() - Install an interrupt handler for the BIOS
@@ -57,10 +57,10 @@ void bios_set_interrupt_handler(int intnum, int (*int_handler_func)(void));
 
 void biosemu_set_interrupt_handler(int intnum, int (*int_func)(void));
 
-int biosemu_setup(pci_dev_t pcidev, BE_VGAInfo **pVGAInfo);
+int biosemu_setup(struct udevice *pcidev, BE_VGAInfo **pVGAInfo);
 
-int biosemu_run(pci_dev_t pcidev, uchar *bios_rom, int bios_len,
+int biosemu_run(struct udevice *dev, uchar *bios_rom, int bios_len,
 		BE_VGAInfo *vga_info, int clean_up, int vesa_mode,
-		struct vbe_mode_info *mode_info);
+		struct vesa_state *mode_info);
 
 #endif

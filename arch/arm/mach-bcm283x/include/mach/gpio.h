@@ -1,19 +1,13 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * Copyright (C) 2012 Vikram Narayananan
  * <vikram186@gmail.com>
  * (C) Copyright 2012,2015 Stephen Warren
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #ifndef _BCM2835_GPIO_H_
 #define _BCM2835_GPIO_H_
 
-#ifdef CONFIG_BCM2836
-#define BCM2835_GPIO_BASE		0x3f200000
-#else
-#define BCM2835_GPIO_BASE		0x20200000
-#endif
 #define BCM2835_GPIO_COUNT		54
 
 #define BCM2835_GPIO_FSEL_MASK		0x7
@@ -31,6 +25,16 @@
 
 #define BCM2835_GPIO_FSEL_BANK(gpio)	(gpio / 10)
 #define BCM2835_GPIO_FSEL_SHIFT(gpio)	((gpio % 10) * 3)
+
+/* BCM2835 GPIO Pull-up/down register offsets */
+#define BCM2835_GPPUD		37
+#define BCM2835_GPPUDCLK0	38
+
+/* BCM2711 GPIO Pull-up/down control */
+#define BCM2711_GPPUD_CNTRL_REG0	57
+#define BCM2711_PUD_REG_OFFSET(gpio)	((gpio) / 16)
+#define BCM2711_PUD_REG_SHIFT(gpio)	(((gpio) % 16) * 2)
+#define BCM2711_PUD_2711_MASK		0x3
 
 struct bcm2835_gpio_regs {
 	u32 gpfsel[6];
@@ -58,11 +62,11 @@ struct bcm2835_gpio_regs {
 };
 
 /**
- * struct bcm2835_gpio_platdata - GPIO platform description
+ * struct bcm2835_gpio_plat - GPIO platform description
  *
  * @base: Base address of GPIO controller
  */
-struct bcm2835_gpio_platdata {
+struct bcm2835_gpio_plat {
 	unsigned long base;
 };
 

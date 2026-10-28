@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  *  U-Boot - x86 Startup Code
  *
@@ -6,16 +7,11 @@
  *
  * (C) Copyright 2002,2003
  * Daniel Engström, Omicron Ceti AB, <daniel@omicron.se>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
-#include <asm/global_data.h>
 #include <asm/processor-flags.h>
 
 #define BOOT_SEG	0xffff0000	/* linear segment of boot code */
-#define a32		.byte 0x67;
-#define o32		.byte 0x66;
 
 .section .start16, "ax"
 .code16
@@ -23,9 +19,6 @@
 start16:
 	/* Save BIST */
 	movl	%eax, %ecx
-
-	/* Set the Cold Boot / Hard Reset flag */
-	movl	$GD_FLG_COLD_BOOT, %ebx
 
 	xorl	%eax, %eax
 	movl	%eax, %cr3	/* Invalidate TLB */
@@ -37,8 +30,8 @@ start16:
 	wbinvd
 
 	/* load the temporary Global Descriptor Table */
-o32 cs	lidt	idt_ptr
-o32 cs	lgdt	gdt_ptr
+data32 cs	lidt	idt_ptr
+data32 cs	lgdt	gdt_ptr
 
 	/* Now, we enter protected mode */
 	movl	%cr0, %eax
@@ -49,20 +42,9 @@ o32 cs	lgdt	gdt_ptr
 	jmp	ff
 ff:
 
-	/* Load the data segment descriptors */
-	movl	$0x18, %eax
-	movw	%ax, %ds
-	movw	%ax, %es
-	movw	%ax, %ss
-	nop
-	movw	%ax, %fs
-	movw	%ax, %gs
-
 	/* Finally restore BIST and jump to the 32-bit initialization code */
-	movw	$code32start, %ax
-	movw	%ax, %bp
 	movl	%ecx, %eax
-o32 cs	ljmp	*(%bp)
+data32 cs	ljmp	*code32start
 
 	/* 48-bit far pointer */
 code32start:
@@ -79,12 +61,13 @@ idt_ptr:
 	 * GDT is setup in a safe location in RAM
 	 */
 gdt_ptr:
-	.word	0x1f		/* limit (31 bytes = 4 GDT entries - 1) */
-	.long	BOOT_SEG + gdt	/* base */
+	.word	gdt_end - gdt_rom - 1
+	.long	BOOT_SEG + gdt_rom	/* base */
 
 	/* Some CPUs are picky about GDT alignment... */
 	.align	16
-gdt:
+.globl gdt_rom
+gdt_rom:
 	/*
 	 * The GDT table ...
 	 *
@@ -137,3 +120,4 @@ gdt:
 	.byte	0x93		/* access */
 	.byte	0xcf		/* flags + limit_high */
 	.byte	0x00		/* base_high */
+gdt_end:

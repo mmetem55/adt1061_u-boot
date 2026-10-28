@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * Copyright 2004-2011 Freescale Semiconductor, Inc.
  *
@@ -8,8 +9,6 @@
  *	Tanya Jiang <tanya.jiang@freescale.com>
  *	Mandy Lavi <mandy.lavi@freescale.com>
  *	Eran Liberty <liberty@freescale.com>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 #ifndef __IMMAP_83xx__
 #define __IMMAP_83xx__
@@ -20,6 +19,7 @@
 #include <asm/mpc8xxx_spi.h>
 #include <asm/fsl_lbc.h>
 #include <asm/fsl_dma.h>
+#include <linux/build_bug.h>
 
 /*
  * Local Access Window
@@ -28,6 +28,7 @@ typedef struct law83xx {
 	u32 bar;		/* LBIU local access window base address register */
 	u32 ar;			/* LBIU local access window attribute register */
 } law83xx_t;
+static_assert(sizeof(law83xx_t) == 8);
 
 /*
  * System configuration registers
@@ -60,20 +61,14 @@ typedef struct sysconf83xx {
 	u32 obir;		/* Output Buffer Impedance Register */
 	u8 res8[0xC];
 	u32 pecr1;		/* PCI Express control register 1 */
-#if defined(CONFIG_MPC830x)
+#if defined(CONFIG_ARCH_MPC830X)
 	u32 sdhccr;		/* eSDHC Control Registers for MPC830x */
 #else
 	u32 pecr2;		/* PCI Express control register 2 */
 #endif
-#if defined(CONFIG_MPC8309)
-	u32 can_dbg_ctrl;
-	u32 res9a;
-	u32 gpr1;
-	u8 res9b[0xAC];
-#else
 	u8 res9[0xB8];
-#endif
 } sysconf83xx_t;
+static_assert(sizeof(sysconf83xx_t) == 0x200);
 
 /*
  * Watch Dog Timer (WDT) Registers
@@ -86,6 +81,7 @@ typedef struct wdt83xx {
 	u16 swsrr;		/* System watchdog service register */
 	u8 res2[0xF0];
 } wdt83xx_t;
+static_assert(sizeof(wdt83xx_t) == 0x100);
 
 /*
  * RTC/PIT Module Registers
@@ -99,6 +95,7 @@ typedef struct rtclk83xx {
 	u32 alr;		/* alarm register */
 	u8 res0[0xE8];
 } rtclk83xx_t;
+static_assert(sizeof(rtclk83xx_t) == 0x100);
 
 /*
  * Global timer module
@@ -134,6 +131,7 @@ typedef struct gtm83xx {
 	u16 psr4;		/* Timer4 Prescaler Register */
 	u8 res[0xC0];
 } gtm83xx_t;
+static_assert(sizeof(gtm83xx_t) == 0x100);
 
 /*
  * Integrated Programmable Interrupt Controller
@@ -167,6 +165,7 @@ typedef struct ipic83xx {
 	u32 smvcr;		/* System Management Interrupt Vector Register */
 	u8 res[0x98];
 } ipic83xx_t;
+static_assert(sizeof(ipic83xx_t) == 0x100);
 
 /*
  * System Arbiter Registers
@@ -183,6 +182,7 @@ typedef struct arbiter83xx {
 	u32 aerr;		/* Arbiter Event Response Register */
 	u8 res1[0xDC];
 } arbiter83xx_t;
+static_assert(sizeof(arbiter83xx_t) == 0x100);
 
 /*
  * Reset Module
@@ -198,6 +198,7 @@ typedef struct reset83xx {
 	u32 rcer;		/* Reset Control Enable Register */
 	u8 res1[0xDC];
 } reset83xx_t;
+static_assert(sizeof(reset83xx_t) == 0x100);
 
 /*
  * Clock Module
@@ -208,6 +209,7 @@ typedef struct clk83xx {
 	u32 sccr;		/* system clock control Register */
 	u8 res0[0xF4];
 } clk83xx_t;
+static_assert(sizeof(clk83xx_t) == 0x100);
 
 /*
  * Power Management Control Module
@@ -220,6 +222,7 @@ typedef struct pmc83xx {
 	u32 pmccr2;		/* PMC Configuration Register 2 */
 	u8 res0[0xEC];
 } pmc83xx_t;
+static_assert(sizeof(pmc83xx_t) == 0x100);
 
 /*
  * General purpose I/O module
@@ -233,6 +236,7 @@ typedef struct gpio83xx {
 	u32 icr;		/* external interrupt control register */
 	u8 res0[0xE8];
 } gpio83xx_t;
+static_assert(sizeof(gpio83xx_t) == 0x100);
 
 /*
  * QE Ports Interrupts Registers
@@ -244,6 +248,7 @@ typedef struct qepi83xx {
 	u32 qepicr;		/* QE Ports Interrupt Control Register */
 	u8 res1[0xE8];
 } qepi83xx_t;
+static_assert(sizeof(qepi83xx_t) == 0x100);
 
 /*
  * QE Parallel I/O Ports
@@ -256,11 +261,13 @@ typedef struct gpio_n {
 	u32 ppar1;		/* Pin Assignment Register 1 */
 	u32 ppar2;		/* Pin Assignment Register 2 */
 } gpio_n_t;
+static_assert(sizeof(gpio_n_t) == 0x18);
 
 typedef struct qegpio83xx {
 	gpio_n_t ioport[0x7];
 	u8 res0[0x358];
 } qepio83xx_t;
+static_assert(sizeof(qepio83xx_t) == 0x400);
 
 /*
  * QE Secondary Bus Access Windows
@@ -276,6 +283,7 @@ typedef struct qesba83xx {
 	u32 sdmcar;		/* Secondary DDR memory controller attributes */
 	u8 res2[0x378];
 } qesba83xx_t;
+static_assert(sizeof(qesba83xx_t) == 0x400);
 
 /*
  * DDR Memory Controller Memory Map for DDR1
@@ -286,6 +294,7 @@ typedef struct ddr_cs_bnds {
 	u32 csbnds;
 	u8 res0[4];
 } ddr_cs_bnds_t;
+static_assert(sizeof(ddr_cs_bnds_t) == 8);
 
 typedef struct ddr83xx {
 	ddr_cs_bnds_t csbnds[4];/* Chip Select x Memory Bounds */
@@ -331,6 +340,7 @@ typedef struct ddr83xx {
 	u32 debug_reg;
 	u8 res9[0xFC];
 } ddr83xx_t;
+static_assert(sizeof(ddr83xx_t) == 0x1000);
 #endif
 
 /*
@@ -350,6 +360,7 @@ typedef struct duart83xx {
 	u8 res1[3];
 	u8 res2[0xEC];
 } duart83xx_t;
+static_assert(sizeof(duart83xx_t) == 0x100);
 
 /*
  * DMA/Messaging Unit
@@ -372,6 +383,7 @@ typedef struct dma83xx {
 	u32 res4[0x1E];		/* 0x88-0x99 reserved */
 	struct fsl_dma dma[4];
 } dma83xx_t;
+static_assert(sizeof(dma83xx_t) == 0x300);
 
 /*
  * PCI Software Configuration Registers
@@ -382,6 +394,7 @@ typedef struct pciconf83xx {
 	u32 int_ack;
 	u8 res[116];
 } pciconf83xx_t;
+static_assert(sizeof(pciconf83xx_t) == 0x80);
 
 /*
  * PCI Outbound Translation Register
@@ -394,6 +407,7 @@ typedef struct pci_outbound_window {
 	u32 pocmr;
 	u8 res2[4];
 } pot83xx_t;
+static_assert(sizeof(pot83xx_t) == 0x18);
 
 /*
  * Sequencer
@@ -406,6 +420,7 @@ typedef struct ios83xx {
 	u32 dtcr;
 	u8 res2[4];
 } ios83xx_t;
+static_assert(sizeof(ios83xx_t) == 0x100);
 
 /*
  * PCI Controller Control and Status Registers
@@ -442,6 +457,7 @@ typedef struct pcictrl83xx {
 	u32 piwar0;
 	u8 res7[132];
 } pcictrl83xx_t;
+static_assert(sizeof(pcictrl83xx_t) == 0x100);
 
 /*
  * USB
@@ -449,6 +465,7 @@ typedef struct pcictrl83xx {
 typedef struct usb83xx {
 	u8 fixme[0x1000];
 } usb83xx_t;
+static_assert(sizeof(usb83xx_t) == 0x1000);
 
 /*
  * TSEC
@@ -456,6 +473,7 @@ typedef struct usb83xx {
 typedef struct tsec83xx {
 	u8 fixme[0x1000];
 } tsec83xx_t;
+static_assert(sizeof(tsec83xx_t) == 0x1000);
 
 /*
  * Security
@@ -463,6 +481,7 @@ typedef struct tsec83xx {
 typedef struct security83xx {
 	u8 fixme[0x10000];
 } security83xx_t;
+static_assert(sizeof(security83xx_t) == 0x10000);
 
 /*
  *  PCI Express
@@ -572,6 +591,7 @@ typedef struct pex83xx {
 	struct pex_csb_bridge bridge;
 	u8 res12[0x160];
 } pex83xx_t;
+static_assert(sizeof(pex83xx_t) == 0x1000);
 
 /*
  * SATA
@@ -579,6 +599,7 @@ typedef struct pex83xx {
 typedef struct sata83xx {
 	u8 fixme[0x1000];
 } sata83xx_t;
+static_assert(sizeof(sata83xx_t) == 0x1000);
 
 /*
  * eSDHC
@@ -586,6 +607,7 @@ typedef struct sata83xx {
 typedef struct sdhc83xx {
 	u8 fixme[0x1000];
 } sdhc83xx_t;
+static_assert(sizeof(sdhc83xx_t) == 0x1000);
 
 /*
  * SerDes
@@ -600,16 +622,13 @@ typedef struct serdes83xx {
 	u32 srdsrstctl;
 	u8 res1[0xdc];
 } serdes83xx_t;
+static_assert(sizeof(serdes83xx_t) == 0x100);
 
 /*
  * On Chip ROM
  */
 typedef struct rom83xx {
-#if defined(CONFIG_MPC8309)
-	u8 mem[0x8000];
-#else
 	u8 mem[0x10000];
-#endif
 } rom83xx_t;
 
 /*
@@ -618,6 +637,7 @@ typedef struct rom83xx {
 typedef struct tdm83xx {
 	u8 fixme[0x200];
 } tdm83xx_t;
+static_assert(sizeof(tdm83xx_t) == 0x200);
 
 /*
  * TDM DMAC
@@ -625,8 +645,9 @@ typedef struct tdm83xx {
 typedef struct tdmdmac83xx {
 	u8 fixme[0x2000];
 } tdmdmac83xx_t;
+static_assert(sizeof(tdmdmac83xx_t) == 0x2000);
 
-#if defined(CONFIG_MPC834x)
+#if defined(CONFIG_ARCH_MPC834X)
 typedef struct immap {
 	sysconf83xx_t		sysconf;	/* System configuration */
 	wdt83xx_t		wdt;		/* Watch Dog Timer (WDT) Registers */
@@ -667,20 +688,7 @@ typedef struct immap {
 	u8			res7[0xC0000];
 } immap_t;
 
-#ifndef	CONFIG_MPC834x
-#ifdef CONFIG_HAS_FSL_MPH_USB
-#define CONFIG_SYS_MPC83xx_USB1_OFFSET  0x22000	/* use the MPH controller */
-#define CONFIG_SYS_MPC83xx_USB2_OFFSET	0
-#else
-#define CONFIG_SYS_MPC83xx_USB1_OFFSET	0
-#define CONFIG_SYS_MPC83xx_USB2_OFFSET  0x23000	/* use the DR controller */
-#endif
-#else
-#define CONFIG_SYS_MPC83xx_USB1_OFFSET	0x22000
-#define CONFIG_SYS_MPC83xx_USB2_OFFSET  0x23000
-#endif
-
-#elif defined(CONFIG_MPC8313)
+#elif defined(CONFIG_ARCH_MPC8313)
 typedef struct immap {
 	sysconf83xx_t		sysconf;	/* System configuration */
 	wdt83xx_t		wdt;		/* Watch Dog Timer (WDT) Registers */
@@ -715,52 +723,44 @@ typedef struct immap {
 	u8			res7[0xC0000];
 } immap_t;
 
-#elif defined(CONFIG_MPC8308) || defined(CONFIG_MPC8315)
+#elif defined(CONFIG_ARCH_MPC8308)
 typedef struct immap {
 	sysconf83xx_t		sysconf;	/* System configuration */
 	wdt83xx_t		wdt;		/* Watch Dog Timer (WDT) Registers */
 	rtclk83xx_t		rtc;		/* Real Time Clock Module Registers */
 	rtclk83xx_t		pit;		/* Periodic Interval Timer */
-	gtm83xx_t		gtm[2];		/* Global Timers Module */
+	gtm83xx_t		gtm[1];		/* Global Timers Module */
+	u8			res0[0x100];
 	ipic83xx_t		ipic;		/* Integrated Programmable Interrupt Controller */
 	arbiter83xx_t		arbiter;	/* System Arbiter Registers */
 	reset83xx_t		reset;		/* Reset Module */
 	clk83xx_t		clk;		/* System Clock Module */
 	pmc83xx_t		pmc;		/* Power Management Control Module */
 	gpio83xx_t		gpio[1];	/* General purpose I/O module */
-	u8			res0[0x1300];
+	u8			res1[0x1300];
 	ddr83xx_t		ddr;		/* DDR Memory Controller Memory */
 	fsl_i2c_t		i2c[2];		/* I2C Controllers */
-	u8			res1[0x1300];
+	u8			res2[0x1300];
 	duart83xx_t		duart[2];	/* DUART */
-	u8			res2[0x900];
+	u8			res3[0x900];
 	fsl_lbc_t		im_lbc;		/* Local Bus Controller Regs */
-	u8			res3[0x1000];
+	u8			res4[0x1000];
 	spi8xxx_t		spi;		/* Serial Peripheral Interface */
-	dma83xx_t		dma;		/* DMA */
-	pciconf83xx_t		pci_conf[1];	/* PCI Software Configuration Registers */
-	u8			res4[0x80];
-	ios83xx_t		ios;		/* Sequencer */
-	pcictrl83xx_t		pci_ctrl[1];	/* PCI Controller Control and Status Registers */
-	u8			res5[0xa00];
-	pex83xx_t		pciexp[2];	/* PCI Express Controller */
-	u8			res6[0xb000];
-	tdm83xx_t		tdm;		/* TDM Controller */
-	u8			res7[0x1e00];
-	sata83xx_t		sata[2];	/* SATA Controller */
-	u8			res8[0x9000];
+	u8			res5[0x1000];
+	pex83xx_t		pciexp[1];	/* PCI Express Controller */
+	u8			res6[0x19000];
 	usb83xx_t		usb[1];		/* USB DR Controller */
 	tsec83xx_t		tsec[2];
-	u8			res9[0x6000];
+	u8			res7[0x6000];
 	tdmdmac83xx_t		tdmdmac;	/* TDM DMAC */
-	u8			res10[0x2000];
-	security83xx_t		security;
-	u8			res11[0xA3000];
+	sdhc83xx_t		sdhc;		/* SDHC Controller */
+	u8			res8[0xb4000];
 	serdes83xx_t		serdes[1];	/* SerDes Registers */
-	u8			res12[0x1CF00];
+	u8			res9[0x1CF00];
 } immap_t;
+static_assert(sizeof(immap_t) == 0x100000);
 
-#elif defined(CONFIG_MPC837x)
+#elif defined(CONFIG_ARCH_MPC837X)
 typedef struct immap {
 	sysconf83xx_t		sysconf;	/* System configuration */
 	wdt83xx_t		wdt;		/* Watch Dog Timer (WDT) Registers */
@@ -803,8 +803,9 @@ typedef struct immap {
 	u8			res11[0xCE00];
 	rom83xx_t		rom;		/* On Chip ROM */
 } immap_t;
+static_assert(sizeof(immap_t) == 0x100000);
 
-#elif defined(CONFIG_MPC8360)
+#elif defined(CONFIG_ARCH_MPC8360)
 typedef struct immap {
 	sysconf83xx_t		sysconf;	/* System configuration */
 	wdt83xx_t		wdt;		/* Watch Dog Timer (WDT) Registers */
@@ -843,8 +844,9 @@ typedef struct immap {
 	u8			res10[0xC0000];
 	u8			qe[0x100000];	/* QE block */
 } immap_t;
+static_assert(sizeof(immap_t) == 0x200000);
 
-#elif defined(CONFIG_MPC832x)
+#elif defined(CONFIG_ARCH_MPC832X)
 typedef struct immap {
 	sysconf83xx_t		sysconf;	/* System configuration */
 	wdt83xx_t		wdt;		/* Watch Dog Timer (WDT) Registers */
@@ -880,82 +882,32 @@ typedef struct immap {
 	u8			res8[0xC0000];
 	u8			qe[0x100000];	/* QE block */
 } immap_t;
-#elif defined(CONFIG_MPC8309)
-typedef struct immap {
-	sysconf83xx_t		sysconf;	/* System configuration */
-	wdt83xx_t		wdt;		/* Watch Dog Timer (WDT) Registers */
-	rtclk83xx_t		rtc;		/* Real Time Clock Module Registers */
-	rtclk83xx_t		pit;		/* Periodic Interval Timer */
-	gtm83xx_t		gtm[2];		/* Global Timers Module */
-	ipic83xx_t		ipic;		/* Integrated Programmable Interrupt Controller */
-	arbiter83xx_t		arbiter;	/* System Arbiter Registers */
-	reset83xx_t		reset;		/* Reset Module */
-	clk83xx_t		clk;		/* System Clock Module */
-	pmc83xx_t		pmc;		/* Power Management Control Module */
-	gpio83xx_t		gpio[2];	/* General purpose I/O module */
-	u8			res0[0x500];	/* res0 1.25 KBytes added for 8309 */
-	qepi83xx_t		qepi;		/* QE Ports Interrupts Registers */
-	qepio83xx_t		qepio;		/* QE Parallel I/O ports */
-	u8			res1[0x800];
-	ddr83xx_t		ddr;		/* DDR Memory Controller Memory */
-	fsl_i2c_t		i2c[2];		/* I2C Controllers */
-	u8			res2[0x1300];
-	duart83xx_t		duart[2];	/* DUART */
-	u8			res3[0x200];
-	duart83xx_t		duart1[2];	/* DUART */
-	u8			res4[0x500];
-	fsl_lbc_t		im_lbc;		/* Local Bus Controller Regs */
-	u8			res5[0x1000];
-	u8			spi[0x100];
-	u8			res6[0xf00];
-	dma83xx_t		dma;		/* DMA */
-	pciconf83xx_t		pci_conf[1];	/* PCI Configuration Registers */
-	u8			res7[0x80];
-	ios83xx_t		ios;		/* Sequencer (IOS) */
-	pcictrl83xx_t		pci_ctrl[1];	/* PCI Control & Status Registers */
-	u8			res8[0x13A00];
-	u8			can1[0x1000];	/* Flexcan 1 */
-	u8			can2[0x1000];	/* Flexcan 2 */
-	u8			res9[0x5000];
-	usb83xx_t		usb;
-	u8			res10[0x5000];
-	u8			can3[0x1000];	/* Flexcan 3 */
-	u8			can4[0x1000];	/* Flexcan 4 */
-	u8			res11[0x1000];
-	u8			dma1[0x2000];	/* DMA */
-	sdhc83xx_t		sdhc;		/* SDHC Controller */
-	u8			res12[0xC1000];
-	rom83xx_t		rom;		/* On Chip ROM */
-	u8			res13[0x8000];
-	u8			qe[0x100000];	/* QE block */
-	u8			res14[0xE00000];/* Added for 8309 */
-} immap_t;
+static_assert(sizeof(immap_t) == 0x200000);
 #endif
 
-#define CONFIG_SYS_MPC8xxx_DDR_OFFSET	(0x2000)
-#define CONFIG_SYS_FSL_DDR_ADDR \
-			(CONFIG_SYS_IMMR + CONFIG_SYS_MPC8xxx_DDR_OFFSET)
-#define CONFIG_SYS_MPC83xx_DMA_OFFSET	(0x8000)
-#define CONFIG_SYS_MPC83xx_DMA_ADDR \
-			(CONFIG_SYS_IMMR + CONFIG_SYS_MPC83xx_DMA_OFFSET)
-#define CONFIG_SYS_MPC83xx_ESDHC_OFFSET	(0x2e000)
-#define CONFIG_SYS_MPC83xx_ESDHC_ADDR \
-			(CONFIG_SYS_IMMR + CONFIG_SYS_MPC83xx_ESDHC_OFFSET)
+struct ccsr_gpio {
+	u32	gpdir;
+	u32	gpodr;
+	u32	gpdat;
+	u32	gpier;
+	u32	gpimr;
+	u32	gpicr;
+	union	{
+			u32	gpibe;
+			u8	res0[0xE8];
+	};
+};
 
-#ifndef CONFIG_SYS_MPC83xx_USB1_OFFSET
-#define CONFIG_SYS_MPC83xx_USB1_OFFSET  0x23000
-#endif
-#define CONFIG_SYS_MPC83xx_USB1_ADDR \
-			(CONFIG_SYS_IMMR + CONFIG_SYS_MPC83xx_USB1_OFFSET)
-#if defined(CONFIG_MPC834x)
-#define CONFIG_SYS_MPC83xx_USB2_ADDR \
-			(CONFIG_SYS_IMMR + CONFIG_SYS_MPC83xx_USB2_OFFSET)
-#endif
-#define CONFIG_SYS_LBC_ADDR (&((immap_t *)CONFIG_SYS_IMMR)->im_lbc)
+#define CFG_SYS_MPC8xxx_DDR_OFFSET	(0x2000)
+#define CFG_SYS_FSL_DDR_ADDR \
+			(CONFIG_SYS_IMMR + CFG_SYS_MPC8xxx_DDR_OFFSET)
+#define CFG_SYS_MPC83xx_DMA_OFFSET	(0x8000)
+#define CFG_SYS_MPC83xx_DMA_ADDR \
+			(CONFIG_SYS_IMMR + CFG_SYS_MPC83xx_DMA_OFFSET)
+#define CFG_SYS_MPC83xx_ESDHC_OFFSET	(0x2e000)
+#define CFG_SYS_MPC83xx_ESDHC_ADDR \
+			(CONFIG_SYS_IMMR + CFG_SYS_MPC83xx_ESDHC_OFFSET)
 
-#define CONFIG_SYS_TSEC1_OFFSET		0x24000
-#define CONFIG_SYS_MDIO1_OFFSET		0x24000
+#define CFG_SYS_LBC_ADDR (&((immap_t *)CONFIG_SYS_IMMR)->im_lbc)
 
-#define TSEC_BASE_ADDR		(CONFIG_SYS_IMMR + CONFIG_SYS_TSEC1_OFFSET)
-#define MDIO_BASE_ADDR		(CONFIG_SYS_IMMR + CONFIG_SYS_MDIO1_OFFSET)
 #endif				/* __IMMAP_83xx__ */

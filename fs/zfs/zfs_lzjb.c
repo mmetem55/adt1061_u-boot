@@ -1,15 +1,13 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  *  GRUB  --  GRand Unified Bootloader
  *  Copyright (C) 1999,2000,2001,2002,2003,2004  Free Software Foundation, Inc.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 /*
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
-#include <common.h>
 #include <malloc.h>
 #include <linux/stat.h>
 #include <linux/time.h>

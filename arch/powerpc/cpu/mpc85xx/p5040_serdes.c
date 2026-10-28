@@ -1,10 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Copyright 2009-2011 Freescale Semiconductor, Inc.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
-#include <common.h>
 #include <asm/fsl_serdes.h>
 #include <asm/processor.h>
 #include <asm/io.h>
@@ -12,7 +10,7 @@
 
 /*
  * Note: For P5040, the fourth SerDes bank (with two lanes) is on SerDes2, but
- * U-boot only supports one SerDes controller.  Therefore, we ignore bank 4 in
+ * U-Boot only supports one SerDes controller.  Therefore, we ignore bank 4 in
  * this table.  This works because most of the SerDes code is for errata
  * work-arounds, and there are no P5040 errata that effect bank 4.
  */

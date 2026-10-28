@@ -1,48 +1,50 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
- *  Copyright (C) 2012 Altera Corporation <www.altera.com>
- *
- * SPDX-License-Identifier:	GPL-2.0+
+ *  Copyright (C) 2012-2017 Altera Corporation <www.altera.com>
  */
 
-#ifndef	_RESET_MANAGER_H_
-#define	_RESET_MANAGER_H_
+#ifndef _RESET_MANAGER_H_
+#define _RESET_MANAGER_H_
 
-void reset_cpu(ulong addr);
-void reset_deassert_peripherals_handoff(void);
+phys_addr_t socfpga_get_rstmgr_addr(void);
 
-void socfpga_bridges_reset(int enable);
+void reset_cpu(void);
 
-void socfpga_emac_reset(int enable);
-void socfpga_watchdog_reset(void);
-void socfpga_spim_enable(void);
-void socfpga_uart0_enable(void);
-void socfpga_sdram_enable(void);
-void socfpga_osc1timer_enable(void);
+void socfpga_per_reset(u32 reset, int set);
+void socfpga_per_reset_all(void);
 
-struct socfpga_reset_manager {
-	u32	status;
-	u32	ctrl;
-	u32	counts;
-	u32	padding1;
-	u32	mpu_mod_reset;
-	u32	per_mod_reset;
-	u32	per2_mod_reset;
-	u32	brg_mod_reset;
-};
-
-#if defined(CONFIG_SOCFPGA_VIRTUAL_TARGET)
-#define RSTMGR_CTRL_SWWARMRSTREQ_LSB 2
-#else
+#define RSTMGR_CTRL_SWCOLDRSTREQ_LSB 0
 #define RSTMGR_CTRL_SWWARMRSTREQ_LSB 1
-#endif
 
-#define RSTMGR_PERMODRST_EMAC0_LSB	0
-#define RSTMGR_PERMODRST_EMAC1_LSB	1
-#define RSTMGR_PERMODRST_L4WD0_LSB	6
-#define RSTMGR_PERMODRST_OSC1TIMER0_LSB	8
-#define RSTMGR_PERMODRST_UART0_LSB	16
-#define RSTMGR_PERMODRST_SPIM0_LSB	18
-#define RSTMGR_PERMODRST_SPIM1_LSB	19
-#define RSTMGR_PERMODRST_SDR_LSB	29
+/*
+ * Define a reset identifier, from which a permodrst bank ID
+ * and reset ID can be extracted using the subsequent macros
+ * RSTMGR_RESET() and RSTMGR_BANK().
+ */
+#define RSTMGR_BANK_OFFSET	8
+#define RSTMGR_BANK_MASK	0x7
+#define RSTMGR_RESET_OFFSET	0
+#define RSTMGR_RESET_MASK	0x1f
+#define RSTMGR_DEFINE(_bank, _offset)		\
+	((_bank) << RSTMGR_BANK_OFFSET) | ((_offset) << RSTMGR_RESET_OFFSET)
+
+/* Extract reset ID from the reset identifier. */
+#define RSTMGR_RESET(_reset)			\
+	(((_reset) >> RSTMGR_RESET_OFFSET) & RSTMGR_RESET_MASK)
+
+/* Extract bank ID from the reset identifier. */
+#define RSTMGR_BANK(_reset)			\
+	(((_reset) >> RSTMGR_BANK_OFFSET) & RSTMGR_BANK_MASK)
+
+/* Create a human-readable reference to SoCFPGA reset. */
+#define SOCFPGA_RESET(_name)	RSTMGR_##_name
+
+#if defined(CONFIG_ARCH_SOCFPGA_GEN5)
+#include <asm/arch/reset_manager_gen5.h>
+#elif defined(CONFIG_ARCH_SOCFPGA_ARRIA10)
+#include <asm/arch/reset_manager_arria10.h>
+#elif defined(CONFIG_ARCH_SOCFPGA_SOC64)
+#include <asm/arch/reset_manager_soc64.h>
+#endif
 
 #endif /* _RESET_MANAGER_H_ */

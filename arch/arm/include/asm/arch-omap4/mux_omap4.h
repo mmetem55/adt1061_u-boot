@@ -1,11 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * (C) Copyright 2004-2009
  * Texas Instruments Incorporated
  * Richard Woodruff		<r-woodruff2@ti.com>
  * Aneesh V			<aneesh@ti.com>
  * Balaji Krishnamoorthy	<balajitk@ti.com>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 #ifndef _MUX_OMAP4_H_
 #define _MUX_OMAP4_H_
@@ -13,21 +12,18 @@
 #include <asm/types.h>
 
 struct pad_conf_entry {
-
 	u16 offset;
-
 	u16 val;
-
 };
 
 #ifdef CONFIG_OFF_PADCONF
-#define OFF_PD          (1 << 12)
+#define OFF_PD          BIT(12)
 #define OFF_PU          (3 << 12)
 #define OFF_OUT_PTD     (0 << 10)
 #define OFF_OUT_PTU     (2 << 10)
-#define OFF_IN          (1 << 10)
+#define OFF_IN          BIT(10)
 #define OFF_OUT         (0 << 10)
-#define OFF_EN          (1 << 9)
+#define OFF_EN          BIT(9)
 #else
 #define OFF_PD          (0 << 12)
 #define OFF_PU          (0 << 12)
@@ -38,11 +34,11 @@ struct pad_conf_entry {
 #define OFF_EN          (0 << 9)
 #endif
 
-#define IEN             (1 << 8)
+#define IEN             BIT(8)
 #define IDIS            (0 << 8)
 #define PTU             (3 << 3)
-#define PTD             (1 << 3)
-#define EN              (1 << 3)
+#define PTD             BIT(3)
+#define EN              BIT(3)
 #define DIS             (0 << 3)
 
 #define M0              0

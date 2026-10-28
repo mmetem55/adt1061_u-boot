@@ -1,13 +1,13 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * (C) Copyright 2015
- * Kamil Lulko, <rev13@wp.pl>
- *
- * SPDX-License-Identifier:	GPL-2.0+
+ * Kamil Lulko, <kamil.lulko@gmail.com>
  */
 
 #include <config.h>
-#include <asm/armv7m.h>
+#include <asm/assembler.h>
 #include <linux/linkage.h>
+#include <system-constants.h>
 
 .type __hard_fault_entry, %function
 __hard_fault_entry:
@@ -36,7 +36,7 @@ __invalid_entry:
 
    .section  .vectors
 ENTRY(_start)
-	.long	CONFIG_SYS_INIT_SP_ADDR		@ 0 - Reset stack pointer
+	.long	SYS_INIT_SP_ADDR		@ 0 - Reset stack pointer
 	.long	reset				@ 1 - Reset
 	.long	__invalid_entry			@ 2 - NMI
 	.long	__hard_fault_entry		@ 3 - HardFault
@@ -52,6 +52,10 @@ ENTRY(_start)
 	.long	__invalid_entry			@ 13 - Reserved
 	.long	__invalid_entry			@ 14 - PendSV
 	.long	__invalid_entry			@ 15 - SysTick
-	.rept	255 - 16
+#ifdef CONFIG_CPU_V7M
+	.rept	256 - 16
+#else /* V8M / V8R */
+	.rept	512 - 16
+#endif
 	.long	__invalid_entry			@ 16..255 - External Interrupts
 	.endr

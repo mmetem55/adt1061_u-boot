@@ -1,13 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * MSMC controller utilities
  *
  * (C) Copyright 2012-2014
  *     Texas Instruments Incorporated, <www.ti.com>
- *
- * SPDX-License-Identifier:     GPL-2.0+
  */
 
-#include <common.h>
 #include <asm/arch/msmc.h>
 
 struct mpax {
@@ -54,7 +52,6 @@ struct msms_regs {
 	struct mpax sms[16][8];
 	struct mpax ses[16][8];
 };
-
 
 void msmc_share_all_segments(int priv_id)
 {

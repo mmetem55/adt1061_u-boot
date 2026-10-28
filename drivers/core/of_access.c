@@ -19,9 +19,13 @@
  * Linux version.
  */
 
-#include <common.h>
-#include <libfdt.h>//<linux/libfdt.h>
+#include <log.h>
+#include <malloc.h>
+#include <asm/global_data.h>
+#include <linux/bug.h>
+#include <linux/libfdt.h>
 #include <dm/of_access.h>
+#include <dm/util.h>
 #include <linux/ctype.h>
 #include <linux/err.h>
 #include <linux/ioport.h>
@@ -29,7 +33,7 @@
 DECLARE_GLOBAL_DATA_PTR;
 
 /* list of struct alias_prop aliases */
-LIST_HEAD(aliases_lookup);
+static LIST_HEAD(aliases_lookup);
 
 /* "/aliaes" node */
 static struct device_node *of_aliases;
@@ -170,6 +174,38 @@ const void *of_get_property(const struct device_node *np, const char *name,
 	return pp ? pp->value : NULL;
 }
 
+const struct property *of_get_first_property(const struct device_node *np)
+{
+	if (!np)
+		return NULL;
+
+	return  np->properties;
+}
+
+const struct property *of_get_next_property(const struct device_node *np,
+					    const struct property *property)
+{
+	if (!np)
+		return NULL;
+
+	return property->next;
+}
+
+const void *of_get_property_by_prop(const struct device_node *np,
+				    const struct property *property,
+				    const char **name,
+				    int *lenp)
+{
+	if (!np || !property)
+		return NULL;
+	if (name)
+		*name = property->name;
+	if (lenp)
+		*lenp = property->length;
+
+	return property->value;
+}
+
 static const char *of_prop_next_string(struct property *prop, const char *cur)
 {
 	const void *curv = cur;
@@ -307,24 +343,30 @@ static struct device_node *__of_find_node_by_path(struct device_node *parent,
 #define for_each_property_of_node(dn, pp) \
 	for (pp = dn->properties; pp != NULL; pp = pp->next)
 
-struct device_node *of_find_node_opts_by_path(const char *path,
+struct device_node *of_find_node_opts_by_path(struct device_node *root,
+					      const char *path,
 					      const char **opts)
 {
 	struct device_node *np = NULL;
 	struct property *pp;
 	const char *separator = strchr(path, ':');
 
+	if (!root)
+		root = gd->of_root;
 	if (opts)
 		*opts = separator ? separator + 1 : NULL;
 
 	if (strcmp(path, "/") == 0)
-		return of_node_get(gd->of_root);
+		return of_node_get(root);
 
 	/* The path could begin with an alias */
 	if (*path != '/') {
 		int len;
 		const char *p = separator;
 
+		/* Only allow alias processing on the control FDT */
+		if (root != gd->of_root)
+			return NULL;
 		if (!p)
 			p = strchrnul(path, '/');
 		len = p - path;
@@ -347,7 +389,7 @@ struct device_node *of_find_node_opts_by_path(const char *path,
 
 	/* Step down the tree matching path components */
 	if (!np)
-		np = of_node_get(gd->of_root);
+		np = of_node_get(root);
 	while (np && *path == '/') {
 		struct device_node *tmp = np;
 
@@ -403,14 +445,15 @@ struct device_node *of_find_node_by_prop_value(struct device_node *from,
 	return np;
 }
 
-struct device_node *of_find_node_by_phandle(phandle handle)
+struct device_node *of_find_node_by_phandle(struct device_node *root,
+					    phandle handle)
 {
 	struct device_node *np;
 
 	if (!handle)
 		return NULL;
 
-	for_each_of_allnodes(np)
+	for_each_of_allnodes_from(root, np)
 		if (np->phandle == handle)
 			break;
 	(void)of_node_get(np);
@@ -427,9 +470,8 @@ struct device_node *of_find_node_by_phandle(phandle handle)
  * @propname:	name of the property to be searched.
  * @len:	requested length of property value
  *
- * @return the property value on success, -EINVAL if the property does not
- * exist, -ENODATA if property does not have a value, and -EOVERFLOW if the
- * property data isn't large enough.
+ * Return: the property value on success, -EINVAL if the property does not
+ * exist and -EOVERFLOW if the property data isn't large enough.
  */
 static void *of_find_property_value_of_size(const struct device_node *np,
 					    const char *propname, u32 len)
@@ -438,31 +480,53 @@ static void *of_find_property_value_of_size(const struct device_node *np,
 
 	if (!prop)
 		return ERR_PTR(-EINVAL);
-	if (!prop->value)
-		return ERR_PTR(-ENODATA);
 	if (len > prop->length)
 		return ERR_PTR(-EOVERFLOW);
 
 	return prop->value;
 }
 
-int of_read_u32(const struct device_node *np, const char *propname, u32 *outp)
+int of_read_u8(const struct device_node *np, const char *propname, u8 *outp)
 {
-	const __be32 *val;
+	const u8 *val;
 
-	debug("%s: %s: ", __func__, propname);
+	log_debug("%s: %s: ", __func__, propname);
 	if (!np)
 		return -EINVAL;
 	val = of_find_property_value_of_size(np, propname, sizeof(*outp));
 	if (IS_ERR(val)) {
-		debug("(not found)\n");
+		log_debug("(not found)\n");
 		return PTR_ERR(val);
 	}
 
-	*outp = be32_to_cpup(val);
-	debug("%#x (%d)\n", *outp, *outp);
+	*outp = *val;
+	log_debug("%#x (%d)\n", *outp, *outp);
 
 	return 0;
+}
+
+int of_read_u16(const struct device_node *np, const char *propname, u16 *outp)
+{
+	const __be16 *val;
+
+	log_debug("%s: %s: ", __func__, propname);
+	if (!np)
+		return -EINVAL;
+	val = of_find_property_value_of_size(np, propname, sizeof(*outp));
+	if (IS_ERR(val)) {
+		log_debug("(not found)\n");
+		return PTR_ERR(val);
+	}
+
+	*outp = be16_to_cpup(val);
+	log_debug("%#x (%d)\n", *outp, *outp);
+
+	return 0;
+}
+
+int of_read_u32(const struct device_node *np, const char *propname, u32 *outp)
+{
+	return of_read_u32_index(np, propname, 0, outp);
 }
 
 int of_read_u32_array(const struct device_node *np, const char *propname,
@@ -470,36 +534,85 @@ int of_read_u32_array(const struct device_node *np, const char *propname,
 {
 	const __be32 *val;
 
-	debug("%s: %s: ", __func__, propname);
+	log_debug("%s: %s: ", __func__, propname);
 	val = of_find_property_value_of_size(np, propname,
 					     sz * sizeof(*out_values));
 
 	if (IS_ERR(val))
 		return PTR_ERR(val);
 
-	debug("size %zd\n", sz);
+	log_debug("size %zd\n", sz);
 	while (sz--)
 		*out_values++ = be32_to_cpup(val++);
 
 	return 0;
 }
 
-int of_read_u64(const struct device_node *np, const char *propname, u64 *outp)
+int of_read_u32_index(const struct device_node *np, const char *propname,
+		      int index, u32 *outp)
 {
-	const __be64 *val;
+	const __be32 *val;
 
-	debug("%s: %s: ", __func__, propname);
+	log_debug("%s: %s: ", __func__, propname);
 	if (!np)
 		return -EINVAL;
-	val = of_find_property_value_of_size(np, propname, sizeof(*outp));
+
+	val = of_find_property_value_of_size(np, propname,
+					     sizeof(*outp) * (index + 1));
 	if (IS_ERR(val)) {
-		debug("(not found)\n");
+		log_debug("(not found)\n");
 		return PTR_ERR(val);
 	}
 
-	*outp = be64_to_cpup(val);
-	debug("%#llx (%lld)\n", (unsigned long long)*outp,
-              (unsigned long long)*outp);
+	*outp = be32_to_cpup(val + index);
+	log_debug("%#x (%d)\n", *outp, *outp);
+
+	return 0;
+}
+
+int of_read_u64_index(const struct device_node *np, const char *propname,
+		      int index, u64 *outp)
+{
+	const __be64 *val;
+
+	log_debug("%s: %s: ", __func__, propname);
+	if (!np)
+		return -EINVAL;
+
+	val = of_find_property_value_of_size(np, propname,
+					     sizeof(*outp) * (index + 1));
+	if (IS_ERR(val)) {
+		log_debug("(not found)\n");
+		return PTR_ERR(val);
+	}
+
+	*outp = be64_to_cpup(val + index);
+	log_debug("%#llx (%lld)\n", (unsigned long long)*outp,
+		  (unsigned long long)*outp);
+
+	return 0;
+}
+
+int of_read_u64(const struct device_node *np, const char *propname, u64 *outp)
+{
+	return of_read_u64_index(np, propname, 0, outp);
+}
+
+int of_read_u64_array(const struct device_node *np, const char *propname,
+		      u64 *out_values, size_t sz)
+{
+	const __be64 *val;
+
+	log_debug("%s: %s: ", __func__, propname);
+	val = of_find_property_value_of_size(np, propname,
+					     sz * sizeof(*out_values));
+
+	if (IS_ERR(val))
+		return PTR_ERR(val);
+
+	log_debug("size %zd\n", sz);
+	while (sz--)
+		*out_values++ = be64_to_cpup(val++);
 
 	return 0;
 }
@@ -507,11 +620,14 @@ int of_read_u64(const struct device_node *np, const char *propname, u64 *outp)
 int of_property_match_string(const struct device_node *np, const char *propname,
 			     const char *string)
 {
-	const struct property *prop = of_find_property(np, propname, NULL);
+	int len = 0;
+	const struct property *prop = of_find_property(np, propname, &len);
 	size_t l;
 	int i;
 	const char *p, *end;
 
+	if (!prop && len == -FDT_ERR_NOTFOUND)
+		return -ENOENT;
 	if (!prop)
 		return -EINVAL;
 	if (!prop->value)
@@ -524,7 +640,7 @@ int of_property_match_string(const struct device_node *np, const char *propname,
 		l = strnlen(p, end - p) + 1;
 		if (p + l > end)
 			return -EILSEQ;
-		debug("comparing %s with %s\n", string, p);
+		log_debug("comparing %s with %s\n", string, p);
 		if (strcmp(string, p) == 0)
 			return i; /* Found it; return index */
 	}
@@ -537,7 +653,8 @@ int of_property_match_string(const struct device_node *np, const char *propname,
  * @propname:	name of the property to be searched.
  * @out_strs:	output array of string pointers.
  * @sz:		number of array elements to read.
- * @skip:	Number of strings to skip over at beginning of list.
+ * @skip:	Number of strings to skip over at beginning of list (cannot be
+ *	negative)
  *
  * Don't call this function directly. It is a utility helper for the
  * of_property_read_string*() family of functions.
@@ -568,15 +685,16 @@ int of_property_read_string_helper(const struct device_node *np,
 	return i <= 0 ? -ENODATA : i;
 }
 
-static int __of_parse_phandle_with_args(const struct device_node *np,
-					const char *list_name,
-					const char *cells_name,
-					int cell_count, int index,
-					struct of_phandle_args *out_args)
+static int __of_root_parse_phandle_with_args(struct device_node *root,
+					     const struct device_node *np,
+					     const char *list_name,
+					     const char *cells_name,
+					     int cell_count, int index,
+					     struct of_phandle_args *out_args)
 {
 	const __be32 *list, *list_end;
 	int rc = 0, cur_index = 0;
-	uint32_t count = 0;
+	uint32_t count;
 	struct device_node *node = NULL;
 	phandle phandle;
 	int size;
@@ -608,19 +726,19 @@ static int __of_parse_phandle_with_args(const struct device_node *np,
 			 * below.
 			 */
 			if (cells_name || cur_index == index) {
-				node = of_find_node_by_phandle(phandle);
+				node = of_find_node_by_phandle(root, phandle);
 				if (!node) {
-					debug("%s: could not find phandle\n",
-					      np->full_name);
+					dm_warn("%s: could not find phandle\n",
+						np->full_name);
 					goto err;
 				}
 			}
 
 			if (cells_name) {
 				if (of_read_u32(node, cells_name, &count)) {
-					debug("%s: could not get %s for %s\n",
-					      np->full_name, cells_name,
-					      node->full_name);
+					dm_warn("%s: could not get %s for %s\n",
+						np->full_name, cells_name,
+						node->full_name);
 					goto err;
 				}
 			} else {
@@ -632,8 +750,8 @@ static int __of_parse_phandle_with_args(const struct device_node *np,
 			 * remaining property data length
 			 */
 			if (list + count > list_end) {
-				debug("%s: arguments longer than property\n",
-				      np->full_name);
+				dm_warn("%s: arguments longer than property\n",
+					np->full_name);
 				goto err;
 			}
 		}
@@ -685,37 +803,98 @@ static int __of_parse_phandle_with_args(const struct device_node *np,
 	return rc;
 }
 
-struct device_node *of_parse_phandle(const struct device_node *np,
-				     const char *phandle_name, int index)
+struct device_node *of_root_parse_phandle(struct device_node *root,
+					  const struct device_node *np,
+					  const char *phandle_name, int index)
 {
 	struct of_phandle_args args;
 
 	if (index < 0)
 		return NULL;
 
-	if (__of_parse_phandle_with_args(np, phandle_name, NULL, 0, index,
-					 &args))
+	if (__of_root_parse_phandle_with_args(root, np, phandle_name, NULL, 0,
+					      index, &args))
 		return NULL;
 
 	return args.np;
 }
 
-int of_parse_phandle_with_args(const struct device_node *np,
-			       const char *list_name, const char *cells_name,
-			       int index, struct of_phandle_args *out_args)
+int of_root_parse_phandle_with_args(struct device_node *root,
+				    const struct device_node *np,
+				    const char *list_name, const char *cells_name,
+				    int cell_count, int index,
+				    struct of_phandle_args *out_args)
 {
 	if (index < 0)
 		return -EINVAL;
 
-	return __of_parse_phandle_with_args(np, list_name, cells_name, 0,
-					    index, out_args);
+	return __of_root_parse_phandle_with_args(root, np, list_name, cells_name,
+						 cell_count, index, out_args);
+}
+
+int of_root_count_phandle_with_args(struct device_node *root,
+				    const struct device_node *np,
+				    const char *list_name, const char *cells_name,
+				    int cell_count)
+{
+	return __of_root_parse_phandle_with_args(root, np, list_name, cells_name,
+						 cell_count, -1, NULL);
+}
+
+struct device_node *of_parse_phandle(const struct device_node *np,
+				     const char *phandle_name, int index)
+{
+	return of_root_parse_phandle(NULL, np, phandle_name, index);
+}
+
+int of_parse_phandle_with_args(const struct device_node *np,
+			       const char *list_name, const char *cells_name,
+			       int cell_count, int index,
+			       struct of_phandle_args *out_args)
+{
+	return of_root_parse_phandle_with_args(NULL, np, list_name, cells_name,
+					       cell_count, index, out_args);
 }
 
 int of_count_phandle_with_args(const struct device_node *np,
-			       const char *list_name, const char *cells_name)
+			       const char *list_name, const char *cells_name,
+			       int cell_count)
 {
-	return __of_parse_phandle_with_args(np, list_name, cells_name, 0,
-					    -1, NULL);
+	return of_root_count_phandle_with_args(NULL, np, list_name, cells_name,
+					       cell_count);
+}
+
+/**
+ * of_property_count_elems_of_size - Count the number of elements in a property
+ *
+ * @np:		device node from which the property value is to be read.
+ * @propname:	name of the property to be searched.
+ * @elem_size:	size of the individual element
+ *
+ * Search for a property in a device node and count the number of elements of
+ * size elem_size in it.
+ *
+ * Return: The number of elements on sucess, -EINVAL if the property does not
+ * exist or its length does not match a multiple of elem_size and -ENODATA if
+ * the property does not have a value.
+ */
+int of_property_count_elems_of_size(const struct device_node *np,
+				const char *propname, int elem_size)
+{
+	const struct property *prop = of_find_property(np, propname, NULL);
+
+	if (!prop)
+		return -EINVAL;
+	if (!prop->value)
+		return -ENODATA;
+
+	if (prop->length % elem_size != 0) {
+		pr_err("size of %s in node %pOF is not a multiple of %d\n",
+		       propname, np, elem_size);
+		return -EINVAL;
+	}
+
+	return prop->length / elem_size;
 }
 
 static void of_alias_add(struct alias_prop *ap, struct device_node *np,
@@ -726,8 +905,8 @@ static void of_alias_add(struct alias_prop *ap, struct device_node *np,
 	strncpy(ap->stem, stem, stem_len);
 	ap->stem[stem_len] = 0;
 	list_add_tail(&ap->link, &aliases_lookup);
-	debug("adding DT alias:%s: stem=%s id=%i node=%s\n",
-	      ap->alias, ap->stem, ap->id, of_node_full_name(np));
+	log_debug("adding DT alias:%s: stem=%s id=%i node=%s\n",
+		  ap->alias, ap->stem, ap->id, of_node_full_name(np));
 }
 
 int of_alias_scan(void)
@@ -744,7 +923,7 @@ int of_alias_scan(void)
 
 		name = of_get_property(of_chosen, "stdout-path", NULL);
 		if (name)
-			of_stdout = of_find_node_opts_by_path(name,
+			of_stdout = of_find_node_opts_by_path(NULL, name,
 							&of_stdout_options);
 	}
 
@@ -833,4 +1012,175 @@ int of_alias_get_highest_id(const char *stem)
 struct device_node *of_get_stdout(void)
 {
 	return of_stdout;
+}
+
+int of_write_prop(struct device_node *np, const char *propname, int len,
+		  const void *value)
+{
+	struct property *pp;
+	struct property *pp_last = NULL;
+	struct property *new;
+
+	if (!np)
+		return -EINVAL;
+
+	for (pp = np->properties; pp; pp = pp->next) {
+		if (strcmp(pp->name, propname) == 0) {
+			/* Property exists -> change value */
+			pp->value = (void *)value;
+			pp->length = len;
+			return 0;
+		}
+		pp_last = pp;
+	}
+
+	/* Property does not exist -> append new property */
+	new = malloc(sizeof(struct property));
+	if (!new)
+		return -ENOMEM;
+
+	new->name = strdup(propname);
+	if (!new->name) {
+		free(new);
+		return -ENOMEM;
+	}
+
+	new->value = (void *)value;
+	new->length = len;
+	new->next = NULL;
+
+	if (pp_last)
+		pp_last->next = new;
+	else
+		np->properties = new;
+
+	return 0;
+}
+
+int of_add_subnode(struct device_node *parent, const char *name, int len,
+		   struct device_node **childp)
+{
+	struct device_node *child, *new, *last_sibling = NULL;
+	char *new_name, *full_name;
+	int parent_fnl;
+
+	if (len == -1)
+		len = strlen(name);
+	__for_each_child_of_node(parent, child) {
+		/*
+		 * make sure we don't use a child called "trevor" when we are
+		 * searching for "trev".
+		 */
+		if (!strncmp(child->name, name, len) && strlen(child->name) == len) {
+			*childp = child;
+			return -EEXIST;
+		}
+		last_sibling = child;
+	}
+
+	/* Subnode does not exist -> append new subnode */
+	new = calloc(1, sizeof(struct device_node));
+	if (!new)
+		return -ENOMEM;
+
+	new_name = memdup(name, len + 1);
+	if (!new_name) {
+		free(new);
+		return -ENOMEM;
+	}
+	new_name[len] = '\0';
+
+	/*
+	 * if the parent is the root node (named "") we don't need to prepend
+	 * its full path
+	 */
+	parent_fnl = *parent->name ? strlen(parent->full_name) : 0;
+	full_name = calloc(1, parent_fnl + 1 + len + 1);
+	if (!full_name) {
+		free(new_name);
+		free(new);
+		return -ENOMEM;
+	}
+	new->name = new_name;	/* assign to constant pointer */
+
+	strcpy(full_name, parent->full_name); /* "" for root node */
+	full_name[parent_fnl] = '/';
+	strlcpy(&full_name[parent_fnl + 1], name, len + 1);
+	new->full_name = full_name;
+
+	/* Add as last sibling of the parent */
+	if (last_sibling)
+		last_sibling->sibling = new;
+	if (!parent->child)
+		parent->child = new;
+	new->parent = parent;
+
+	*childp = new;
+
+	return 0;
+}
+
+int __of_remove_property(struct device_node *np, struct property *prop)
+{
+	struct property **next;
+
+	for (next = &np->properties; *next; next = &(*next)->next) {
+		if (*next == prop)
+			break;
+	}
+	if (!*next)
+		return -ENODEV;
+
+	/* found the node */
+	*next = prop->next;
+
+	return 0;
+}
+
+int of_remove_property(struct device_node *np, struct property *prop)
+{
+	int rc;
+
+	mutex_lock(&of_mutex);
+
+	rc = __of_remove_property(np, prop);
+
+	mutex_unlock(&of_mutex);
+
+	return rc;
+}
+
+int of_remove_node(struct device_node *to_remove)
+{
+	struct device_node *parent = to_remove->parent;
+	struct device_node *np, *prev;
+
+	if (!parent)
+		return -EPERM;
+	prev = NULL;
+	__for_each_child_of_node(parent, np) {
+		if (np == to_remove)
+			break;
+		prev = np;
+	}
+	if (!np)
+		return -EFAULT;
+
+	/* if there is a previous node, link it to this one's sibling */
+	if (prev)
+		prev->sibling = np->sibling;
+	else
+		parent->child = np->sibling;
+
+	/*
+	 * don't free it, since if this is an unflattened tree, all the memory
+	 * was alloced in one block; this pointer will be somewhere in the
+	 * middle of that
+	 *
+	 * TODO(sjg@chromium.org): Consider marking nodes as 'allocated'?
+	 *
+	 * free(np);
+	 */
+
+	return 0;
 }

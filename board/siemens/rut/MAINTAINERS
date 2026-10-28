@@ -1,5 +1,5 @@
 RUT BOARD
-M:	Roger Meier <r.meier@siemens.com>
+M:	Enrico Leto <enrico.leto@siemens.com>
 S:	Maintained
 F:	board/siemens/rut/
 F:	include/configs/rut.h

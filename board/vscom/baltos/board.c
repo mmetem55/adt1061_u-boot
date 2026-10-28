@@ -1,15 +1,20 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * board.c
  *
  * Board functions for TI AM335X based boards
  *
- * Copyright (C) 2011, Texas Instruments, Incorporated - http://www.ti.com/
- *
- * SPDX-License-Identifier:	GPL-2.0+
+ * Copyright (C) 2011, Texas Instruments, Incorporated - https://www.ti.com/
  */
 
-#include <common.h>
+#include <config.h>
+#include <env.h>
 #include <errno.h>
+#include <init.h>
+#include <net.h>
+#include <serial.h>
+#include <asm/global_data.h>
+#include <linux/libfdt.h>
 #include <spl.h>
 #include <asm/arch/cpu.h>
 #include <asm/arch/hardware.h>
@@ -27,17 +32,15 @@
 #include <i2c.h>
 #include <miiphy.h>
 #include <cpsw.h>
-#include <power/tps65217.h>
 #include <power/tps65910.h>
-#include <environment.h>
 #include <watchdog.h>
 #include "board.h"
 
 DECLARE_GLOBAL_DATA_PTR;
 
-/* GPIO that controls power to DDR on EVM-SK */
-#define GPIO_DDR_VTT_EN		7
+/* GPIO that controls DIP switch and mPCIe slot */
 #define DIP_S1			44
+#define MPCIE_SW		100
 
 static struct ctrl_dev *cdev = (struct ctrl_dev *)CTRL_DEVICE_BASE;
 
@@ -66,24 +69,30 @@ static int baltos_set_console(void)
 	printf("DIPs: 0x%1x\n", (~dips) & 0xf);
 
 	if ((dips & 0xf) == 0xe)
-		setenv("console", "ttyUSB0,115200n8");
+		env_set("console", "ttyUSB0,115200n8");
 
 	return 0;
 }
 
 static int read_eeprom(BSP_VS_HWPARAM *header)
 {
-	i2c_set_bus_num(1);
+	int rc;
+	struct udevice *dev;
+	struct udevice *bus;
+
+	rc = uclass_get_device_by_seq(UCLASS_I2C, 1, &bus);
+	if (rc)
+		return rc;
 
 	/* Check if baseboard eeprom is available */
-	if (i2c_probe(CONFIG_SYS_I2C_EEPROM_ADDR)) {
+	if (dm_i2c_probe(bus, CONFIG_SYS_I2C_EEPROM_ADDR, 0, &dev)) {
 		puts("Could not probe the EEPROM; something fundamentally "
 			"wrong on the I2C bus.\n");
 		return -ENODEV;
 	}
 
 	/* read the eeprom using i2c */
-	if (i2c_read(CONFIG_SYS_I2C_EEPROM_ADDR, 0, 1, (uchar *)header,
+	if (dm_i2c_read(dev, 0, (uchar *)header,
 		     sizeof(BSP_VS_HWPARAM))) {
 		puts("Could not read the EEPROM; something fundamentally"
 			" wrong on the I2C bus.\n");
@@ -122,7 +131,7 @@ static int read_eeprom(BSP_VS_HWPARAM *header)
 	return 0;
 }
 
-#if defined(CONFIG_SPL_BUILD) || defined(CONFIG_NOR_BOOT)
+#if defined(CONFIG_XPL_BUILD) || defined(CONFIG_NOR_BOOT)
 
 static const struct ddr_data ddr3_baltos_data = {
 	.datardsratio0 = MT41K256M16HA125E_RD_DQS,
@@ -168,36 +177,30 @@ const struct dpll_params dpll_ddr_evm_sk = {
 const struct dpll_params dpll_ddr_baltos = {
 		400, OSC-1, 1, -1, -1, -1, -1};
 
-void am33xx_spl_board_init(void)
+void spl_board_init(void)
 {
-	int mpu_vdd;
-	int sil_rev;
+	int sil_rev, mpu_vdd;
+	int freq;
 
-	/* Get the frequency */
-	dpll_mpu_opp100.m = am335x_get_efuse_mpu_max_freq(cdev);
-
-	/*
-	 * The GP EVM, IDK and EVM SK use a TPS65910 PMIC.  For all
-	 * MPU frequencies we support we use a CORE voltage of
-	 * 1.1375V.  For MPU voltage we need to switch based on
-	 * the frequency we are running at.
-	 */
+	enable_i2c1_pin_mux();
 	i2c_set_bus_num(1);
 
-	printf("I2C speed: %d Hz\n", CONFIG_SYS_OMAP24_I2C_SPEED);
+	freq = am335x_get_efuse_mpu_max_freq(cdev);
 
-	if (i2c_probe(TPS65910_CTRL_I2C_ADDR)) {
-		puts("i2c: cannot access TPS65910\n");
+	/*
+	 * The GP EVM, IDK and EVM SK use a TPS65910 PMIC. For all
+	 * MPU frequencies we support we use a CORE voltage of
+	 * 1.1375V. For MPU voltage we need to switch based on
+	 * the frequency we are running at.
+	 */
+	if (power_tps65910_init(1))
 		return;
-	}
-
 	/*
 	 * Depending on MPU clock and PG we will need a different
 	 * VDD to drive at that speed.
 	 */
 	sil_rev = readl(&cdev->deviceid) >> 28;
-	mpu_vdd = am335x_get_tps65910_mpu_vdd(sil_rev,
-					      dpll_mpu_opp100.m);
+	mpu_vdd = am335x_get_tps65910_mpu_vdd(sil_rev, freq);
 
 	/* Tell the TPS65910 to use i2c */
 	tps65910_set_i2c_control();
@@ -209,12 +212,6 @@ void am33xx_spl_board_init(void)
 	/* Second, update the CORE voltage. */
 	if (tps65910_voltage_update(CORE, TPS65910_OP_REG_SEL_1_1_3))
 		return;
-
-	/* Set CORE Frequencies to OPP100 */
-	do_setup_dpll(&dpll_core_regs, &dpll_core_opp100);
-
-	/* Set MPU Frequency to what we detected now that voltages are set */
-	do_setup_dpll(&dpll_mpu_regs, &dpll_mpu_opp100);
 
 	writel(0x000010ff, PRM_DEVICE_INST + 4);
 }
@@ -247,9 +244,6 @@ const struct ctrl_ioregs ioregs_baltos = {
 
 void sdram_init(void)
 {
-	gpio_request(GPIO_DDR_VTT_EN, "ddr_vtt_en");
-	gpio_direction_output(GPIO_DDR_VTT_EN, 1);
-
 	config_ddr(400, &ioregs_baltos,
 		   &ddr3_baltos_data,
 		   &ddr3_baltos_cmd_ctrl_data,
@@ -266,14 +260,14 @@ int board_init(void)
 	hw_watchdog_init();
 #endif
 
-	gd->bd->bi_boot_params = CONFIG_SYS_SDRAM_BASE + 0x100;
-#if defined(CONFIG_NOR) || defined(CONFIG_NAND)
+	gd->bd->bi_boot_params = CFG_SYS_SDRAM_BASE + 0x100;
+#if defined(CONFIG_NOR) || defined(CONFIG_MTD_RAW_NAND)
 	gpmc_init();
 #endif
 	return 0;
 }
 
-int ft_board_setup(void *blob, bd_t *bd)
+int ft_board_setup(void *blob, struct bd_info *bd)
 {
 	int node, ret;
 	unsigned char mac_addr[6];
@@ -291,16 +285,15 @@ int ft_board_setup(void *blob, bd_t *bd)
 	mac_addr[4] = header.MAC1[4];
 	mac_addr[5] = header.MAC1[5];
 
-
-	node = fdt_path_offset(blob, "/ocp/ethernet/slave@4a100200");
+	node = fdt_path_offset(blob, "ethernet0");
 	if (node < 0) {
-		printf("no /soc/fman/ethernet path offset\n");
+		printf("no ethernet0 path offset\n");
 		return -ENODEV;
 	}
 
 	ret = fdt_setprop(blob, node, "mac-address", &mac_addr, 6);
 	if (ret) {
-		printf("error setting local-mac-address property\n");
+		printf("error setting mac-address property\n");
 		return -ENODEV;
 	}
 
@@ -312,15 +305,15 @@ int ft_board_setup(void *blob, bd_t *bd)
 	mac_addr[4] = header.MAC2[4];
 	mac_addr[5] = header.MAC2[5];
 
-	node = fdt_path_offset(blob, "/ocp/ethernet/slave@4a100300");
+	node = fdt_path_offset(blob, "ethernet1");
 	if (node < 0) {
-		printf("no /soc/fman/ethernet path offset\n");
+		printf("no ethernet1 path offset\n");
 		return -ENODEV;
 	}
 
 	ret = fdt_setprop(blob, node, "mac-address", &mac_addr, 6);
 	if (ret) {
-		printf("error setting local-mac-address property\n");
+		printf("error setting mac-address property\n");
 		return -ENODEV;
 	}
 
@@ -328,6 +321,11 @@ int ft_board_setup(void *blob, bd_t *bd)
 
 	return 0;
 }
+
+static struct module_pin_mux pcie_sw_pin_mux[] = {
+	{OFFSET(mii1_rxdv), (MODE(7) | PULLUDEN )},     /* GPIO3_4 */
+	{-1},
+};
 
 static struct module_pin_mux dip_pin_mux[] = {
 	{OFFSET(gpmc_ad12), (MODE(7) | RXACTIVE )},	/* GPIO1_12 */
@@ -346,7 +344,7 @@ int board_late_init(void)
 
 	/* get production data */
 	if (read_eeprom(&header)) {
-		sprintf(model, "211");
+		strcpy(model, "211");
 	} else {
 		sprintf(model, "%d", header.SystemId);
 		if (header.SystemId == 215) {
@@ -354,15 +352,27 @@ int board_late_init(void)
 			baltos_set_console();
 		}
 	}
-	setenv("board_name", model);
+
+	/* turn power for the mPCIe slot */
+	configure_module_pin_mux(pcie_sw_pin_mux);
+	if (gpio_request(MPCIE_SW, "mpcie_sw")) {
+		printf("failed to export GPIO %d\n", MPCIE_SW);
+		return -ENODEV;
+	}
+	if (gpio_direction_output(MPCIE_SW, 1)) {
+		printf("failed to set GPIO %d direction\n", MPCIE_SW);
+		return -ENODEV;
+	}
+
+	env_set("board_name", model);
 #endif
 
 	return 0;
 }
 #endif
 
-#if (defined(CONFIG_DRIVER_TI_CPSW) && !defined(CONFIG_SPL_BUILD)) || \
-	(defined(CONFIG_SPL_ETH_SUPPORT) && defined(CONFIG_SPL_BUILD))
+#if (defined(CONFIG_DRIVER_TI_CPSW) && !defined(CONFIG_XPL_BUILD)) || \
+	(defined(CONFIG_SPL_ETH) && defined(CONFIG_XPL_BUILD))
 static void cpsw_control(int enabled)
 {
 	/* VTP can be added here */
@@ -404,17 +414,16 @@ static struct cpsw_platform_data cpsw_data = {
 };
 #endif
 
-#if ((defined(CONFIG_SPL_ETH_SUPPORT) || defined(CONFIG_SPL_USBETH_SUPPORT)) \
-		&& defined(CONFIG_SPL_BUILD)) || \
+#if ((defined(CONFIG_SPL_ETH) || defined(CONFIG_SPL_USB_ETHER)) \
+		&& defined(CONFIG_XPL_BUILD)) || \
 	((defined(CONFIG_DRIVER_TI_CPSW) || \
-	  defined(CONFIG_USB_ETHER) && defined(CONFIG_MUSB_GADGET)) && \
-	 !defined(CONFIG_SPL_BUILD))
-int board_eth_init(bd_t *bis)
+	  defined(CONFIG_USB_ETHER) && defined(CONFIG_USB_MUSB_GADGET)) && \
+	 !defined(CONFIG_XPL_BUILD))
+int board_eth_init(struct bd_info *bis)
 {
 	int rv, n = 0;
 	uint8_t mac_addr[6];
 	uint32_t mac_hi, mac_lo;
-	__maybe_unused struct am335x_baseboard_id header;
 
 	/*
 	 * Note here that we're using CPSW1 since that has a 1Gbit PHY while
@@ -433,13 +442,13 @@ int board_eth_init(bd_t *bis)
 	mac_addr[4] = mac_lo & 0xFF;
 	mac_addr[5] = (mac_lo & 0xFF00) >> 8;
 
-#if (defined(CONFIG_DRIVER_TI_CPSW) && !defined(CONFIG_SPL_BUILD)) || \
-	(defined(CONFIG_SPL_ETH_SUPPORT) && defined(CONFIG_SPL_BUILD))
-	if (!getenv("ethaddr")) {
+#if (defined(CONFIG_DRIVER_TI_CPSW) && !defined(CONFIG_XPL_BUILD)) || \
+	(defined(CONFIG_SPL_ETH) && defined(CONFIG_XPL_BUILD))
+	if (!env_get("ethaddr")) {
 		printf("<ethaddr> not set. Validating first E-fuse MAC\n");
 
 		if (is_valid_ethaddr(mac_addr))
-			eth_setenv_enetaddr("ethaddr", mac_addr);
+			eth_env_set_enetaddr("ethaddr", mac_addr);
 	}
 
 #ifdef CONFIG_DRIVER_TI_CPSW

@@ -1,8 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * (C) Copyright 2002
  * Daniel Engström, Omicron Ceti AB, daniel@omicron.se
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #ifndef __ASM_IBMPC_H_
@@ -23,5 +22,8 @@
 
 #define UART0_IRQ	4
 #define UART1_IRQ	3
+
+#define KBD_IRQ		1
+#define MSE_IRQ		12
 
 #endif

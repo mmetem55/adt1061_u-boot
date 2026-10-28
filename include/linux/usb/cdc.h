@@ -5,7 +5,7 @@
  * notably ethernet adapters and various modems.  It's used mostly with
  * firmware based USB peripherals.
  *
- * Ported to U-boot by: Thomas Smits <ts.smits@gmail.com> and
+ * Ported to U-Boot by: Thomas Smits <ts.smits@gmail.com> and
  *                      Remy Bohmer <linux@bohmer.net>
  */
 
@@ -149,14 +149,6 @@ struct usb_cdc_mdlm_detail_desc {
 	/* type is associated with mdlm_desc.bGUID */
 	__u8	bGuidDescriptorType;
 	__u8	bDetailData[0];
-} __attribute__ ((packed));
-
-struct usb_cdc_obex_desc {
-    __u8    bLength;
-    __u8    bDescriptorType;
-    __u8    bDescriptorSubType;
-
-    __le16  bcdVersion;
 } __attribute__ ((packed));
 
 /*-------------------------------------------------------------------------*/

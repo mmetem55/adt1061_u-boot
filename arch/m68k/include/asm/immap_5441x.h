@@ -1,10 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * MCF5441x Internal Memory Map
  *
  * Copyright 2010-2012 Freescale Semiconductor, Inc.
  * TsiChung Liew (Tsi-Chung.Liew@freescale.com)
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #ifndef __IMMAP_5441X__
@@ -77,6 +76,7 @@
 #define MMAP_CCM	0xEC090000
 #define MMAP_GPIO	0xEC094000
 
+#include <linux/types.h>
 #include <asm/coldfire/crossbar.h>
 #include <asm/coldfire/dspi.h>
 #include <asm/coldfire/edma.h>

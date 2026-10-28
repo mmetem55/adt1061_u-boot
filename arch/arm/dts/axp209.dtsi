@@ -18,11 +18,6 @@
  *     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  *     GNU General Public License for more details.
  *
- *     You should have received a copy of the GNU General Public
- *     License along with this file; if not, write to the Free
- *     Software Foundation, Inc., 51 Franklin St, Fifth Floor, Boston,
- *     MA 02110-1301 USA
- *
  * Or, alternatively,
  *
  *  b) Permission is hereby granted, free of charge, to any person
@@ -53,10 +48,38 @@
  * http://dl.linux-sunxi.org/AXP/AXP209%20Datasheet%20v1.0_cn.pdf
  */
 
+/ {
+	pmic-temp {
+		compatible = "iio-hwmon";
+		io-channels = <&axp_adc 4>; /* Internal temperature */
+	};
+};
+
 &axp209 {
 	compatible = "x-powers,axp209";
 	interrupt-controller;
 	#interrupt-cells = <1>;
+
+	ac_power_supply: ac-power {
+		compatible = "x-powers,axp202-ac-power-supply";
+		status = "disabled";
+	};
+
+	axp_adc: adc {
+		compatible = "x-powers,axp209-adc";
+		#io-channel-cells = <1>;
+	};
+
+	axp_gpio: gpio {
+		compatible = "x-powers,axp209-gpio";
+		gpio-controller;
+		#gpio-cells = <2>;
+	};
+
+	battery_power_supply: battery-power {
+		compatible = "x-powers,axp209-battery-power-supply";
+		status = "disabled";
+	};
 
 	regulators {
 		/* Default work frequency for buck regulators */
@@ -92,6 +115,12 @@
 
 		reg_ldo5: ldo5 {
 			regulator-name = "ldo5";
+			status = "disabled";
 		};
+	};
+
+	usb_power_supply: usb-power {
+		compatible = "x-powers,axp202-usb-power-supply";
+		status = "disabled";
 	};
 };

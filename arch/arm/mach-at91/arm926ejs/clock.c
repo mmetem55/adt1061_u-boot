@@ -1,14 +1,15 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * [origin: Linux kernel linux/arch/arm/mach-at91/clock.c]
  *
  * Copyright (C) 2005 David Brownell
  * Copyright (C) 2005 Ivan Kokshaysky
  * Copyright (C) 2009 Jean-Christophe PLAGNIOL-VILLARD <plagnioj@jcrosoft.com>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
-#include <common.h>
+#include <config.h>
+#include <time.h>
+#include <asm/global_data.h>
 #include <asm/io.h>
 #include <asm/arch/hardware.h>
 #include <asm/arch/at91_pmc.h>
@@ -18,13 +19,15 @@
 # error You need to define CONFIG_AT91FAMILY in your board config!
 #endif
 
+#define EN_PLLB_TIMEOUT	500
+
 DECLARE_GLOBAL_DATA_PTR;
 
 static unsigned long at91_css_to_rate(unsigned long css)
 {
 	switch (css) {
 	case AT91_PMC_MCKR_CSS_SLOW:
-		return CONFIG_SYS_AT91_SLOW_CLOCK;
+		return CFG_SYS_AT91_SLOW_CLOCK;
 	case AT91_PMC_MCKR_CSS_MAIN:
 		return gd->arch.main_clk_rate_hz;
 	case AT91_PMC_MCKR_CSS_PLLA:
@@ -113,7 +116,7 @@ int at91_clock_init(unsigned long main_clock)
 {
 	unsigned freq, mckr;
 	at91_pmc_t *pmc = (at91_pmc_t *) ATMEL_BASE_PMC;
-#ifndef CONFIG_SYS_AT91_MAIN_CLOCK
+#ifndef CFG_SYS_AT91_MAIN_CLOCK
 	unsigned tmp;
 	/*
 	 * When the bootloader initialized the main oscillator correctly,
@@ -126,7 +129,7 @@ int at91_clock_init(unsigned long main_clock)
 			tmp = readl(&pmc->mcfr);
 		} while (!(tmp & AT91_PMC_MCFR_MAINRDY));
 		tmp &= AT91_PMC_MCFR_MAINF_MASK;
-		main_clock = tmp * (CONFIG_SYS_AT91_SLOW_CLOCK / 16);
+		main_clock = tmp * (CFG_SYS_AT91_SLOW_CLOCK / 16);
 	}
 #endif
 	gd->arch.main_clk_rate_hz = main_clock;
@@ -160,7 +163,13 @@ int at91_clock_init(unsigned long main_clock)
 	gd->arch.mck_rate_hz = at91_css_to_rate(mckr & AT91_PMC_MCKR_CSS_MASK);
 	freq = gd->arch.mck_rate_hz;
 
+#if defined(CONFIG_AT91SAM9X5)
+	/* different in prescale on at91sam9x5 */
+	freq /= (1 << ((mckr & AT91_PMC_MCKR_PRES_MASK) >> 4));
+#else
 	freq /= (1 << ((mckr & AT91_PMC_MCKR_PRES_MASK) >> 2));	/* prescale */
+#endif
+
 #if defined(CONFIG_AT91SAM9G20)
 	/* mdiv ; (x >> 7) = ((x >> 8) * 2) */
 	gd->arch.mck_rate_hz = (mckr & AT91_PMC_MCKR_MDIV_MASK) ?
@@ -243,9 +252,38 @@ void at91_mck_init(u32 mckr)
 		;
 }
 
-void at91_periph_clk_enable(int id)
+int at91_pllb_clk_enable(u32 pllbr)
 {
-	struct at91_pmc *pmc = (struct at91_pmc *)ATMEL_BASE_PMC;
+	struct at91_pmc *pmc = (at91_pmc_t *)ATMEL_BASE_PMC;
+	ulong start_time, tmp_time;
 
-	writel(1 << id, &pmc->pcer);
+	start_time = get_timer(0);
+	writel(pllbr, &pmc->pllbr);
+	while ((readl(&pmc->sr) & AT91_PMC_LOCKB) != AT91_PMC_LOCKB) {
+		tmp_time = get_timer(0);
+		if ((tmp_time - start_time) > EN_PLLB_TIMEOUT) {
+			printf("ERROR: failed to enable PLLB\n");
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
+int at91_pllb_clk_disable(void)
+{
+	struct at91_pmc *pmc = (at91_pmc_t *)ATMEL_BASE_PMC;
+	ulong start_time, tmp_time;
+
+	start_time = get_timer(0);
+	writel(0, &pmc->pllbr);
+	while ((readl(&pmc->sr) & AT91_PMC_LOCKB) != 0) {
+		tmp_time = get_timer(0);
+		if ((tmp_time - start_time) > EN_PLLB_TIMEOUT) {
+			printf("ERROR: failed to disable PLLB\n");
+			return -1;
+		}
+	}
+
+	return 0;
 }

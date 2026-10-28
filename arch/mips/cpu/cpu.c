@@ -1,38 +1,41 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * (C) Copyright 2003
  * Wolfgang Denk, DENX Software Engineering, <wd@denx.de>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
-#include <common.h>
+#include <cpu_func.h>
 #include <command.h>
-#include <netdev.h>
+#include <init.h>
 #include <linux/compiler.h>
+#include <asm/cache.h>
 #include <asm/mipsregs.h>
 #include <asm/reboot.h>
 
+#if !CONFIG_IS_ENABLED(SYSRESET)
 void __weak _machine_restart(void)
 {
-	fprintf(stderr, "*** reset failed ***\n");
+	puts("*** reset failed ***\n");
 
 	while (1)
 		/* NOP */;
 }
 
-int do_reset(cmd_tbl_t *cmdtp, int flag, int argc, char * const argv[])
+void reset_cpu(void)
 {
 	_machine_restart();
+}
+
+int do_reset(struct cmd_tbl *cmdtp, int flag, int argc, char *const argv[])
+{
+	reset_cpu();
 
 	return 0;
 }
+#endif
 
-void write_one_tlb(int index, u32 pagemask, u32 hi, u32 low0, u32 low1)
+int arch_cpu_init(void)
 {
-	write_c0_entrylo0(low0);
-	write_c0_pagemask(pagemask);
-	write_c0_entrylo1(low1);
-	write_c0_entryhi(hi);
-	write_c0_index(index);
-	tlb_write_indexed();
+	mips_cache_probe();
+	return 0;
 }

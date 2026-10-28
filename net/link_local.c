@@ -11,8 +11,10 @@
  * Licensed under the GPL v2 or later
  */
 
-#include <common.h>
+#include <env.h>
+#include <log.h>
 #include <net.h>
+#include <rand.h>
 #include "arp.h"
 #include "net_rand.h"
 
@@ -104,14 +106,14 @@ static void configure_wait(void)
 
 void link_local_start(void)
 {
-	ip = getenv_ip("llipaddr");
+	ip = string_to_ip(env_get("llipaddr"));
 	if (ip.s_addr != 0 &&
 	    (ntohl(ip.s_addr) & IN_CLASSB_NET) != LINKLOCAL_ADDR) {
 		puts("invalid link address");
 		net_set_state(NETLOOP_FAIL);
 		return;
 	}
-	net_netmask.s_addr = IN_CLASSB_NET;
+	net_netmask.s_addr = htonl(IN_CLASSB_NET);
 
 	seed = seed_mac();
 	if (ip.s_addr == 0)

@@ -1,9 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * (C) Copyright 2008, 2011 Renesas Solutions Corp.
  *
  * SH7734 Internal I/O register
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #ifndef _ASM_CPU_SH7734_H_
@@ -50,6 +49,5 @@
 #define GPSR3	(GPSR0 + 0xC)
 #define GPSR4	(GPSR0 + 0x10)
 #define GPSR5	(GPSR0 + 0x14)
-
 
 #endif /* _ASM_CPU_SH7734_H_ */

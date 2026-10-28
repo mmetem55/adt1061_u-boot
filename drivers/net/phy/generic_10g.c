@@ -1,16 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Generic PHY Management code
- *
- * SPDX-License-Identifier:	GPL-2.0+
  *
  * Copyright 2011 Freescale Semiconductor, Inc.
  * author Andy Fleming
  *
  * Based loosely off of Linux's PHY Lib
  */
-
-#include <config.h>
-#include <common.h>
 #include <miiphy.h>
 #include <phy.h>
 
@@ -83,7 +79,7 @@ int gen10g_config(struct phy_device *phydev)
 	return gen10g_discover_mmds(phydev);
 }
 
-struct phy_driver gen10g_driver = {
+U_BOOT_PHY_DRIVER(gen10g) = {
 	.uid		= 0xffffffff,
 	.mask		= 0xffffffff,
 	.name		= "Generic 10G PHY",

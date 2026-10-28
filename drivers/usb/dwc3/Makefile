@@ -1,10 +1,18 @@
-#ifdef CONFIG_USB_DWC3
-obj-y					:= core.o
-obj-y					+= gadget.o ep0.o
-obj-y					+= dwc3_uboot.o
-obj-y					+= sprd_usb3_driver.o
-#endif
-obj-$(CONFIG_USB_DWC3_SPRD_INTEL)	+= sprd_intel_usb3_hw.o
-obj-$(CONFIG_USB_DWC3_PHY_ROC1)		+= sprd_usb3_roc1_phy.o
-obj-$(CONFIG_USB_DWC3_PHY_ORCA)		+= sprd_usb3_orca_phy.o
-obj-$(CONFIG_USB_DWC31_PHY_QOGIRN6PRO)	+= sprd_usb31_qogirn6pro_phy.o
+# SPDX-License-Identifier: GPL-2.0+
+
+obj-$(CONFIG_USB_DWC3)			+= dwc3.o
+
+dwc3-y					:= core.o
+
+obj-$(CONFIG_USB_DWC3_GADGET)		+= gadget.o ep0.o
+
+obj-$(CONFIG_$(PHASE_)USB_DWC3_AM62)	+= dwc3-am62.o
+obj-$(CONFIG_USB_DWC3_OMAP)		+= dwc3-omap.o
+obj-$(CONFIG_USB_DWC3_MESON_G12A)	+= dwc3-meson-g12a.o
+obj-$(CONFIG_USB_DWC3_MESON_GXL)	+= dwc3-meson-gxl.o
+obj-$(CONFIG_$(PHASE_)USB_DWC3_GENERIC)		+= dwc3-generic.o
+obj-$(CONFIG_USB_DWC3_UNIPHIER)		+= dwc3-uniphier.o
+obj-$(CONFIG_USB_DWC3_LAYERSCAPE)	+= dwc3-layerscape.o
+obj-$(CONFIG_USB_DWC3_PHY_OMAP)		+= ti_usb_phy.o
+obj-$(CONFIG_USB_DWC3_PHY_SAMSUNG)	+= samsung_usb_phy.o
+obj-$(CONFIG_USB_DWC3_STI)		+= dwc3-generic-sti.o

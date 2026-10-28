@@ -4,20 +4,24 @@
  * Przemyslaw Marczak <p.marczak@samsung.com>
  */
 
-#include <common.h>
+#define LOG_CATEGORY UCLASS_REGULATOR
+
 #include <errno.h>
 #include <dm.h>
+#include <log.h>
+#include <dm/device_compat.h>
 #include <dm/uclass-internal.h>
+#include <linux/delay.h>
 #include <power/pmic.h>
 #include <power/regulator.h>
 
 int regulator_mode(struct udevice *dev, struct dm_regulator_mode **modep)
 {
-	struct dm_regulator_uclass_platdata *uc_pdata;
+	struct dm_regulator_uclass_plat *uc_pdata;
 
 	*modep = NULL;
 
-	uc_pdata = dev_get_uclass_platdata(dev);
+	uc_pdata = dev_get_uclass_plat(dev);
 	if (!uc_pdata)
 		return -ENXIO;
 
@@ -40,8 +44,7 @@ static void regulator_set_value_ramp_delay(struct udevice *dev, int old_uV,
 {
 	int delay = DIV_ROUND_UP(abs(new_uV - old_uV), ramp_delay);
 
-	debug("regulator %s: delay %u us (%d uV -> %d uV)\n", dev->name, delay,
-	      old_uV, new_uV);
+	dev_dbg(dev, "delay %u us (%d uV -> %d uV)\n", delay, old_uV, new_uV);
 
 	udelay(delay);
 }
@@ -49,17 +52,19 @@ static void regulator_set_value_ramp_delay(struct udevice *dev, int old_uV,
 int regulator_set_value(struct udevice *dev, int uV)
 {
 	const struct dm_regulator_ops *ops = dev_get_driver_ops(dev);
-	struct dm_regulator_uclass_platdata *uc_pdata;
+	struct dm_regulator_uclass_plat *uc_pdata;
 	int ret, old_uV = uV, is_enabled = 0;
 
-	uc_pdata = dev_get_uclass_platdata(dev);
+	if (!ops || !ops->set_value)
+		return -ENOSYS;
+
+	uc_pdata = dev_get_uclass_plat(dev);
 	if (uc_pdata->min_uV != -ENODATA && uV < uc_pdata->min_uV)
 		return -EINVAL;
 	if (uc_pdata->max_uV != -ENODATA && uV > uc_pdata->max_uV)
 		return -EINVAL;
-
-	if (!ops || !ops->set_value)
-		return -ENOSYS;
+	if (uV == -ENODATA)
+		return -EINVAL;
 
 	if (uc_pdata->ramp_delay) {
 		is_enabled = regulator_get_enable(dev);
@@ -75,6 +80,64 @@ int regulator_set_value(struct udevice *dev, int uV)
 	}
 
 	return ret;
+}
+
+int regulator_set_suspend_value(struct udevice *dev, int uV)
+{
+	const struct dm_regulator_ops *ops = dev_get_driver_ops(dev);
+	struct dm_regulator_uclass_plat *uc_pdata;
+
+	if (!ops || !ops->set_suspend_value)
+		return -ENOSYS;
+
+	uc_pdata = dev_get_uclass_plat(dev);
+	if (uc_pdata->min_uV != -ENODATA && uV < uc_pdata->min_uV)
+		return -EINVAL;
+	if (uc_pdata->max_uV != -ENODATA && uV > uc_pdata->max_uV)
+		return -EINVAL;
+	if (uV == -ENODATA)
+		return -EINVAL;
+
+	return ops->set_suspend_value(dev, uV);
+}
+
+int regulator_get_suspend_value(struct udevice *dev)
+{
+	const struct dm_regulator_ops *ops = dev_get_driver_ops(dev);
+
+	if (!ops || !ops->get_suspend_value)
+		return -ENOSYS;
+
+	return ops->get_suspend_value(dev);
+}
+
+int regulator_set_value_clamp(struct udevice *dev,
+			      int min_uV, int target_uV, int max_uV)
+{
+	const struct dm_regulator_ops *ops = dev_get_driver_ops(dev);
+	struct dm_regulator_uclass_plat *uc_pdata;
+	int uV;
+
+	if (!ops || !ops->set_value)
+		return -ENOSYS;
+
+	uc_pdata = dev_get_uclass_plat(dev);
+	if (uc_pdata->min_uV != -ENODATA && max_uV < uc_pdata->min_uV)
+		return -EINVAL;
+	if (uc_pdata->max_uV != -ENODATA && min_uV > uc_pdata->max_uV)
+		return -EINVAL;
+	if (min_uV > max_uV)
+		return -EINVAL;
+
+	if (uc_pdata->min_uV != -ENODATA)
+		min_uV = max(min_uV, uc_pdata->min_uV);
+	if (uc_pdata->max_uV != -ENODATA)
+		max_uV = min(max_uV, uc_pdata->max_uV);
+	uV = clamp(target_uV, min_uV, max_uV);
+	if (ops->set_value_clamp)
+		return ops->set_value_clamp(dev, min_uV, uV, max_uV);
+
+	return regulator_set_value(dev, uV);
 }
 
 /*
@@ -104,16 +167,18 @@ int regulator_get_current(struct udevice *dev)
 int regulator_set_current(struct udevice *dev, int uA)
 {
 	const struct dm_regulator_ops *ops = dev_get_driver_ops(dev);
-	struct dm_regulator_uclass_platdata *uc_pdata;
+	struct dm_regulator_uclass_plat *uc_pdata;
 
-	uc_pdata = dev_get_uclass_platdata(dev);
+	if (!ops || !ops->set_current)
+		return -ENOSYS;
+
+	uc_pdata = dev_get_uclass_plat(dev);
 	if (uc_pdata->min_uA != -ENODATA && uA < uc_pdata->min_uA)
 		return -EINVAL;
 	if (uc_pdata->max_uA != -ENODATA && uA > uc_pdata->max_uA)
 		return -EINVAL;
-
-	if (!ops || !ops->set_current)
-		return -ENOSYS;
+	if (uA == -ENODATA)
+		return -EINVAL;
 
 	return ops->set_current(dev, uA);
 }
@@ -131,13 +196,13 @@ int regulator_get_enable(struct udevice *dev)
 int regulator_set_enable(struct udevice *dev, bool enable)
 {
 	const struct dm_regulator_ops *ops = dev_get_driver_ops(dev);
-	struct dm_regulator_uclass_platdata *uc_pdata;
+	struct dm_regulator_uclass_plat *uc_pdata;
 	int ret, old_enable = 0;
 
 	if (!ops || !ops->set_enable)
 		return -ENOSYS;
 
-	uc_pdata = dev_get_uclass_platdata(dev);
+	uc_pdata = dev_get_uclass_plat(dev);
 	if (!enable && uc_pdata->always_on)
 		return -EACCES;
 
@@ -166,8 +231,34 @@ int regulator_set_enable_if_allowed(struct udevice *dev, bool enable)
 	ret = regulator_set_enable(dev, enable);
 	if (ret == -ENOSYS || ret == -EACCES)
 		return 0;
+	/* if we want to disable but it's in use by someone else */
+	if (!enable && ret == -EBUSY)
+		return 0;
+	/* if it's already enabled/disabled */
+	if (ret == -EALREADY)
+		return 0;
 
 	return ret;
+}
+
+int regulator_set_suspend_enable(struct udevice *dev, bool enable)
+{
+	const struct dm_regulator_ops *ops = dev_get_driver_ops(dev);
+
+	if (!ops || !ops->set_suspend_enable)
+		return -ENOSYS;
+
+	return ops->set_suspend_enable(dev, enable);
+}
+
+int regulator_get_suspend_enable(struct udevice *dev)
+{
+	const struct dm_regulator_ops *ops = dev_get_driver_ops(dev);
+
+	if (!ops || !ops->get_suspend_enable)
+		return -ENOSYS;
+
+	return ops->get_suspend_enable(dev);
 }
 
 int regulator_get_mode(struct udevice *dev)
@@ -192,20 +283,20 @@ int regulator_set_mode(struct udevice *dev, int mode)
 
 int regulator_get_by_platname(const char *plat_name, struct udevice **devp)
 {
-	struct dm_regulator_uclass_platdata *uc_pdata;
+	struct dm_regulator_uclass_plat *uc_pdata;
 	struct udevice *dev;
 	int ret;
 
 	*devp = NULL;
 
-	for (ret = uclass_find_first_device(UCLASS_REGULATOR, &dev); dev;
-	     ret = uclass_find_next_device(&dev)) {
-		if (ret) {
-			debug("regulator %s, ret=%d\n", dev->name, ret);
-			continue;
-		}
+	ret = uclass_find_first_device(UCLASS_REGULATOR, &dev);
+	if (ret) {
+		dev_dbg(dev, "ret=%d\n", ret);
+		return ret;
+	}
 
-		uc_pdata = dev_get_uclass_platdata(dev);
+	for (; dev; uclass_find_next_device(&dev)) {
+		uc_pdata = dev_get_uclass_plat(dev);
 		if (!uc_pdata || strcmp(plat_name, uc_pdata->name))
 			continue;
 
@@ -231,29 +322,63 @@ int device_get_supply_regulator(struct udevice *dev, const char *supply_name,
 
 int regulator_autoset(struct udevice *dev)
 {
-	struct dm_regulator_uclass_platdata *uc_pdata;
+	struct dm_regulator_uclass_plat *uc_pdata;
 	int ret = 0;
 
-	uc_pdata = dev_get_uclass_platdata(dev);
-	if (!uc_pdata->always_on && !uc_pdata->boot_on)
-		return -EMEDIUMTYPE;
+	uc_pdata = dev_get_uclass_plat(dev);
+
+	if (uc_pdata->flags & REGULATOR_FLAG_AUTOSET_DONE)
+		return -EALREADY;
+
+	ret = regulator_set_suspend_enable(dev, uc_pdata->suspend_on);
+	if (ret == -ENOSYS)
+		ret = 0;
+
+	if (!ret && uc_pdata->suspend_on && uc_pdata->suspend_uV != -ENODATA) {
+		ret = regulator_set_suspend_value(dev, uc_pdata->suspend_uV);
+		if (ret == -ENOSYS)
+			ret = 0;
+
+		if (ret)
+			return ret;
+	}
+
+	if (uc_pdata->force_off) {
+		ret = regulator_set_enable(dev, false);
+		goto out;
+	}
+
+	if (!uc_pdata->always_on && !uc_pdata->boot_on) {
+		ret = -EMEDIUMTYPE;
+		goto out;
+	}
+
+	if (uc_pdata->type == REGULATOR_TYPE_FIXED) {
+		ret = regulator_set_enable(dev, true);
+		goto out;
+	}
 
 	if (uc_pdata->flags & REGULATOR_FLAG_AUTOSET_UV)
 		ret = regulator_set_value(dev, uc_pdata->min_uV);
+	if (uc_pdata->init_uV > 0)
+		ret = regulator_set_value(dev, uc_pdata->init_uV);
 	if (!ret && (uc_pdata->flags & REGULATOR_FLAG_AUTOSET_UA))
 		ret = regulator_set_current(dev, uc_pdata->min_uA);
 
 	if (!ret)
 		ret = regulator_set_enable(dev, true);
 
+out:
+	uc_pdata->flags |= REGULATOR_FLAG_AUTOSET_DONE;
+
 	return ret;
 }
 
 static void regulator_show(struct udevice *dev, int ret)
 {
-	struct dm_regulator_uclass_platdata *uc_pdata;
+	struct dm_regulator_uclass_plat *uc_pdata;
 
-	uc_pdata = dev_get_uclass_platdata(dev);
+	uc_pdata = dev_get_uclass_plat(dev);
 
 	printf("%s@%s: ", dev->name, uc_pdata->name);
 	if (uc_pdata->flags & REGULATOR_FLAG_AUTOSET_UV)
@@ -293,7 +418,7 @@ int regulator_list_autoset(const char *list_platname[],
 		ret = regulator_autoset_by_name(list_platname[i], &dev);
 		if (ret != -EMEDIUMTYPE && verbose)
 			regulator_show(dev, ret);
-		if (ret & !error)
+		if (ret && ret != -EALREADY && !error)
 			error = ret;
 
 		if (list_devp)
@@ -308,18 +433,21 @@ int regulator_list_autoset(const char *list_platname[],
 static bool regulator_name_is_unique(struct udevice *check_dev,
 				     const char *check_name)
 {
-	struct dm_regulator_uclass_platdata *uc_pdata;
+	struct dm_regulator_uclass_plat *uc_pdata;
 	struct udevice *dev;
 	int check_len = strlen(check_name);
 	int ret;
 	int len;
 
-	for (ret = uclass_find_first_device(UCLASS_REGULATOR, &dev); dev;
-	     ret = uclass_find_next_device(&dev)) {
-		if (ret || dev == check_dev)
+	ret = uclass_find_first_device(UCLASS_REGULATOR, &dev);
+	if (ret)
+		return true;
+
+	for (; dev; uclass_find_next_device(&dev)) {
+		if (dev == check_dev)
 			continue;
 
-		uc_pdata = dev_get_uclass_platdata(dev);
+		uc_pdata = dev_get_uclass_plat(dev);
 		len = strlen(uc_pdata->name);
 		if (len != check_len)
 			continue;
@@ -333,35 +461,45 @@ static bool regulator_name_is_unique(struct udevice *check_dev,
 
 static int regulator_post_bind(struct udevice *dev)
 {
-	struct dm_regulator_uclass_platdata *uc_pdata;
+	struct dm_regulator_uclass_plat *uc_pdata;
 	const char *property = "regulator-name";
 
-	uc_pdata = dev_get_uclass_platdata(dev);
+	uc_pdata = dev_get_uclass_plat(dev);
+	uc_pdata->always_on = dev_read_bool(dev, "regulator-always-on");
+	uc_pdata->boot_on = dev_read_bool(dev, "regulator-boot-on");
 
 	/* Regulator's mandatory constraint */
 	uc_pdata->name = dev_read_string(dev, property);
 	if (!uc_pdata->name) {
-		debug("%s: dev '%s' has no property '%s'\n",
-		      __func__, dev->name, property);
+		dev_dbg(dev, "has no property '%s'\n", property);
 		uc_pdata->name = dev_read_name(dev);
 		if (!uc_pdata->name)
 			return -EINVAL;
 	}
 
-	if (regulator_name_is_unique(dev, uc_pdata->name))
-		return 0;
+	if (!regulator_name_is_unique(dev, uc_pdata->name)) {
+		dev_err(dev, "'%s' has nonunique value: '%s'\n",
+			property, uc_pdata->name);
+		return -EINVAL;
+	}
 
-	debug("'%s' of dev: '%s', has nonunique value: '%s\n",
-	      property, dev->name, uc_pdata->name);
+	/*
+	 * In case the regulator has regulator-always-on or
+	 * regulator-boot-on DT property, trigger probe() to
+	 * configure its default state during startup.
+	 */
+	if (uc_pdata->always_on || uc_pdata->boot_on)
+		dev_or_flags(dev, DM_FLAG_PROBE_AFTER_BIND);
 
-	return -EINVAL;
+	return 0;
 }
 
 static int regulator_pre_probe(struct udevice *dev)
 {
-	struct dm_regulator_uclass_platdata *uc_pdata;
+	struct dm_regulator_uclass_plat *uc_pdata;
+	ofnode node;
 
-	uc_pdata = dev_get_uclass_platdata(dev);
+	uc_pdata = dev_get_uclass_plat(dev);
 	if (!uc_pdata)
 		return -ENXIO;
 
@@ -370,14 +508,25 @@ static int regulator_pre_probe(struct udevice *dev)
 						-ENODATA);
 	uc_pdata->max_uV = dev_read_u32_default(dev, "regulator-max-microvolt",
 						-ENODATA);
+	uc_pdata->init_uV = dev_read_u32_default(dev, "regulator-init-microvolt",
+						 -ENODATA);
 	uc_pdata->min_uA = dev_read_u32_default(dev, "regulator-min-microamp",
 						-ENODATA);
 	uc_pdata->max_uA = dev_read_u32_default(dev, "regulator-max-microamp",
 						-ENODATA);
-	uc_pdata->always_on = dev_read_bool(dev, "regulator-always-on");
-	uc_pdata->boot_on = dev_read_bool(dev, "regulator-boot-on");
 	uc_pdata->ramp_delay = dev_read_u32_default(dev, "regulator-ramp-delay",
 						    0);
+	uc_pdata->force_off = dev_read_bool(dev, "regulator-force-boot-off");
+
+	node = dev_read_subnode(dev, "regulator-state-mem");
+	if (ofnode_valid(node)) {
+		uc_pdata->suspend_on = !ofnode_read_bool(node, "regulator-off-in-suspend");
+		if (ofnode_read_u32(node, "regulator-suspend-microvolt", &uc_pdata->suspend_uV))
+			uc_pdata->suspend_uV = uc_pdata->max_uV;
+	} else {
+		uc_pdata->suspend_on = true;
+		uc_pdata->suspend_uV = uc_pdata->max_uV;
+	}
 
 	/* Those values are optional (-ENODATA if unset) */
 	if ((uc_pdata->min_uV != -ENODATA) &&
@@ -394,30 +543,18 @@ static int regulator_pre_probe(struct udevice *dev)
 	return 0;
 }
 
-int regulators_enable_boot_on(bool verbose)
+static int regulator_post_probe(struct udevice *dev)
 {
-	struct udevice *dev;
-	struct uclass *uc;
 	int ret;
 
-	ret = uclass_get(UCLASS_REGULATOR, &uc);
-	if (ret)
+	ret = regulator_autoset(dev);
+	if (ret && ret != -EMEDIUMTYPE && ret != -EALREADY && ret != ENOSYS)
 		return ret;
-	for (uclass_first_device(UCLASS_REGULATOR, &dev);
-	     dev;
-	     uclass_next_device(&dev)) {
-		ret = regulator_autoset(dev);
-		if (ret == -EMEDIUMTYPE) {
-			ret = 0;
-			continue;
-		}
-		if (verbose)
-			regulator_show(dev, ret);
-		if (ret == -ENOSYS)
-			ret = 0;
-	}
 
-	return ret;
+	if (_DEBUG)
+		regulator_show(dev, ret);
+
+	return 0;
 }
 
 UCLASS_DRIVER(regulator) = {
@@ -425,6 +562,6 @@ UCLASS_DRIVER(regulator) = {
 	.name		= "regulator",
 	.post_bind	= regulator_post_bind,
 	.pre_probe	= regulator_pre_probe,
-	.per_device_platdata_auto_alloc_size =
-				sizeof(struct dm_regulator_uclass_platdata),
+	.post_probe	= regulator_post_probe,
+	.per_device_plat_auto	= sizeof(struct dm_regulator_uclass_plat),
 };

@@ -1,13 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright 2008-2014 Freescale Semiconductor, Inc.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * Version 2 as published by the Free Software Foundation.
+ * Copyright 2008-2016 Freescale Semiconductor, Inc.
+ * Copyright 2017-2021 NXP Semiconductor
  */
 
-#include <common.h>
 #include <fsl_ddr_sdram.h>
+#include <log.h>
+#include <asm/bitops.h>
 
 #include <fsl_ddr.h>
 
@@ -23,7 +22,7 @@ compute_cas_latency(const unsigned int ctrl_num,
 	unsigned int caslat_actual;
 	unsigned int retry = 16;
 	unsigned int tmp = ~0;
-	const unsigned int mclk_ps = get_memory_clk_period_ps(ctrl_num);
+	unsigned int mclk_ps = get_memory_clk_period_ps(ctrl_num);
 #ifdef CONFIG_SYS_FSL_DDR3
 	const unsigned int taamax = 20000;
 #else
@@ -36,6 +35,12 @@ compute_cas_latency(const unsigned int ctrl_num,
 			tmp &= dimm_params[i].caslat_x;
 	}
 	common_caslat = tmp;
+
+	if (!mclk_ps) {
+		printf("DDR clock (MCLK cycle was 0 ps), So setting it to slowest DIMM(s) (tCKmin %u ps).\n",
+		       outpdimm->tckmin_x_ps);
+		mclk_ps = outpdimm->tckmin_x_ps;
+	}
 
 	/* validate if the memory clk is in the range of dimms */
 	if (mclk_ps < outpdimm->tckmin_x_ps) {
@@ -62,8 +67,8 @@ compute_cas_latency(const unsigned int ctrl_num,
 	 * 18ns for all DDR4 speed grades.
 	 */
 	if (caslat_actual * mclk_ps > taamax) {
-		printf("The choosen cas latency %d is too large\n",
-			caslat_actual);
+		printf("The chosen cas latency %d is too large\n",
+		       caslat_actual);
 	}
 	outpdimm->lowest_common_spd_caslat = caslat_actual;
 	debug("lowest_common_spd_caslat is 0x%x\n", caslat_actual);
@@ -186,7 +191,6 @@ compute_cas_latency(const unsigned int ctrl_num,
 	      lowest_good_caslat);
 	outpdimm->lowest_common_spd_caslat = lowest_good_caslat;
 
-
 	/*
 	 * Compute a common 'de-rated' CAS latency.
 	 *
@@ -236,6 +240,7 @@ compute_lowest_common_dimm_parameters(const unsigned int ctrl_num,
 	unsigned int trrds_ps = 0;
 	unsigned int trrdl_ps = 0;
 	unsigned int tccdl_ps = 0;
+	unsigned int trfc_slr_ps = 0;
 #else
 	unsigned int twr_ps = 0;
 	unsigned int twtr_ps = 0;
@@ -315,6 +320,8 @@ compute_lowest_common_dimm_parameters(const unsigned int ctrl_num,
 			       (unsigned int)dimm_params[i].trrdl_ps);
 		tccdl_ps = max(tccdl_ps,
 			       (unsigned int)dimm_params[i].tccdl_ps);
+		trfc_slr_ps = max(trfc_slr_ps,
+				  (unsigned int)dimm_params[i].trfc_slr_ps);
 #else
 		twr_ps = max(twr_ps, (unsigned int)dimm_params[i].twr_ps);
 		twtr_ps = max(twtr_ps, (unsigned int)dimm_params[i].twtr_ps);
@@ -367,6 +374,7 @@ compute_lowest_common_dimm_parameters(const unsigned int ctrl_num,
 	outpdimm->trrds_ps = trrds_ps;
 	outpdimm->trrdl_ps = trrdl_ps;
 	outpdimm->tccdl_ps = tccdl_ps;
+	outpdimm->trfc_slr_ps = trfc_slr_ps;
 #else
 	outpdimm->twtr_ps = twtr_ps;
 	outpdimm->trfc_ps = trfc_ps;
@@ -401,17 +409,20 @@ compute_lowest_common_dimm_parameters(const unsigned int ctrl_num,
 		if (dimm_params[i].n_ranks) {
 			if (dimm_params[i].registered_dimm) {
 				temp1 = 1;
-#ifndef CONFIG_SPL_BUILD
+#ifndef CONFIG_XPL_BUILD
 				printf("Detected RDIMM %s\n",
 					dimm_params[i].mpart);
 #endif
 			} else {
 				temp2 = 1;
-#ifndef CONFIG_SPL_BUILD
+#ifndef CONFIG_XPL_BUILD
 				printf("Detected UDIMM %s\n",
 					dimm_params[i].mpart);
 #endif
 			}
+#ifndef CONFIG_XPL_BUILD
+			puts("       ");
+#endif
 		}
 	}
 
@@ -569,6 +580,7 @@ compute_lowest_common_dimm_parameters(const unsigned int ctrl_num,
 	debug("trrds_ps = %u\n", trrds_ps);
 	debug("trrdl_ps = %u\n", trrdl_ps);
 	debug("tccdl_ps = %u\n", tccdl_ps);
+	debug("trfc_slr_ps = %u\n", trfc_slr_ps);
 #else
 	debug("twtr_ps   = %u\n", outpdimm->twtr_ps);
 	debug("trfc_ps   = %u\n", outpdimm->trfc_ps);

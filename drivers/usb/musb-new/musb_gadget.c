@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * MUSB OTG driver peripheral support
  *
@@ -5,35 +6,12 @@
  * Copyright (C) 2005-2006 by Texas Instruments
  * Copyright (C) 2006-2007 Nokia Corporation
  * Copyright (C) 2009 MontaVista Software, Inc. <source@mvista.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
- * 02110-1301 USA
- *
- * THIS SOFTWARE IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED
- * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.  IN
- * NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
- * USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
- * ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
- * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
  */
 
 #ifndef __UBOOT__
+#include <log.h>
+#include <dm/device_compat.h>
+#include <dm/devres.h>
 #include <linux/kernel.h>
 #include <linux/list.h>
 #include <linux/timer.h>
@@ -44,14 +22,15 @@
 #include <linux/dma-mapping.h>
 #include <linux/slab.h>
 #else
-#include <common.h>
+#include <dm.h>
+#include <dm/device_compat.h>
+#include <linux/bug.h>
+#include <linux/printk.h>
 #include <linux/usb/ch9.h>
 #include "linux-compat.h"
 #endif
 
 #include "musb_core.h"
-#include <asm/dma-mapping.h>
-
 
 /* MUSB PERIPHERAL status 3-mar-2006:
  *
@@ -100,7 +79,7 @@
 #define is_buffer_mapped(req) (is_dma_capable() && \
 					(req->map_state != UN_MAPPED))
 
-#ifndef CONFIG_MUSB_PIO_ONLY
+#ifndef CONFIG_USB_MUSB_PIO_ONLY
 /* Maps the buffer to dma  */
 
 static inline void map_dma_buffer(struct musb_request *request,
@@ -127,12 +106,21 @@ static inline void map_dma_buffer(struct musb_request *request,
 
 	if (request->request.dma == DMA_ADDR_INVALID) {
 		request->request.dma = dma_map_single(
+				musb->controller,
 				request->request.buf,
 				request->request.length,
 				request->tx
 					? DMA_TO_DEVICE
 					: DMA_FROM_DEVICE);
 		request->map_state = MUSB_MAPPED;
+	} else {
+		dma_sync_single_for_device(musb->controller,
+			request->request.dma,
+			request->request.length,
+			request->tx
+				? DMA_TO_DEVICE
+				: DMA_FROM_DEVICE);
+		request->map_state = PRE_MAPPED;
 	}
 }
 
@@ -149,13 +137,20 @@ static inline void unmap_dma_buffer(struct musb_request *request,
 		return;
 	}
 	if (request->map_state == MUSB_MAPPED) {
-		dma_unmap_single(
+		dma_unmap_single(musb->controller,
 			request->request.dma,
 			request->request.length,
 			request->tx
 				? DMA_TO_DEVICE
 				: DMA_FROM_DEVICE);
 		request->request.dma = DMA_ADDR_INVALID;
+	} else { /* PRE_MAPPED */
+		dma_sync_single_for_cpu(musb->controller,
+			request->request.dma,
+			request->request.length,
+			request->tx
+				? DMA_TO_DEVICE
+				: DMA_FROM_DEVICE);
 	}
 	request->map_state = UN_MAPPED;
 }
@@ -200,11 +195,11 @@ __acquires(ep->musb->lock)
 	spin_unlock(&musb->lock);
 	unmap_dma_buffer(req, musb);
 	if (request->status == 0)
-		dev_vdbg(musb->controller, "%s done request %p,  %d/%d\n",
+		dev_dbg(musb->controller, "%s done request %p,  %d/%d\n",
 				ep->end_point.name, request,
 				req->request.actual, req->request.length);
 	else
-		dev_vdbg(musb->controller, "%s request %p, %d/%d fault %d\n",
+		dev_dbg(musb->controller, "%s request %p, %d/%d fault %d\n",
 				ep->end_point.name, request,
 				req->request.actual, req->request.length,
 				request->status);
@@ -277,7 +272,6 @@ static inline int max_ep_writesize(struct musb *musb, struct musb_ep *ep)
 	else
 		return ep->packet_sz;
 }
-
 
 #ifdef CONFIG_USB_INVENTRA_DMA
 
@@ -367,7 +361,7 @@ static void txstate(struct musb *musb, struct musb_request *req)
 			epnum, musb_ep->packet_sz, fifo_count,
 			csr);
 
-#ifndef	CONFIG_MUSB_PIO_ONLY
+#ifndef	CONFIG_USB_MUSB_PIO_ONLY
 	if (is_buffer_mapped(req)) {
 		struct dma_controller	*c = musb->dma_controller;
 		size_t request_size;
@@ -734,7 +728,7 @@ static void rxstate(struct musb *musb, struct musb_request *req)
 	 * mode 0 only. So we do not get endpoint interrupts due to DMA
 	 * completion. We only get interrupts from DMA controller.
 	 *
-	 * We could operate in DMA mode 1 if we knew the size of the tranfer
+	 * We could operate in DMA mode 1 if we knew the size of the transfer
 	 * in advance. For mass storage class, request->length = what the host
 	 * sends, so that'd work.  But for pretty much everything else,
 	 * request->length is routinely more than what the host sends. For
@@ -999,8 +993,8 @@ void musb_g_rx(struct musb *musb, u8 epnum)
 				&& (musb_ep->dma->actual_len
 					== musb_ep->packet_sz)) {
 			/* In double buffer case, continue to unload fifo if
- 			 * there is Rx packet in FIFO.
- 			 **/
+			 * there is Rx packet in FIFO.
+			 **/
 			csr = musb_readw(epio, MUSB_RXCSR);
 			if ((csr & MUSB_RXCSR_RXPKTRDY) &&
 				hw_ep->rx_double_buffered)
@@ -1192,6 +1186,7 @@ static int musb_gadget_enable(struct usb_ep *ep,
 	} else
 		musb_ep->dma = NULL;
 
+	musb_ep->end_point.desc = desc;
 	musb_ep->desc = desc;
 	musb_ep->busy = 0;
 	musb_ep->wedged = 0;
@@ -1249,9 +1244,7 @@ static int musb_gadget_disable(struct usb_ep *ep)
 	}
 
 	musb_ep->desc = NULL;
-#ifndef __UBOOT__
 	musb_ep->end_point.desc = NULL;
-#endif
 
 	/* abort all pending DMA and requests */
 	nuke(musb_ep, -ESHUTDOWN);
@@ -1311,26 +1304,6 @@ struct free_record {
  */
 void musb_ep_restart(struct musb *musb, struct musb_request *req)
 {
-#ifdef CONFIG_USB_SPRD_DMA
-		struct dma_controller *c = musb->dma_controller;
-		struct musb_ep *musb_ep;
-		struct dma_channel *channel;
-		struct usb_request *request = &req->request;
-
-		dev_vdbg(musb->controller, "musb_ep_restart %s len %u on hw_ep%d\n",
-			req->tx ? "TX/IN" : "RX/OUT",
-			req->request.length, req->epnum);
-
-		musb_ep_select(musb->mregs, req->epnum);
-		musb_ep = req->ep;
-		channel = musb_ep->dma;
-		c->channel_program(channel,
-			musb_ep->packet_sz,
-			req->tx,
-			request->buf+request->actual,
-			request->length - request->actual);
-#else
-
 	dev_dbg(musb->controller, "<== %s request %p len %u on hw_ep%d\n",
 		req->tx ? "TX/IN" : "RX/OUT",
 		&req->request, req->request.length, req->epnum);
@@ -1340,7 +1313,6 @@ void musb_ep_restart(struct musb *musb, struct musb_request *req)
 		txstate(musb, req);
 	else
 		rxstate(musb, req);
-#endif
 }
 
 static int musb_gadget_queue(struct usb_ep *ep, struct usb_request *req,
@@ -1366,7 +1338,7 @@ static int musb_gadget_queue(struct usb_ep *ep, struct usb_request *req,
 	if (request->ep != musb_ep)
 		return -EINVAL;
 
-	//dev_dbg(musb->controller, "<== to %s request=%p\n", ep->name, req);
+	dev_dbg(musb->controller, "<== to %s request=%p\n", ep->name, req);
 
 	/* request is mine now... */
 	request->request.actual = 0;
@@ -1450,7 +1422,7 @@ done:
 }
 
 /*
- * Set or clear the halt bit of an endpoint. A halted enpoint won't tx/rx any
+ * Set or clear the halt bit of an endpoint. A halted endpoint won't tx/rx any
  * data but will queue requests.
  *
  * exported to ep0 code
@@ -1806,6 +1778,14 @@ static int musb_gadget_start(struct usb_gadget *g,
 		struct usb_gadget_driver *driver);
 static int musb_gadget_stop(struct usb_gadget *g,
 		struct usb_gadget_driver *driver);
+#else
+static int musb_gadget_stop(struct usb_gadget *g)
+{
+	struct musb	*musb = gadget_to_musb(g);
+
+	musb_stop(musb);
+	return 0;
+}
 #endif
 
 static const struct usb_gadget_ops musb_gadget_operations = {
@@ -1816,6 +1796,9 @@ static const struct usb_gadget_ops musb_gadget_operations = {
 	.vbus_draw		= musb_gadget_vbus_draw,
 	.pullup			= musb_gadget_pullup,
 #ifndef __UBOOT__
+	.udc_start		= musb_gadget_start,
+	.udc_stop		= musb_gadget_stop,
+#else
 	.udc_start		= musb_gadget_start,
 	.udc_stop		= musb_gadget_stop,
 #endif
@@ -1837,7 +1820,6 @@ static void musb_gadget_release(struct device *dev)
 	dev_dbg(dev, "%s\n", __func__);
 }
 #endif
-
 
 static void __devinit
 init_peripheral_ep(struct musb *musb, struct musb_ep *ep, u8 epnum, int is_in)
@@ -1919,7 +1901,7 @@ int __devinit musb_gadget_setup(struct musb *musb)
 	 */
 
 	musb->g.ops = &musb_gadget_operations;
-#ifdef __UBOOT__
+#ifndef __UBOOT__
 	musb->g.max_speed = USB_SPEED_HIGH;
 #endif
 	musb->g.speed = USB_SPEED_UNKNOWN;
@@ -1981,7 +1963,7 @@ void musb_gadget_cleanup(struct musb *musb)
  * -ENOMEM no memory to perform the operation
  *
  * @param driver the gadget driver
- * @return <0 if error, 0 if everything is fine
+ * Return: <0 if error, 0 if everything is fine
  */
 #ifndef __UBOOT__
 static int musb_gadget_start(struct usb_gadget *g,
@@ -2299,7 +2281,6 @@ __acquires(musb->lock)
 	/* clear HR */
 	else if (devctl & MUSB_DEVCTL_HR)
 		musb_writeb(mbase, MUSB_DEVCTL, MUSB_DEVCTL_SESSION);
-
 
 	/* what speed did we negotiate? */
 	power = musb_readb(mbase, MUSB_POWER);

@@ -8,8 +8,8 @@
  */
 
 #ifndef USE_HOSTCC
-#include <common.h>
-#include <libfdt.h>
+#include <log.h>
+#include <linux/libfdt.h>
 #include <fdtdec.h>
 #else
 #include "libfdt.h"
@@ -24,12 +24,12 @@ int fdtdec_get_int(const void *blob, int node, const char *prop_name,
 	const int *cell;
 	int len;
 
-	//debug("%s: %s: ", __func__, prop_name);
+	debug("%s: %s: ", __func__, prop_name);
 	cell = fdt_getprop(blob, node, prop_name, &len);
 	if (cell && len >= sizeof(int)) {
 		int val = fdt32_to_cpu(cell[0]);
 
-		//debug("%#x (%d)\n", val, val);
+		debug("%#x (%d)\n", val, val);
 		return val;
 	}
 	debug("(not found)\n");
@@ -52,4 +52,15 @@ unsigned int fdtdec_get_uint(const void *blob, int node, const char *prop_name,
 	}
 	debug("(not found)\n");
 	return default_val;
+}
+
+int fdtdec_get_child_count(const void *blob, int node)
+{
+	int subnode;
+	int num = 0;
+
+	fdt_for_each_subnode(subnode, blob, node)
+		num++;
+
+	return num;
 }

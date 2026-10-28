@@ -1,32 +1,19 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * (C) Copyright 2003
  * Wolfgang Denk, DENX Software Engineering, wd@denx.de.
  *
  * (c) Copyright 2008 Nobuhiro Iwamatsu <iwamatsu.nobuhiro@renesas.com>
  * (c) Copyright 2008 Renesas Solutions Corp.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
-#include <common.h>
+#include <config.h>
+#include <bootm.h>
 #include <command.h>
+#include <env.h>
+#include <image.h>
 #include <asm/byteorder.h>
 #include <asm/zimage.h>
-
-#ifdef CONFIG_SYS_DEBUG
-static void hexdump(unsigned char *buf, int len)
-{
-	int i;
-
-	for (i = 0; i < len; i++) {
-		if ((i % 16) == 0)
-			printf("%s%08x: ", i ? "\n" : "",
-							(unsigned int)&buf[i]);
-		printf("%02x ", buf[i]);
-	}
-	printf("\n");
-}
-#endif
 
 #ifdef CONFIG_SH_SDRAM_OFFSET
 #define GET_INITRD_START(initrd, linux) (initrd - linux + CONFIG_SH_SDRAM_OFFSET)
@@ -50,8 +37,10 @@ static unsigned long sh_check_cmd_arg(char *cmdline, char *key, int base)
 	return val;
 }
 
-int do_bootm_linux(int flag, int argc, char * const argv[], bootm_headers_t *images)
+int do_bootm_linux(int flag, struct bootm_info *bmi)
 {
+	struct bootm_headers *images = bmi->images;
+
 	/* Linux kernel load address */
 	void (*kernel) (void) = (void (*)(void))images->ep;
 	/* empty_zero_page */
@@ -61,7 +50,7 @@ int do_bootm_linux(int flag, int argc, char * const argv[], bootm_headers_t *ima
 	char *cmdline = (char *)param + COMMAND_LINE;
 	/* PAGE_SIZE */
 	unsigned long size = images->ep - (unsigned long)param;
-	char *bootargs = getenv("bootargs");
+	char *bootargs = env_get("bootargs");
 
 	/*
 	 * allow the PREP bootm subcommand, it is required for bootm to work
@@ -98,10 +87,12 @@ int do_bootm_linux(int flag, int argc, char * const argv[], bootm_headers_t *ima
 		set_sh_linux_param((unsigned long)param + ORIG_ROOT_DEV, 0x0200);
 		set_sh_linux_param((unsigned long)param + LOADER_TYPE, 0x0001);
 		set_sh_linux_param((unsigned long)param + INITRD_START,
-			GET_INITRD_START(images->rd_start, CONFIG_SYS_SDRAM_BASE));
+			GET_INITRD_START(images->rd_start, CFG_SYS_SDRAM_BASE));
 		set_sh_linux_param((unsigned long)param + INITRD_SIZE,
 			images->rd_end - images->rd_start);
 	}
+
+	bootm_final(0);
 
 	/* Boot kernel */
 	kernel();

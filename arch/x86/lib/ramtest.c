@@ -1,14 +1,13 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (c) 2014 Google, Inc
  *
  * From Coreboot src/lib/ramtest.c
- *
- * SPDX-License-Identifier:	GPL-2.0
  */
 
-#include <common.h>
 #include <asm/io.h>
 #include <asm/post.h>
+#include <vsprintf.h>
 
 static void write_phys(unsigned long addr, u32 value)
 {

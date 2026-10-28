@@ -9,10 +9,7 @@ config SYS_VENDOR
 config SYS_SOC
 	default "quark"
 
-config SYS_CONFIG_NAME
-	default "galileo"
-
-config SYS_TEXT_BASE
+config TEXT_BASE
 	default 0xfff10000
 
 config BOARD_SPECIFIC_OPTIONS # dummy
@@ -20,5 +17,6 @@ config BOARD_SPECIFIC_OPTIONS # dummy
 	select X86_RESET_VECTOR
 	select INTEL_QUARK
 	select BOARD_ROMSIZE_KB_1024
+	select SPI_FLASH_WINBOND
 
 endif

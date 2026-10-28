@@ -1,19 +1,17 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * (C) Copyright 2015
  * Texas Instruments Incorporated
  *
  * Lokesh Vutla <lokeshvutla@ti.com>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #ifndef _DRA7_IODELAY_H_
 #define _DRA7_IODELAY_H_
 
-#include <common.h>
 #include <asm/arch/sys_proto.h>
 
-/* CONFIG_REG_0 */
+/* CFG REG_0 */
 #define CFG_REG_0_OFFSET		0xC
 #define CFG_REG_ROM_READ_SHIFT		1
 #define CFG_REG_ROM_READ_MASK		(1 << 1)
@@ -24,18 +22,18 @@
 #define CFG_REG_ROM_READ_START		(1 << 1)
 #define CFG_REG_ROM_READ_END		(0 << 1)
 
-/* CONFIG_REG_2 */
+/* CFG REG_2 */
 #define CFG_REG_2_OFFSET		0x14
 #define CFG_REG_REFCLK_PERIOD_SHIFT	0
 #define CFG_REG_REFCLK_PERIOD_MASK	(0xFFFF << 0)
 #define CFG_REG_REFCLK_PERIOD		0x2EF
 
-/* CONFIG_REG_8 */
+/* CFG REG_8 */
 #define CFG_REG_8_OFFSET		0x2C
 #define CFG_IODELAY_UNLOCK_KEY		0x0000AAAA
 #define CFG_IODELAY_LOCK_KEY		0x0000AAAB
 
-/* CONFIG_REG_3/4 */
+/* CFG REG_3/4 */
 #define CFG_REG_3_OFFSET	0x18
 #define CFG_REG_4_OFFSET	0x1C
 #define CFG_REG_DLY_CNT_SHIFT	16
@@ -48,6 +46,10 @@
 #define CTRL_ISOLATE_MASK		(1 << 2)
 #define ISOLATE_IO			1
 #define DEISOLATE_IO			0
+
+/* CTRL_CORE_SMA_SW_1 */
+#define RGMII2_ID_MODE_N_MASK		(1 << 26)
+#define RGMII1_ID_MODE_N_MASK		(1 << 25)
 
 /* PRM_IO_PMCTRL */
 #define PMCTRL_ISOCLK_OVERRIDE_SHIFT	0
@@ -79,5 +81,12 @@
 void __recalibrate_iodelay(struct pad_conf_entry const *pad, int npads,
 			   struct iodelay_cfg_entry const *iodelay,
 			   int niodelays);
+void late_recalibrate_iodelay(struct pad_conf_entry const *pad, int npads,
+			      struct iodelay_cfg_entry const *iodelay,
+			      int niodelays);
+int __recalibrate_iodelay_start(void);
+void __recalibrate_iodelay_end(int ret);
 
+int do_set_iodelay(u32 base, struct iodelay_cfg_entry const *array,
+		   int niodelays);
 #endif

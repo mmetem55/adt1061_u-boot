@@ -1,10 +1,13 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Copyright (C) 2011 Samsung Electronics
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
-#include <common.h>
+#include <config.h>
+#include <init.h>
+#include <log.h>
+#include <net.h>
+#include <asm/global_data.h>
 #include <asm/gpio.h>
 #include <asm/io.h>
 #include <netdev.h>
@@ -21,17 +24,17 @@ static void smc9115_pre_init(void)
 	u32 smc_bw_conf, smc_bc_conf;
 
 	/* gpio configuration GPK0CON */
-	gpio_cfg_pin(EXYNOS4_GPIO_Y00 + CONFIG_ENV_SROM_BANK, S5P_GPIO_FUNC(2));
+	gpio_cfg_pin(EXYNOS4_GPIO_Y00 + CFG_ENV_SROM_BANK, S5P_GPIO_FUNC(2));
 
 	/* Ethernet needs bus width of 16 bits */
-	smc_bw_conf = SROMC_DATA16_WIDTH(CONFIG_ENV_SROM_BANK);
+	smc_bw_conf = SROMC_DATA16_WIDTH(CFG_ENV_SROM_BANK);
 	smc_bc_conf = SROMC_BC_TACS(0x0F) | SROMC_BC_TCOS(0x0F)
 			| SROMC_BC_TACC(0x0F) | SROMC_BC_TCOH(0x0F)
 			| SROMC_BC_TAH(0x0F)  | SROMC_BC_TACP(0x0F)
 			| SROMC_BC_PMC(0x0F);
 
 	/* Select and configure the SROMC bank */
-	s5p_config_sromc(CONFIG_ENV_SROM_BANK, smc_bw_conf, smc_bc_conf);
+	s5p_config_sromc(CFG_ENV_SROM_BANK, smc_bw_conf, smc_bc_conf);
 }
 
 int board_init(void)
@@ -52,29 +55,22 @@ int dram_init(void)
 	return 0;
 }
 
-void dram_init_banksize(void)
+int dram_init_banksize(void)
 {
-	gd->bd->bi_dram[0].start = PHYS_SDRAM_1;
-	gd->bd->bi_dram[0].size = get_ram_size((long *)PHYS_SDRAM_1, \
+	gd->dram[0].start = PHYS_SDRAM_1;
+	gd->dram[0].size = get_ram_size((long *)PHYS_SDRAM_1,
 							PHYS_SDRAM_1_SIZE);
-	gd->bd->bi_dram[1].start = PHYS_SDRAM_2;
-	gd->bd->bi_dram[1].size = get_ram_size((long *)PHYS_SDRAM_2, \
+	gd->dram[1].start = PHYS_SDRAM_2;
+	gd->dram[1].size = get_ram_size((long *)PHYS_SDRAM_2,
 							PHYS_SDRAM_2_SIZE);
-	gd->bd->bi_dram[2].start = PHYS_SDRAM_3;
-	gd->bd->bi_dram[2].size = get_ram_size((long *)PHYS_SDRAM_3, \
+	gd->dram[2].start = PHYS_SDRAM_3;
+	gd->dram[2].size = get_ram_size((long *)PHYS_SDRAM_3,
 							PHYS_SDRAM_3_SIZE);
-	gd->bd->bi_dram[3].start = PHYS_SDRAM_4;
-	gd->bd->bi_dram[3].size = get_ram_size((long *)PHYS_SDRAM_4, \
+	gd->dram[3].start = PHYS_SDRAM_4;
+	gd->dram[3].size = get_ram_size((long *)PHYS_SDRAM_4,
 							PHYS_SDRAM_4_SIZE);
-}
 
-int board_eth_init(bd_t *bis)
-{
-	int rc = 0;
-#ifdef CONFIG_SMC911X
-	rc = smc911x_initialize(0, CONFIG_SMC911X_BASE);
-#endif
-	return rc;
+	return 0;
 }
 
 #ifdef CONFIG_DISPLAY_BOARDINFO
@@ -85,8 +81,8 @@ int checkboard(void)
 }
 #endif
 
-#ifdef CONFIG_GENERIC_MMC
-int board_mmc_init(bd_t *bis)
+#ifdef CONFIG_MMC
+int board_mmc_init(struct bd_info *bis)
 {
 	int i, err;
 

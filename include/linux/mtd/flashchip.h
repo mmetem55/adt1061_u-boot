@@ -1,8 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * Copyright © 2000      Red Hat UK Limited
  * Copyright © 2000-2010 David Woodhouse <dwmw2@infradead.org>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  *
  */
 
@@ -52,8 +51,6 @@ typedef enum {
 	FL_UNKNOWN
 } flstate_t;
 
-
-
 /* NOTE: confusingly, this can be used to refer to more than one chip at a time,
    if they're interleaved.  This can even refer to individual partitions on
    the same physical chip when present. */
@@ -99,6 +96,5 @@ struct flchip_shared {
 	struct flchip *writing;
 	struct flchip *erasing;
 };
-
 
 #endif /* __MTD_FLASHCHIP_H__ */

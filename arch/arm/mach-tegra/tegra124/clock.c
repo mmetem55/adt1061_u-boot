@@ -1,13 +1,14 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
- * (C) Copyright 2013
+ * (C) Copyright 2013-2015
  * NVIDIA Corporation <www.nvidia.com>
- *
- * SPDX-License-Identifier:     GPL-2.0+
  */
 
 /* Tegra124 Clock control functions */
 
-#include <common.h>
+#include <config.h>
+#include <init.h>
+#include <log.h>
 #include <asm/io.h>
 #include <asm/arch/clock.h>
 #include <asm/arch/sysctr.h>
@@ -16,6 +17,10 @@
 #include <asm/arch-tegra/timer.h>
 #include <div64.h>
 #include <fdtdec.h>
+#include <linux/delay.h>
+
+#include <dt-bindings/clock/tegra124-car.h>
+#include <dt-bindings/clock/tegra124-car-common.h>
 
 /*
  * Clock types that we can use as a source. The Tegra124 has muxes for the
@@ -72,7 +77,7 @@ enum {
  */
 #define CLK(x) CLOCK_ID_ ## x
 static enum clock_id clock_source[CLOCK_TYPE_COUNT][CLOCK_MAX_MUX+1] = {
-	{ CLK(AUDIO),	CLK(XCPU),	CLK(PERIPH),	CLK(OSC),
+	{ CLK(AUDIO),	CLK(XCPU),	CLK(PERIPH),	CLK(CLK_M),
 		CLK(NONE),	CLK(NONE),	CLK(NONE),	CLK(NONE),
 		MASK_BITS_31_30},
 	{ CLK(MEMORY),	CLK(CGENERAL),	CLK(PERIPH),	CLK(AUDIO),
@@ -566,9 +571,42 @@ static s8 periph_id_to_internal_id[PERIPH_ID_COUNT] = {
 };
 
 /*
+ * PLL divider shift/mask tables for all PLL IDs.
+ */
+struct clk_pll_info tegra_pll_info_table[CLOCK_ID_PLL_COUNT] = {
+	/*
+	 * T124: same as T114, some deviations from T2x/T30. Adds PLLDP.
+	 * NOTE: If kcp_mask/kvco_mask == 0, they're not used in that PLL (PLLX, etc.)
+	 *       If lock_ena or lock_det are >31, they're not used in that PLL.
+	 */
+
+	{ .m_shift = 0, .m_mask = 0xFF, .n_shift = 8, .n_mask = 0xFF,  .p_shift = 20, .p_mask = 0x0F,
+	  .lock_ena = 24, .lock_det = 27, .kcp_shift = 28, .kcp_mask = 3, .kvco_shift = 27, .kvco_mask = 1 },	/* PLLC */
+	{ .m_shift = 0, .m_mask = 0xFF, .n_shift = 8, .n_mask = 0xFF,  .p_shift = 0,  .p_mask = 0,
+	  .lock_ena = 0,  .lock_det = 27, .kcp_shift = 1, .kcp_mask = 3, .kvco_shift = 0, .kvco_mask = 1 },	/* PLLM */
+	{ .m_shift = 0, .m_mask = 0x1F, .n_shift = 8, .n_mask = 0x3FF, .p_shift = 20, .p_mask = 0x07,
+	  .lock_ena = 18, .lock_det = 27, .kcp_shift = 8, .kcp_mask = 0xF, .kvco_shift = 4, .kvco_mask = 0xF },	/* PLLP */
+	{ .m_shift = 0, .m_mask = 0x1F, .n_shift = 8, .n_mask = 0x3FF, .p_shift = 20, .p_mask = 0x07,
+	  .lock_ena = 18, .lock_det = 27, .kcp_shift = 8, .kcp_mask = 0xF, .kvco_shift = 4, .kvco_mask = 0xF },	/* PLLA */
+	{ .m_shift = 0, .m_mask = 0x1F, .n_shift = 8, .n_mask = 0x3FF, .p_shift = 20, .p_mask = 0x01,
+	  .lock_ena = 22, .lock_det = 27, .kcp_shift = 8, .kcp_mask = 0xF, .kvco_shift = 4, .kvco_mask = 0xF },	/* PLLU */
+	{ .m_shift = 0, .m_mask = 0x1F, .n_shift = 8, .n_mask = 0x3FF, .p_shift = 20, .p_mask = 0x07,
+	  .lock_ena = 22, .lock_det = 27, .kcp_shift = 8, .kcp_mask = 0xF, .kvco_shift = 4, .kvco_mask = 0xF },	/* PLLD */
+	{ .m_shift = 0, .m_mask = 0xFF, .n_shift = 8, .n_mask = 0xFF,  .p_shift = 20, .p_mask = 0x0F,
+	  .lock_ena = 18, .lock_det = 27, .kcp_shift = 0, .kcp_mask = 0, .kvco_shift = 0, .kvco_mask = 0 },	/* PLLX */
+	{ .m_shift = 0, .m_mask = 0xFF, .n_shift = 8, .n_mask = 0xFF,  .p_shift = 0,  .p_mask = 0,
+	  .lock_ena = 9,  .lock_det = 11, .kcp_shift = 6, .kcp_mask = 3, .kvco_shift = 0, .kvco_mask = 1 },	/* PLLE */
+	{ .m_shift = 0, .m_mask = 0x0F, .n_shift = 8, .n_mask = 0x3FF, .p_shift = 20, .p_mask = 0x07,
+	  .lock_ena = 18, .lock_det = 27, .kcp_shift = 8, .kcp_mask = 0xF, .kvco_shift = 4, .kvco_mask = 0xF },	/* PLLS (RESERVED) */
+	{ .m_shift = 0, .m_mask = 0xFF, .n_shift = 8, .n_mask = 0xFF, .p_shift = 20, .p_mask = 0xF,
+	  .lock_ena = 30, .lock_det = 27, .kcp_shift = 25, .kcp_mask = 3, .kvco_shift = 24, .kvco_mask = 1 },	/* PLLD2 */
+	{ .m_shift = 0, .m_mask = 0xFF, .n_shift = 8, .n_mask = 0xFF,  .p_shift = 20,  .p_mask = 0xF,
+	  .lock_ena = 30, .lock_det = 27, .kcp_shift = 25, .kcp_mask = 3, .kvco_shift = 24, .kvco_mask = 1 },	/* PLLDP */
+};
+
+/*
  * Get the oscillator frequency, from the corresponding hardware configuration
- * field. Note that Tegra30+ support 3 new higher freqs, but we map back
- * to the old T20 freqs. Support for the higher oscillators is TBD.
+ * field. Note that T30+ supports 3 new higher freqs.
  */
 enum clock_osc_freq clock_get_osc_freq(void)
 {
@@ -577,12 +615,7 @@ enum clock_osc_freq clock_get_osc_freq(void)
 	u32 reg;
 
 	reg = readl(&clkrst->crc_osc_ctrl);
-	reg = (reg & OSC_FREQ_MASK) >> OSC_FREQ_SHIFT;
-
-	if (reg & 1)				/* one of the newer freqs */
-		printf("Warning: OSC_FREQ is unsupported! (%d)\n", reg);
-
-	return reg >> 2;	/* Map to most common (T20) freqs */
+	return (reg & OSC_FREQ_MASK) >> OSC_FREQ_SHIFT;
 }
 
 /* Returns a pointer to the clock source register for a peripheral */
@@ -610,6 +643,51 @@ u32 *get_periph_source_reg(enum periph_id periph_id)
 	}
 }
 
+int get_periph_clock_info(enum periph_id periph_id, int *mux_bits,
+			  int *divider_bits, int *type)
+{
+	enum periphc_internal_id internal_id;
+
+	if (!clock_periph_id_isvalid(periph_id))
+		return -1;
+
+	internal_id = periph_id_to_internal_id[periph_id];
+	if (!periphc_internal_id_isvalid(internal_id))
+		return -1;
+
+	*type = clock_periph_type[internal_id];
+	if (!clock_type_id_isvalid(*type))
+		return -1;
+
+	*mux_bits = clock_source[*type][CLOCK_MAX_MUX];
+
+	if (*type == CLOCK_TYPE_PC2CC3M_T16)
+		*divider_bits = 16;
+	else
+		*divider_bits = 8;
+
+	return 0;
+}
+
+enum clock_id get_periph_clock_id(enum periph_id periph_id, int source)
+{
+	enum periphc_internal_id internal_id;
+	int type;
+
+	if (!clock_periph_id_isvalid(periph_id))
+		return CLOCK_ID_NONE;
+
+	internal_id = periph_id_to_internal_id[periph_id];
+	if (!periphc_internal_id_isvalid(internal_id))
+		return CLOCK_ID_NONE;
+
+	type = clock_periph_type[internal_id];
+	if (!clock_type_id_isvalid(type))
+		return CLOCK_ID_NONE;
+
+	return clock_source[type][source];
+}
+
 /**
  * Given a peripheral ID and the required source clock, this returns which
  * value should be programmed into the source mux for that peripheral.
@@ -620,29 +698,16 @@ u32 *get_periph_source_reg(enum periph_id periph_id)
  * @param source	PLL id of required parent clock
  * @param mux_bits	Set to number of bits in mux register: 2 or 4
  * @param divider_bits Set to number of divider bits (8 or 16)
- * @return mux value (0-4, or -1 if not found)
+ * Return: mux value (0-4, or -1 if not found)
  */
 int get_periph_clock_source(enum periph_id periph_id,
 	enum clock_id parent, int *mux_bits, int *divider_bits)
 {
 	enum clock_type_id type;
-	enum periphc_internal_id internal_id;
-	int mux;
+	int mux, err;
 
-	assert(clock_periph_id_isvalid(periph_id));
-
-	internal_id = periph_id_to_internal_id[periph_id];
-	assert(periphc_internal_id_isvalid(internal_id));
-
-	type = clock_periph_type[internal_id];
-	assert(clock_type_id_isvalid(type));
-
-	*mux_bits = clock_source[type][CLOCK_MAX_MUX];
-
-	if (type == CLOCK_TYPE_PC2CC3M_T16)
-		*divider_bits = 16;
-	else
-		*divider_bits = 8;
+	err = get_periph_clock_info(periph_id, mux_bits, divider_bits, &type);
+	assert(!err);
 
 	for (mux = 0; mux < CLOCK_MAX_MUX; mux++)
 		if (clock_source[type][mux] == parent)
@@ -700,14 +765,14 @@ void reset_set_enable(enum periph_id periph_id, int enable)
 	writel(reg, reset);
 }
 
-#ifdef CONFIG_OF_CONTROL
+#if CONFIG_IS_ENABLED(OF_CONTROL)
 /*
  * Convert a device tree clock ID to our peripheral ID. They are mostly
  * the same but we are very cautious so we check that a valid clock ID is
  * provided.
  *
  * @param clk_id    Clock ID according to tegra124 device tree binding
- * @return peripheral ID, or PERIPH_ID_NONE if the clock ID is invalid
+ * Return: peripheral ID, or PERIPH_ID_NONE if the clock ID is invalid
  */
 enum periph_id clk_id_to_periph_id(int clk_id)
 {
@@ -766,14 +831,59 @@ enum periph_id clk_id_to_periph_id(int clk_id)
 		return clk_id;
 	}
 }
-#endif /* CONFIG_OF_CONTROL */
+
+/*
+ * Convert a device tree clock ID to our PLL ID.
+ *
+ * @param clk_id	Clock ID according to tegra124 device tree binding
+ * Return: clock ID, or CLOCK_ID_NONE if the clock ID is invalid
+ */
+enum clock_id clk_id_to_pll_id(int clk_id)
+{
+	switch (clk_id) {
+	case TEGRA124_CLK_PLL_C:
+		return CLOCK_ID_CGENERAL;
+	case TEGRA124_CLK_PLL_M:
+		return CLOCK_ID_MEMORY;
+	case TEGRA124_CLK_PLL_P:
+		return CLOCK_ID_PERIPH;
+	case TEGRA124_CLK_PLL_A:
+		return CLOCK_ID_AUDIO;
+	case TEGRA124_CLK_PLL_U:
+		return CLOCK_ID_USB;
+	case TEGRA124_CLK_PLL_D:
+	case TEGRA124_CLK_PLL_D_OUT0:
+		return CLOCK_ID_DISPLAY;
+	case TEGRA124_CLK_PLL_D2:
+	case TEGRA124_CLK_PLL_D2_OUT0:
+		return CLOCK_ID_DISPLAY2;
+	case TEGRA124_CLK_PLL_X:
+		return CLOCK_ID_XCPU;
+	case TEGRA124_CLK_PLL_E:
+		return CLOCK_ID_EPCI;
+	case TEGRA124_CLK_CLK_32K:
+		return CLOCK_ID_32KHZ;
+	case TEGRA124_CLK_CLK_M:
+		return CLOCK_ID_CLK_M;
+	default:
+		return CLOCK_ID_NONE;
+	}
+}
+#endif /* CONFIG_IS_ENABLED(OF_CONTROL) */
 
 void clock_early_init(void)
 {
 	struct clk_rst_ctlr *clkrst =
 		(struct clk_rst_ctlr *)NV_PA_CLK_RST_BASE;
+	struct clk_pll_info *pllinfo;
+	u32 data;
 
 	tegra30_set_up_pllp();
+
+	/* clear IDDQ before accessing any other PLLC registers */
+	pllinfo = &tegra_pll_info_table[CLOCK_ID_CGENERAL];
+	clrbits_le32(&clkrst->crc_pll[CLOCK_ID_CGENERAL].pll_misc, PLLC_IDDQ);
+	udelay(2);
 
 	/*
 	 * PLLC output frequency set to 600Mhz
@@ -781,6 +891,7 @@ void clock_early_init(void)
 	 */
 	switch (clock_get_osc_freq()) {
 	case CLOCK_OSC_FREQ_12_0: /* OSC is 12Mhz */
+	case CLOCK_OSC_FREQ_48_0: /* OSC is 48Mhz */
 		clock_set_rate(CLOCK_ID_CGENERAL, 600, 12, 0, 8);
 		clock_set_rate(CLOCK_ID_DISPLAY, 925, 12, 0, 12);
 		break;
@@ -791,10 +902,12 @@ void clock_early_init(void)
 		break;
 
 	case CLOCK_OSC_FREQ_13_0: /* OSC is 13Mhz */
+	case CLOCK_OSC_FREQ_16_8: /* OSC is 16.8Mhz */
 		clock_set_rate(CLOCK_ID_CGENERAL, 600, 13, 0, 8);
 		clock_set_rate(CLOCK_ID_DISPLAY, 925, 13, 0, 12);
 		break;
 	case CLOCK_OSC_FREQ_19_2:
+	case CLOCK_OSC_FREQ_38_4:
 	default:
 		/*
 		 * These are not supported. It is too early to print a
@@ -808,12 +921,34 @@ void clock_early_init(void)
 	writel(0x00561600, &clkrst->crc_pll[CLOCK_ID_CGENERAL].pll_out[1]);
 
 	/* PLLC_MISC: Set LOCK_ENABLE */
-	writel(0x01000000, &clkrst->crc_pll[CLOCK_ID_CGENERAL].pll_misc);
+	pllinfo = &tegra_pll_info_table[CLOCK_ID_CGENERAL];
+	setbits_le32(&clkrst->crc_pll[CLOCK_ID_CGENERAL].pll_misc, (1 << pllinfo->lock_ena));
 	udelay(2);
 
-	/* PLLD_MISC: Set CLKENABLE, CPCON 12, LFCON 1 */
-	writel(0x40000C10, &clkrst->crc_pll[CLOCK_ID_DISPLAY].pll_misc);
+	/* PLLD_MISC: Set CLKENABLE, CPCON 12, LFCON 1, and enable lock */
+	pllinfo = &tegra_pll_info_table[CLOCK_ID_DISPLAY];
+	data = (12 << pllinfo->kcp_shift) | (1 << pllinfo->kvco_shift);
+	data |= (1 << PLLD_CLKENABLE) | (1 << pllinfo->lock_ena);
+	writel(data, &clkrst->crc_pll[CLOCK_ID_DISPLAY].pll_misc);
 	udelay(2);
+}
+
+/*
+ * clock_early_init_done - Check if clock_early_init() has been called
+ *
+ * Check a register that we set up to see if clock_early_init() has already
+ * been called.
+ *
+ * Return: true if clock_early_init() was called, false if not
+ */
+bool clock_early_init_done(void)
+{
+	struct clk_rst_ctlr *clkrst = (struct clk_rst_ctlr *)NV_PA_CLK_RST_BASE;
+	u32 val;
+
+	val = readl(&clkrst->crc_sclk_brst_pol);
+
+	return val == 0x20002222;
 }
 
 void arch_timer_init(void)
@@ -821,8 +956,8 @@ void arch_timer_init(void)
 	struct sysctr_ctlr *sysctr = (struct sysctr_ctlr *)NV_PA_TSC_BASE;
 	u32 freq, val;
 
-	freq = clock_get_rate(CLOCK_ID_OSC);
-	debug("%s: osc freq is %dHz [0x%08X]\n", __func__, freq, freq);
+	freq = clock_get_rate(CLOCK_ID_CLK_M);
+	debug("%s: clk_m freq is %dHz [0x%08X]\n", __func__, freq, freq);
 
 	/* ARM CNTFRQ */
 	asm("mcr p15, 0, %0, c14, c0, 0\n" : : "r" (freq));
@@ -1059,8 +1194,39 @@ struct clk_pll_simple *clock_get_simple_pll(enum clock_id clkid)
 	struct clk_rst_ctlr *clkrst =
 			(struct clk_rst_ctlr *)NV_PA_CLK_RST_BASE;
 
-	if (clkid == CLOCK_ID_DP)
+	switch (clkid) {
+	case CLOCK_ID_XCPU:
+	case CLOCK_ID_EPCI:
+	case CLOCK_ID_SFROM32KHZ:
+		return &clkrst->crc_pll_simple[clkid - CLOCK_ID_FIRST_SIMPLE];
+	case CLOCK_ID_DISPLAY2:
+		return &clkrst->plld2;
+	case CLOCK_ID_DP:
 		return &clkrst->plldp;
-
-	return NULL;
+	default:
+		return NULL;
+	}
 }
+
+struct periph_clk_init periph_clk_init_table[] = {
+	{ PERIPH_ID_SBC1, CLOCK_ID_PERIPH },
+	{ PERIPH_ID_SBC2, CLOCK_ID_PERIPH },
+	{ PERIPH_ID_SBC3, CLOCK_ID_PERIPH },
+	{ PERIPH_ID_SBC4, CLOCK_ID_PERIPH },
+	{ PERIPH_ID_SBC5, CLOCK_ID_PERIPH },
+	{ PERIPH_ID_SBC6, CLOCK_ID_PERIPH },
+	{ PERIPH_ID_HOST1X, CLOCK_ID_PERIPH },
+	{ PERIPH_ID_DISP1, CLOCK_ID_CGENERAL },
+	{ PERIPH_ID_SDMMC1, CLOCK_ID_PERIPH },
+	{ PERIPH_ID_SDMMC2, CLOCK_ID_PERIPH },
+	{ PERIPH_ID_SDMMC3, CLOCK_ID_PERIPH },
+	{ PERIPH_ID_SDMMC4, CLOCK_ID_PERIPH },
+	{ PERIPH_ID_PWM, CLOCK_ID_PERIPH },
+	{ PERIPH_ID_I2C1, CLOCK_ID_PERIPH },
+	{ PERIPH_ID_I2C2, CLOCK_ID_PERIPH },
+	{ PERIPH_ID_I2C3, CLOCK_ID_PERIPH },
+	{ PERIPH_ID_I2C4, CLOCK_ID_PERIPH },
+	{ PERIPH_ID_I2C5, CLOCK_ID_PERIPH },
+	{ PERIPH_ID_I2C6, CLOCK_ID_PERIPH },
+	{ -1, },
+};

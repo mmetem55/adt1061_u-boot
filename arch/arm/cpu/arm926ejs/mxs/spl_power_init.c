@@ -1,14 +1,14 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Freescale i.MX28 Boot PMIC init
  *
  * Copyright (C) 2011 Marek Vasut <marek.vasut@gmail.com>
  * on behalf of DENX Software Engineering GmbH
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
-#include <common.h>
 #include <config.h>
+#include <hang.h>
+#include <log.h>
 #include <asm/io.h>
 #include <asm/arch/imx-regs.h>
 
@@ -38,6 +38,29 @@ static void mxs_power_clock2xtal(void)
 	/* Set XTAL as CPU reference clock */
 	writel(CLKCTRL_CLKSEQ_BYPASS_CPU,
 		&clkctrl_regs->hw_clkctrl_clkseq_set);
+}
+
+static void mxs_power_regs_dump(void)
+{
+	struct mxs_power_regs *power_regs =
+		(struct mxs_power_regs *)MXS_POWER_BASE;
+
+	debug("ctrl:\t\t 0x%x\n", readl(&power_regs->hw_power_ctrl));
+	debug("5vctrl:\t\t 0x%x\n", readl(&power_regs->hw_power_5vctrl));
+	debug("minpwr:\t\t 0x%x\n", readl(&power_regs->hw_power_minpwr));
+	debug("charge:\t\t 0x%x\n", readl(&power_regs->hw_power_charge));
+	debug("vddctrl:\t 0x%x\n", readl(&power_regs->hw_power_vdddctrl));
+	debug("vddactrl:\t 0x%x\n", readl(&power_regs->hw_power_vddactrl));
+	debug("vddioctrl:\t 0x%x\n", readl(&power_regs->hw_power_vddioctrl));
+	debug("vddmemctrl:\t 0x%x\n", readl(&power_regs->hw_power_vddmemctrl));
+	debug("dcdc4p2:\t 0x%x\n", readl(&power_regs->hw_power_dcdc4p2));
+	debug("misc:\t\t 0x%x\n", readl(&power_regs->hw_power_misc));
+	debug("dclimits:\t 0x%x\n", readl(&power_regs->hw_power_dclimits));
+	debug("loopctrl:\t 0x%x\n", readl(&power_regs->hw_power_loopctrl));
+	debug("sts:\t\t 0x%x\n", readl(&power_regs->hw_power_sts));
+	debug("speed:\t\t 0x%x\n", readl(&power_regs->hw_power_speed));
+	debug("battmonitor:\t 0x%x\n",
+	      readl(&power_regs->hw_power_battmonitor));
 }
 
 /**
@@ -245,6 +268,39 @@ static void mxs_power_setup_5v_detect(void)
 			POWER_5VCTRL_VBUSVALID_TRSH_MASK,
 			POWER_5VCTRL_VBUSVALID_TRSH_4V4 |
 			POWER_5VCTRL_PWRUP_VBUS_CMPS);
+}
+
+/**
+ * mxs_power_switch_dcdc_clocksource() - Switch PLL clock for DC-DC converters
+ * @freqsel:	One of the POWER_MISC_FREQSEL_xxx defines to select the clock
+ *
+ * This function configures and then enables an alternative PLL clock source
+ * for the DC-DC converters.
+ */
+void mxs_power_switch_dcdc_clocksource(uint32_t freqsel)
+{
+	struct mxs_power_regs *power_regs =
+		(struct mxs_power_regs *)MXS_POWER_BASE;
+
+	/* Select clocksource for DC-DC converters */
+	clrsetbits_le32(&power_regs->hw_power_misc,
+			POWER_MISC_FREQSEL_MASK,
+			freqsel);
+	setbits_le32(&power_regs->hw_power_misc,
+			POWER_MISC_SEL_PLLCLK);
+}
+
+/**
+ * mxs_power_setup_dcdc_clocksource() - Setup PLL clock source for DC-DC converters
+ *
+ * Normally, there is no need to switch DC-DC clocksource. This is the reason,
+ * why this function is a stub and does nothing. However, boards can implement
+ * this function when required and call mxs_power_switch_dcdc_clocksource() to
+ * switch to an alternative clock source.
+ */
+__weak void mxs_power_setup_dcdc_clocksource(void)
+{
+	debug("SPL: Using default DC-DC clocksource\n");
 }
 
 /**
@@ -593,11 +649,11 @@ static void mxs_power_enable_4p2(void)
 
 	mxs_power_init_dcdc_4p2_source();
 
-	writel(vdddctrl, &power_regs->hw_power_vdddctrl);
+	writel(vddioctrl, &power_regs->hw_power_vddioctrl);
 	early_delay(20);
 	writel(vddactrl, &power_regs->hw_power_vddactrl);
 	early_delay(20);
-	writel(vddioctrl, &power_regs->hw_power_vddioctrl);
+	writel(vdddctrl, &power_regs->hw_power_vdddctrl);
 
 	/*
 	 * Check if FET is enabled on either powerout and if so,
@@ -718,7 +774,19 @@ static void mxs_batt_boot(void)
 		POWER_5VCTRL_CHARGE_4P2_ILIMIT_MASK,
 		0x8 << POWER_5VCTRL_CHARGE_4P2_ILIMIT_OFFSET);
 
-	mxs_power_enable_4p2();
+	if (CONFIG_IS_ENABLED(MXS_PMU_MINIMAL_VDD5V_CURRENT))
+		setbits_le32(&power_regs->hw_power_5vctrl,
+			     POWER_5VCTRL_ILIMIT_EQ_ZERO);
+
+	if (CONFIG_IS_ENABLED(MXS_PMU_DISABLE_BATT_CHARGE)) {
+		writel(POWER_CHARGE_PWD_BATTCHRG,
+		       &power_regs->hw_power_charge_set);
+		writel(POWER_5VCTRL_PWD_CHARGE_4P2_MASK,
+		       &power_regs->hw_power_5vctrl_set);
+	}
+
+	if (CONFIG_IS_ENABLED(MXS_PMU_ENABLE_4P2_LINEAR_REGULATOR))
+		mxs_power_enable_4p2();
 }
 
 /**
@@ -872,6 +940,7 @@ static void mxs_power_configure_power_source(void)
 
 	debug("SPL: Configuring power source\n");
 
+	mxs_power_setup_dcdc_clocksource();
 	mxs_src_power_init();
 
 	if (readl(&power_regs->hw_power_sts) & POWER_STS_VDD5V_GT_VDDIO) {
@@ -1107,8 +1176,9 @@ static void mxs_power_set_vddx(const struct mxs_vddx_cfg *cfg,
 
 	if (adjust_up && cfg->bo_irq) {
 		if (powered_by_linreg) {
-			bo_int = readl(cfg->reg);
-			clrbits_le32(cfg->reg, cfg->bo_enirq);
+			bo_int = readl(&power_regs->hw_power_ctrl);
+			clrbits_le32(&power_regs->hw_power_ctrl,
+				cfg->bo_enirq);
 		}
 		setbits_le32(cfg->reg, cfg->bo_offset_mask);
 	}
@@ -1150,7 +1220,8 @@ static void mxs_power_set_vddx(const struct mxs_vddx_cfg *cfg,
 		if (adjust_up && powered_by_linreg) {
 			writel(cfg->bo_irq, &power_regs->hw_power_ctrl_clr);
 			if (bo_int & cfg->bo_enirq)
-				setbits_le32(cfg->reg, cfg->bo_enirq);
+				setbits_le32(&power_regs->hw_power_ctrl,
+					cfg->bo_enirq);
 		}
 
 		clrsetbits_le32(cfg->reg, cfg->bo_offset_mask,
@@ -1221,8 +1292,8 @@ void mxs_power_init(void)
 	debug("SPL: Setting VDDIO to 3V3 (brownout @ 3v15)\n");
 	mxs_power_set_vddx(&mxs_vddio_cfg, 3300, 3150);
 
-	debug("SPL: Setting VDDD to 1V5 (brownout @ 1v0)\n");
-	mxs_power_set_vddx(&mxs_vddd_cfg, 1500, 1000);
+	debug("SPL: Setting VDDD to 1V55 (brownout @ 1v400)\n");
+	mxs_power_set_vddx(&mxs_vddd_cfg, 1550, 1400);
 #ifdef CONFIG_MX23
 	debug("SPL: Setting mx23 VDDMEM to 2V5 (brownout @ 1v7)\n");
 	mxs_power_set_vddx(&mxs_vddmem_cfg, 2500, 1700);
@@ -1233,6 +1304,7 @@ void mxs_power_init(void)
 		POWER_CTRL_DCDC4P2_BO_IRQ, &power_regs->hw_power_ctrl_clr);
 
 	writel(POWER_5VCTRL_PWDN_5VBRNOUT, &power_regs->hw_power_5vctrl_set);
+	mxs_power_regs_dump();
 
 	early_delay(1000);
 }

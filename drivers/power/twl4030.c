@@ -1,8 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Copyright (c) 2009 Wind River Systems, Inc.
  * Tom Rix <Tom.Rix at windriver.com>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  *
  * twl4030_power_reset_init is derived from code on omapzoom,
  * git://git.omapzoom.com/repo/u-boot.git
@@ -23,7 +22,10 @@
  *	Syed Mohammed Khasim <khasim at ti.com>
  */
 
+#include <command.h>
 #include <twl4030.h>
+#include <linux/delay.h>
+#include <linux/printk.h>
 
 /*
  * Power Reset
@@ -43,6 +45,66 @@ void twl4030_power_reset_init(void)
 			printf("Could not initialize hardware reset\n");
 		}
 	}
+}
+
+/*
+ * Power off
+ */
+void twl4030_power_off(void)
+{
+	u8 data;
+
+	/* PM master unlock (CFG and TST keys) */
+
+	data = 0xCE;
+	twl4030_i2c_write_u8(TWL4030_CHIP_PM_MASTER,
+			     TWL4030_PM_MASTER_PROTECT_KEY, data);
+	data = 0xEC;
+	twl4030_i2c_write_u8(TWL4030_CHIP_PM_MASTER,
+			     TWL4030_PM_MASTER_PROTECT_KEY, data);
+
+	/* VBAT start disable */
+
+	twl4030_i2c_read_u8(TWL4030_CHIP_PM_MASTER,
+			    TWL4030_PM_MASTER_CFG_P1_TRANSITION, &data);
+	data &= ~TWL4030_PM_MASTER_CFG_TRANSITION_STARTON_VBAT;
+	twl4030_i2c_write_u8(TWL4030_CHIP_PM_MASTER,
+			     TWL4030_PM_MASTER_CFG_P1_TRANSITION, data);
+
+	twl4030_i2c_read_u8(TWL4030_CHIP_PM_MASTER,
+			    TWL4030_PM_MASTER_CFG_P2_TRANSITION, &data);
+	data &= ~TWL4030_PM_MASTER_CFG_TRANSITION_STARTON_VBAT;
+	twl4030_i2c_write_u8(TWL4030_CHIP_PM_MASTER,
+			     TWL4030_PM_MASTER_CFG_P2_TRANSITION, data);
+
+	twl4030_i2c_read_u8(TWL4030_CHIP_PM_MASTER,
+			    TWL4030_PM_MASTER_CFG_P3_TRANSITION, &data);
+	data &= ~TWL4030_PM_MASTER_CFG_TRANSITION_STARTON_VBAT;
+	twl4030_i2c_write_u8(TWL4030_CHIP_PM_MASTER,
+			     TWL4030_PM_MASTER_CFG_P3_TRANSITION, data);
+
+	/* High jitter for PWRANA2 */
+
+	twl4030_i2c_read_u8(TWL4030_CHIP_PM_MASTER,
+			    TWL4030_PM_MASTER_CFG_PWRANA2, &data);
+	data &= ~(TWL4030_PM_MASTER_CFG_PWRANA2_LOJIT0_LOWV |
+		  TWL4030_PM_MASTER_CFG_PWRANA2_LOJIT1_LOWV);
+	twl4030_i2c_write_u8(TWL4030_CHIP_PM_MASTER,
+			     TWL4030_PM_MASTER_CFG_PWRANA2, data);
+
+	/* PM master lock */
+
+	data = 0xFF;
+	twl4030_i2c_write_u8(TWL4030_CHIP_PM_MASTER,
+			     TWL4030_PM_MASTER_PROTECT_KEY, data);
+
+	/* Power off */
+
+	twl4030_i2c_read_u8(TWL4030_CHIP_PM_MASTER,
+			    TWL4030_PM_MASTER_P1_SW_EVENTS, &data);
+	data |= TWL4030_PM_MASTER_SW_EVENTS_DEVOFF;
+	twl4030_i2c_write_u8(TWL4030_CHIP_PM_MASTER,
+			     TWL4030_PM_MASTER_P1_SW_EVENTS, data);
 }
 
 /*
@@ -111,3 +173,50 @@ void twl4030_power_mmc_init(int dev_index)
 		mdelay(100);	/* ramp-up delay from Linux code */
 	}
 }
+
+#ifdef CONFIG_CMD_POWEROFF
+int do_poweroff(struct cmd_tbl *cmdtp, int flag, int argc, char *const argv[])
+{
+	twl4030_power_off();
+
+	return 0;
+}
+#endif
+
+#if CONFIG_IS_ENABLED(DM_I2C)
+int twl4030_i2c_write_u8(u8 chip_no, u8 reg, u8 val)
+{
+	struct udevice *dev;
+	int ret;
+
+	ret = i2c_get_chip_for_busnum(0, chip_no, 1, &dev);
+	if (ret) {
+		pr_err("unable to get I2C bus. ret %d\n", ret);
+		return ret;
+	}
+	ret = dm_i2c_reg_write(dev, reg, val);
+	if (ret) {
+		pr_err("writing to twl4030 failed. ret %d\n", ret);
+		return ret;
+	}
+	return 0;
+}
+
+int twl4030_i2c_read(u8 chip_no, u8 reg, u8 *valp, int len)
+{
+	struct udevice *dev;
+	int ret;
+
+	ret = i2c_get_chip_for_busnum(0, chip_no, 1, &dev);
+	if (ret) {
+		pr_err("unable to get I2C bus. ret %d\n", ret);
+		return ret;
+	}
+	ret = dm_i2c_read(dev, reg, valp, len);
+	if (ret) {
+		pr_err("reading from twl4030 failed. ret %d\n", ret);
+		return ret;
+	}
+	return 0;
+}
+#endif

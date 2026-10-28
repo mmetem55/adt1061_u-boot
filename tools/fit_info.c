@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * (C) Copyright 2014
  * DENX Software Engineering
@@ -18,8 +19,6 @@
  *		some functions added to address abstraction
  *
  * All rights reserved.
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #include "mkimage.h"
@@ -27,7 +26,7 @@
 #include <image.h>
 #include <u-boot/crc.h>
 
-void usage(char *cmdname)
+static void usage(char *cmdname)
 {
 	fprintf(stderr, "Usage: %s -f fit file -n node -p property\n"
 			 "          -f ==> set fit file which is used'\n"
@@ -81,7 +80,7 @@ int main(int argc, char **argv)
 		fprintf(stderr, "%s: Missing property name\n", *argv);
 		usage(*argv);
 	}
-	ffd = mmap_fdt(cmdname, fdtfile, 0, &fit_blob, &fsbuf, false);
+	ffd = mmap_fdt(cmdname, fdtfile, 0, &fit_blob, &fsbuf, false, false);
 
 	if (ffd < 0) {
 		printf("Could not open %s\n", fdtfile);

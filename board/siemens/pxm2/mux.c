@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * pinmux setup for siemens pxm2 board
  *
@@ -7,18 +8,14 @@
  * Based on:
  * u-boot:/board/ti/am335x/mux.c
  *
- * Copyright (C) 2011 Texas Instruments Incorporated - http://www.ti.com/
- *
- * SPDX-License-Identifier:	GPL-2.0+
+ * Copyright (C) 2011 Texas Instruments Incorporated - https://www.ti.com/
  */
 
-#include <common.h>
+#include <asm/io.h>
 #include <asm/arch/sys_proto.h>
 #include <asm/arch/hardware.h>
 #include <asm/arch/mux.h>
-#include <asm/io.h>
-#include <i2c.h>
-#include "board.h"
+#include "eeprom.h"
 
 static struct module_pin_mux uart0_pin_mux[] = {
 	{OFFSET(uart0_rxd), (MODE(0) | PULLUP_EN | RXACTIVE)},	/* UART0_RXD */
@@ -27,7 +24,7 @@ static struct module_pin_mux uart0_pin_mux[] = {
 	{-1},
 };
 
-#ifdef CONFIG_NAND
+#ifdef CONFIG_MTD_RAW_NAND
 static struct module_pin_mux nand_pin_mux[] = {
 	{OFFSET(gpmc_ad0), (MODE(0) | PULLUP_EN | RXACTIVE)},	/* NAND AD0 */
 	{OFFSET(gpmc_ad1), (MODE(0) | PULLUP_EN | RXACTIVE)},	/* NAND AD1 */
@@ -170,7 +167,7 @@ void enable_board_pin_mux(void)
 {
 	configure_module_pin_mux(uart0_pin_mux);
 	configure_module_pin_mux(i2c1_pin_mux);
-#ifdef CONFIG_NAND
+#ifdef CONFIG_MTD_RAW_NAND
 	configure_module_pin_mux(nand_pin_mux);
 #endif
 #ifndef CONFIG_NO_ETH

@@ -1,14 +1,15 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Copyright (c) 2010-2013 NVIDIA Corporation
  * With help from the mpc8xxx SPI driver
  * With more help from omap3_spi SPI driver
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
-#include <common.h>
 #include <dm.h>
 #include <errno.h>
+#include <log.h>
+#include <time.h>
+#include <asm/global_data.h>
 #include <asm/io.h>
 #include <asm/gpio.h>
 #include <asm/arch/clock.h>
@@ -16,41 +17,43 @@
 #include <asm/arch-tegra/clk_rst.h>
 #include <spi.h>
 #include <fdtdec.h>
+#include <linux/bitops.h>
+#include <linux/delay.h>
 #include "tegra_spi.h"
 
 DECLARE_GLOBAL_DATA_PTR;
 
-#define SPI_CMD_GO			(1 << 30)
+#define SPI_CMD_GO			BIT(30)
 #define SPI_CMD_ACTIVE_SCLK_SHIFT	26
 #define SPI_CMD_ACTIVE_SCLK_MASK	(3 << SPI_CMD_ACTIVE_SCLK_SHIFT)
-#define SPI_CMD_CK_SDA			(1 << 21)
+#define SPI_CMD_CK_SDA			BIT(21)
 #define SPI_CMD_ACTIVE_SDA_SHIFT	18
 #define SPI_CMD_ACTIVE_SDA_MASK		(3 << SPI_CMD_ACTIVE_SDA_SHIFT)
-#define SPI_CMD_CS_POL			(1 << 16)
-#define SPI_CMD_TXEN			(1 << 15)
-#define SPI_CMD_RXEN			(1 << 14)
-#define SPI_CMD_CS_VAL			(1 << 13)
-#define SPI_CMD_CS_SOFT			(1 << 12)
-#define SPI_CMD_CS_DELAY		(1 << 9)
-#define SPI_CMD_CS3_EN			(1 << 8)
-#define SPI_CMD_CS2_EN			(1 << 7)
-#define SPI_CMD_CS1_EN			(1 << 6)
-#define SPI_CMD_CS0_EN			(1 << 5)
-#define SPI_CMD_BIT_LENGTH		(1 << 4)
-#define SPI_CMD_BIT_LENGTH_MASK		0x0000001F
+#define SPI_CMD_CS_POL			BIT(16)
+#define SPI_CMD_TXEN			BIT(15)
+#define SPI_CMD_RXEN			BIT(14)
+#define SPI_CMD_CS_VAL			BIT(13)
+#define SPI_CMD_CS_SOFT			BIT(12)
+#define SPI_CMD_CS_DELAY		BIT(9)
+#define SPI_CMD_CS3_EN			BIT(8)
+#define SPI_CMD_CS2_EN			BIT(7)
+#define SPI_CMD_CS1_EN			BIT(6)
+#define SPI_CMD_CS0_EN			BIT(5)
+#define SPI_CMD_BIT_LENGTH		BIT(4)
+#define SPI_CMD_BIT_LENGTH_MASK		GENMASK(4, 0)
 
-#define SPI_STAT_BSY			(1 << 31)
-#define SPI_STAT_RDY			(1 << 30)
-#define SPI_STAT_RXF_FLUSH		(1 << 29)
-#define SPI_STAT_TXF_FLUSH		(1 << 28)
-#define SPI_STAT_RXF_UNR		(1 << 27)
-#define SPI_STAT_TXF_OVF		(1 << 26)
-#define SPI_STAT_RXF_EMPTY		(1 << 25)
-#define SPI_STAT_RXF_FULL		(1 << 24)
-#define SPI_STAT_TXF_EMPTY		(1 << 23)
-#define SPI_STAT_TXF_FULL		(1 << 22)
-#define SPI_STAT_SEL_TXRX_N		(1 << 16)
-#define SPI_STAT_CUR_BLKCNT		(1 << 15)
+#define SPI_STAT_BSY			BIT(31)
+#define SPI_STAT_RDY			BIT(30)
+#define SPI_STAT_RXF_FLUSH		BIT(29)
+#define SPI_STAT_TXF_FLUSH		BIT(28)
+#define SPI_STAT_RXF_UNR		BIT(27)
+#define SPI_STAT_TXF_OVF		BIT(26)
+#define SPI_STAT_RXF_EMPTY		BIT(25)
+#define SPI_STAT_RXF_FULL		BIT(24)
+#define SPI_STAT_TXF_EMPTY		BIT(23)
+#define SPI_STAT_TXF_FULL		BIT(22)
+#define SPI_STAT_SEL_TXRX_N		BIT(16)
+#define SPI_STAT_CUR_BLKCNT		BIT(15)
 
 #define SPI_TIMEOUT		1000
 #define TEGRA_SPI_MAX_FREQ	52000000
@@ -79,19 +82,19 @@ int tegra20_sflash_cs_info(struct udevice *bus, unsigned int cs,
 {
 	/* Tegra20 SPI-Flash - only 1 device ('bus/cs') */
 	if (cs != 0)
-		return -ENODEV;
+		return -EINVAL;
 	else
 		return 0;
 }
 
-static int tegra20_sflash_ofdata_to_platdata(struct udevice *bus)
+static int tegra20_sflash_of_to_plat(struct udevice *bus)
 {
-	struct tegra_spi_platdata *plat = bus->platdata;
+	struct tegra_spi_plat *plat = dev_get_plat(bus);
 	const void *blob = gd->fdt_blob;
-	int node = bus->of_offset;
+	int node = dev_of_offset(bus);
 
-	plat->base = fdtdec_get_addr(blob, node, "reg");
-	plat->periph_id = clock_decode_periph_id(blob, node);
+	plat->base = dev_read_addr(bus);
+	plat->periph_id = clock_decode_periph_id(bus);
 
 	if (plat->periph_id == PERIPH_ID_NONE) {
 		debug("%s: could not decode periph id %d\n", __func__,
@@ -113,7 +116,7 @@ static int tegra20_sflash_ofdata_to_platdata(struct udevice *bus)
 
 static int tegra20_sflash_probe(struct udevice *bus)
 {
-	struct tegra_spi_platdata *plat = dev_get_platdata(bus);
+	struct tegra_spi_plat *plat = dev_get_plat(bus);
 	struct tegra20_sflash_priv *priv = dev_get_priv(bus);
 
 	priv->regs = (struct spi_regs *)plat->base;
@@ -121,6 +124,10 @@ static int tegra20_sflash_probe(struct udevice *bus)
 	priv->last_transaction_us = timer_get_us();
 	priv->freq = plat->frequency;
 	priv->periph_id = plat->periph_id;
+
+	/* Change SPI clock to correct frequency, PLLP_OUT0 source */
+	clock_start_periph_pll(priv->periph_id, CLOCK_ID_PERIPH,
+			       priv->freq);
 
 	return 0;
 }
@@ -166,7 +173,7 @@ static int tegra20_sflash_claim_bus(struct udevice *dev)
 static void spi_cs_activate(struct udevice *dev)
 {
 	struct udevice *bus = dev->parent;
-	struct tegra_spi_platdata *pdata = dev_get_platdata(bus);
+	struct tegra_spi_plat *pdata = dev_get_plat(bus);
 	struct tegra20_sflash_priv *priv = dev_get_priv(bus);
 
 	/* If it's too soon to do another transaction, wait */
@@ -185,7 +192,7 @@ static void spi_cs_activate(struct udevice *dev)
 static void spi_cs_deactivate(struct udevice *dev)
 {
 	struct udevice *bus = dev->parent;
-	struct tegra_spi_platdata *pdata = dev_get_platdata(bus);
+	struct tegra_spi_plat *pdata = dev_get_plat(bus);
 	struct tegra20_sflash_priv *priv = dev_get_priv(bus);
 
 	/* CS is negated on Tegra, so drive a 0 to get a 1 */
@@ -210,7 +217,7 @@ static int tegra20_sflash_xfer(struct udevice *dev, unsigned int bitlen,
 	int ret;
 
 	debug("%s: slave %u:%u dout %p din %p bitlen %u\n",
-	      __func__, bus->seq, spi_chip_select(dev), dout, din, bitlen);
+	      __func__, dev_seq(bus), spi_chip_select(dev), dout, din, bitlen);
 	if (bitlen % 8)
 		return -1;
 	num_bytes = bitlen / 8;
@@ -307,7 +314,7 @@ static int tegra20_sflash_xfer(struct udevice *dev, unsigned int bitlen,
 
 static int tegra20_sflash_set_speed(struct udevice *bus, uint speed)
 {
-	struct tegra_spi_platdata *plat = bus->platdata;
+	struct tegra_spi_plat *plat = dev_get_plat(bus);
 	struct tegra20_sflash_priv *priv = dev_get_priv(bus);
 
 	if (speed > plat->frequency)
@@ -346,8 +353,8 @@ U_BOOT_DRIVER(tegra20_sflash) = {
 	.id	= UCLASS_SPI,
 	.of_match = tegra20_sflash_ids,
 	.ops	= &tegra20_sflash_ops,
-	.ofdata_to_platdata = tegra20_sflash_ofdata_to_platdata,
-	.platdata_auto_alloc_size = sizeof(struct tegra_spi_platdata),
-	.priv_auto_alloc_size = sizeof(struct tegra20_sflash_priv),
+	.of_to_plat = tegra20_sflash_of_to_plat,
+	.plat_auto	= sizeof(struct tegra_spi_plat),
+	.priv_auto	= sizeof(struct tegra20_sflash_priv),
 	.probe	= tegra20_sflash_probe,
 };

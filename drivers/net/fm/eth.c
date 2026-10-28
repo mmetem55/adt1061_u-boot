@@ -1,11 +1,17 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Copyright 2009-2012 Freescale Semiconductor, Inc.
+ * Copyright 2020 NXP
  *	Dave Liu <daveliu@freescale.com>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
-#include <common.h>
+#include <config.h>
+#include <log.h>
+#include <part.h>
 #include <asm/io.h>
+#include <dm.h>
+#include <dm/ofnode.h>
+#include <linux/compat.h>
+#include <phy_interface.h>
 #include <malloc.h>
 #include <net.h>
 #include <hwconfig.h>
@@ -13,16 +19,15 @@
 #include <fsl_mdio.h>
 #include <miiphy.h>
 #include <phy.h>
-#include <asm/fsl_dtsec.h>
-#include <asm/fsl_tgec.h>
+#include <fsl_dtsec.h>
+#include <fsl_tgec.h>
 #include <fsl_memac.h>
+#include <linux/delay.h>
 
 #include "fm.h"
 
-static struct eth_device *devlist[NUM_FM_PORTS];
-static int num_controllers;
-
-#if defined(CONFIG_MII) || defined(CONFIG_CMD_MII) && !defined(BITBANGMII)
+#if ((defined(CONFIG_MII) || defined(CONFIG_CMD_MII)) && \
+     !defined(CONFIG_BITBANGMII))
 
 #define TBIANA_SETTINGS (TBIANA_ASYMMETRIC_PAUSE | TBIANA_SYMMETRIC_PAUSE | \
 			 TBIANA_FULL_DUPLEX)
@@ -38,31 +43,58 @@ static void dtsec_configure_serdes(struct fm_eth *priv)
 #ifdef CONFIG_SYS_FMAN_V3
 	u32 value;
 	struct mii_dev bus;
-	bus.priv = priv->mac->phyregs;
 	bool sgmii_2500 = (priv->enet_if ==
-			PHY_INTERFACE_MODE_SGMII_2500) ? true : false;
+			PHY_INTERFACE_MODE_2500BASEX) ? true : false;
+	int i = 0, j;
 
+	bus.priv = priv->pcs_mdio;
+	bus.read = memac_mdio_read;
+	bus.write = memac_mdio_write;
+	bus.reset = memac_mdio_reset;
+
+qsgmii_loop:
 	/* SGMII IF mode + AN enable only for 1G SGMII, not for 2.5G */
-	value = PHY_SGMII_IF_MODE_SGMII;
-	if (!sgmii_2500)
-		value |= PHY_SGMII_IF_MODE_AN;
+	if (sgmii_2500)
+		value = PHY_SGMII_CR_PHY_RESET |
+			PHY_SGMII_IF_SPEED_GIGABIT |
+			PHY_SGMII_IF_MODE_SGMII;
+	else
+		value = PHY_SGMII_IF_MODE_SGMII | PHY_SGMII_IF_MODE_AN;
 
-	memac_mdio_write(&bus, 0, MDIO_DEVAD_NONE, 0x14, value);
+	for (j = 0; j <= 3; j++)
+		debug("dump PCS reg %#x: %#x\n", j,
+		      memac_mdio_read(&bus, i, MDIO_DEVAD_NONE, j));
+
+	memac_mdio_write(&bus, i, MDIO_DEVAD_NONE, 0x14, value);
 
 	/* Dev ability according to SGMII specification */
 	value = PHY_SGMII_DEV_ABILITY_SGMII;
-	memac_mdio_write(&bus, 0, MDIO_DEVAD_NONE, 0x4, value);
+	memac_mdio_write(&bus, i, MDIO_DEVAD_NONE, 0x4, value);
 
-	/* Adjust link timer for SGMII  -
-	1.6 ms in units of 8 ns = 2 * 10^5 = 0x30d40 */
-	memac_mdio_write(&bus, 0, MDIO_DEVAD_NONE, 0x13, 0x3);
-	memac_mdio_write(&bus, 0, MDIO_DEVAD_NONE, 0x12, 0xd40);
+	if (sgmii_2500) {
+		/* Adjust link timer for 2.5G SGMII,
+		 * 1.6 ms in units of 3.2 ns:
+		 * 1.6ms / 3.2ns = 5 * 10^5 = 0x7a120.
+		 */
+		memac_mdio_write(&bus, i, MDIO_DEVAD_NONE, 0x13, 0x0007);
+		memac_mdio_write(&bus, i, MDIO_DEVAD_NONE, 0x12, 0xa120);
+	} else {
+		/* Adjust link timer for SGMII,
+		 * 1.6 ms in units of 8 ns:
+		 * 1.6ms / 8ns = 2 * 10^5 = 0x30d40.
+		 */
+		memac_mdio_write(&bus, i, MDIO_DEVAD_NONE, 0x13, 0x0003);
+		memac_mdio_write(&bus, i, MDIO_DEVAD_NONE, 0x12, 0x0d40);
+	}
 
 	/* Restart AN */
-	value = PHY_SGMII_CR_DEF_VAL;
-	if (!sgmii_2500)
-		value |= PHY_SGMII_CR_RESET_AN;
-	memac_mdio_write(&bus, 0, MDIO_DEVAD_NONE, 0, value);
+	value = PHY_SGMII_CR_DEF_VAL | PHY_SGMII_CR_RESET_AN;
+	memac_mdio_write(&bus, i, MDIO_DEVAD_NONE, 0, value);
+
+	if ((priv->enet_if == PHY_INTERFACE_MODE_QSGMII) && (i < 3)) {
+		i++;
+		goto qsgmii_loop;
+	}
 #else
 	struct dtsec *regs = priv->mac->base;
 	struct tsec_mii_mng *phyregs = priv->mac->phyregs;
@@ -80,40 +112,30 @@ static void dtsec_configure_serdes(struct fm_eth *priv)
 #endif
 }
 
-static void dtsec_init_phy(struct eth_device *dev)
+static void dtsec_init_phy(struct fm_eth *fm_eth)
 {
-	struct fm_eth *fm_eth = dev->priv;
 #ifndef CONFIG_SYS_FMAN_V3
-	struct dtsec *regs = (struct dtsec *)CONFIG_SYS_FSL_FM1_DTSEC1_ADDR;
+	struct dtsec *regs = (struct dtsec *)CFG_SYS_FSL_FM1_DTSEC1_ADDR;
 
 	/* Assign a Physical address to the TBI */
-	out_be32(&regs->tbipa, CONFIG_SYS_TBIPA_VALUE);
+	out_be32(&regs->tbipa, CFG_SYS_TBIPA_VALUE);
 #endif
 
 	if (fm_eth->enet_if == PHY_INTERFACE_MODE_SGMII ||
-	    fm_eth->enet_if == PHY_INTERFACE_MODE_SGMII_2500)
+	    fm_eth->enet_if == PHY_INTERFACE_MODE_QSGMII ||
+	    fm_eth->enet_if == PHY_INTERFACE_MODE_2500BASEX)
 		dtsec_configure_serdes(fm_eth);
-}
-
-static int tgec_is_fibre(struct eth_device *dev)
-{
-	struct fm_eth *fm = dev->priv;
-	char phyopt[20];
-
-	sprintf(phyopt, "fsl_fm%d_xaui_phy", fm->fm_index + 1);
-
-	return hwconfig_arg_cmp(phyopt, "xfi");
 }
 #endif
 
 static u16 muram_readw(u16 *addr)
 {
-	u32 base = (u32)addr & ~0x3;
-	u32 val32 = *(u32 *)base;
+	ulong base = (ulong)addr & ~0x3UL;
+	u32 val32 = in_be32((void *)base);
 	int byte_pos;
 	u16 ret;
 
-	byte_pos = (u32)addr & 0x3;
+	byte_pos = (ulong)addr & 0x3UL;
 	if (byte_pos)
 		ret = (u16)(val32 & 0x0000ffff);
 	else
@@ -124,18 +146,18 @@ static u16 muram_readw(u16 *addr)
 
 static void muram_writew(u16 *addr, u16 val)
 {
-	u32 base = (u32)addr & ~0x3;
-	u32 org32 = *(u32 *)base;
+	ulong base = (ulong)addr & ~0x3UL;
+	u32 org32 = in_be32((void *)base);
 	u32 val32;
 	int byte_pos;
 
-	byte_pos = (u32)addr & 0x3;
+	byte_pos = (ulong)addr & 0x3UL;
 	if (byte_pos)
 		val32 = (org32 & 0xffff0000) | val;
 	else
 		val32 = (org32 & 0x0000ffff) | ((u32)val << 16);
 
-	*(u32 *)base = val32;
+	out_be32((void *)base, val32);
 }
 
 static void bmi_rx_port_disable(struct fm_bmi_rx_port *rx_port)
@@ -147,6 +169,8 @@ static void bmi_rx_port_disable(struct fm_bmi_rx_port *rx_port)
 	/* wait until the rx port is not busy */
 	while ((in_be32(&rx_port->fmbm_rst) & FMBM_RST_BSY) && timeout--)
 		;
+	if (timeout == -1)
+		printf("%s - timeout\n", __func__);
 }
 
 static void bmi_rx_port_init(struct fm_bmi_rx_port *rx_port)
@@ -175,6 +199,8 @@ static void bmi_tx_port_disable(struct fm_bmi_tx_port *tx_port)
 	/* wait until the tx port is not busy */
 	while ((in_be32(&tx_port->fmbm_tst) & FMBM_TST_BSY) && timeout--)
 		;
+	if (timeout == -1)
+		printf("%s - timeout\n", __func__);
 }
 
 static void bmi_tx_port_init(struct fm_bmi_tx_port *tx_port)
@@ -199,6 +225,8 @@ static int fm_eth_rx_port_parameter_init(struct fm_eth *fm_eth)
 	u32 pram_page_offset;
 	void *rx_bd_ring_base;
 	void *rx_buf_pool;
+	u32 bd_ring_base_lo, bd_ring_base_hi;
+	u32 buf_lo, buf_hi;
 	struct fm_port_bd *rxbd;
 	struct fm_port_qd *rxqd;
 	struct fm_bmi_rx_port *bmi_rx_port = fm_eth->rx_port;
@@ -207,16 +235,21 @@ static int fm_eth_rx_port_parameter_init(struct fm_eth *fm_eth)
 	/* alloc global parameter ram at MURAM */
 	pram = (struct fm_port_global_pram *)fm_muram_alloc(fm_eth->fm_index,
 		FM_PRAM_SIZE, FM_PRAM_ALIGN);
+	if (!pram) {
+		printf("%s: No muram for Rx global parameter\n", __func__);
+		return -ENOMEM;
+	}
+
 	fm_eth->rx_pram = pram;
 
 	/* parameter page offset to MURAM */
-	pram_page_offset = (u32)pram - fm_muram_base(fm_eth->fm_index);
+	pram_page_offset = (void *)pram - fm_muram_base(fm_eth->fm_index);
 
 	/* enable global mode- snooping data buffers and BDs */
-	pram->mode = PRAM_MODE_GLOBAL;
+	out_be32(&pram->mode, PRAM_MODE_GLOBAL);
 
 	/* init the Rx queue descriptor pionter */
-	pram->rxqd_ptr = pram_page_offset + 0x20;
+	out_be32(&pram->rxqd_ptr, pram_page_offset + 0x20);
 
 	/* set the max receive buffer length, power of 2 */
 	muram_writew(&pram->mrblr, MAX_RXBUF_LOG2);
@@ -225,15 +258,20 @@ static int fm_eth_rx_port_parameter_init(struct fm_eth *fm_eth)
 	rx_bd_ring_base = malloc(sizeof(struct fm_port_bd)
 			* RX_BD_RING_SIZE);
 	if (!rx_bd_ring_base)
-		return 0;
+		return -ENOMEM;
+
 	memset(rx_bd_ring_base, 0, sizeof(struct fm_port_bd)
 			* RX_BD_RING_SIZE);
 
 	/* alloc Rx buffer from main memory */
 	rx_buf_pool = malloc(MAX_RXBUF_LEN * RX_BD_RING_SIZE);
-	if (!rx_buf_pool)
-		return 0;
+	if (!rx_buf_pool) {
+		free(rx_bd_ring_base);
+		return -ENOMEM;
+	}
+
 	memset(rx_buf_pool, 0, MAX_RXBUF_LEN * RX_BD_RING_SIZE);
+	debug("%s: rx_buf_pool = %p\n", __func__, rx_buf_pool);
 
 	/* save them to fm_eth */
 	fm_eth->rx_bd_ring = rx_bd_ring_base;
@@ -243,18 +281,24 @@ static int fm_eth_rx_port_parameter_init(struct fm_eth *fm_eth)
 	/* init Rx BDs ring */
 	rxbd = (struct fm_port_bd *)rx_bd_ring_base;
 	for (i = 0; i < RX_BD_RING_SIZE; i++) {
-		rxbd->status = RxBD_EMPTY;
-		rxbd->len = 0;
-		rxbd->buf_ptr_hi = 0;
-		rxbd->buf_ptr_lo = (u32)rx_buf_pool + i * MAX_RXBUF_LEN;
+		muram_writew(&rxbd->status, RxBD_EMPTY);
+		muram_writew(&rxbd->len, 0);
+		buf_hi = upper_32_bits(virt_to_phys(rx_buf_pool +
+					i * MAX_RXBUF_LEN));
+		buf_lo = lower_32_bits(virt_to_phys(rx_buf_pool +
+					i * MAX_RXBUF_LEN));
+		muram_writew(&rxbd->buf_ptr_hi, (u16)buf_hi);
+		out_be32(&rxbd->buf_ptr_lo, buf_lo);
 		rxbd++;
 	}
 
 	/* set the Rx queue descriptor */
 	rxqd = &pram->rxqd;
 	muram_writew(&rxqd->gen, 0);
-	muram_writew(&rxqd->bd_ring_base_hi, 0);
-	rxqd->bd_ring_base_lo = (u32)rx_bd_ring_base;
+	bd_ring_base_hi = upper_32_bits(virt_to_phys(rx_bd_ring_base));
+	bd_ring_base_lo = lower_32_bits(virt_to_phys(rx_bd_ring_base));
+	muram_writew(&rxqd->bd_ring_base_hi, (u16)bd_ring_base_hi);
+	out_be32(&rxqd->bd_ring_base_lo, bd_ring_base_lo);
 	muram_writew(&rxqd->bd_ring_size, sizeof(struct fm_port_bd)
 			* RX_BD_RING_SIZE);
 	muram_writew(&rxqd->offset_in, 0);
@@ -263,7 +307,7 @@ static int fm_eth_rx_port_parameter_init(struct fm_eth *fm_eth)
 	/* set IM parameter ram pointer to Rx Frame Queue ID */
 	out_be32(&bmi_rx_port->fmbm_rfqid, pram_page_offset);
 
-	return 1;
+	return 0;
 }
 
 static int fm_eth_tx_port_parameter_init(struct fm_eth *fm_eth)
@@ -271,6 +315,7 @@ static int fm_eth_tx_port_parameter_init(struct fm_eth *fm_eth)
 	struct fm_port_global_pram *pram;
 	u32 pram_page_offset;
 	void *tx_bd_ring_base;
+	u32 bd_ring_base_lo, bd_ring_base_hi;
 	struct fm_port_bd *txbd;
 	struct fm_port_qd *txqd;
 	struct fm_bmi_tx_port *bmi_tx_port = fm_eth->tx_port;
@@ -279,22 +324,27 @@ static int fm_eth_tx_port_parameter_init(struct fm_eth *fm_eth)
 	/* alloc global parameter ram at MURAM */
 	pram = (struct fm_port_global_pram *)fm_muram_alloc(fm_eth->fm_index,
 		FM_PRAM_SIZE, FM_PRAM_ALIGN);
+	if (!pram) {
+		printf("%s: No muram for Tx global parameter\n", __func__);
+		return -ENOMEM;
+	}
 	fm_eth->tx_pram = pram;
 
 	/* parameter page offset to MURAM */
-	pram_page_offset = (u32)pram - fm_muram_base(fm_eth->fm_index);
+	pram_page_offset = (void *)pram - fm_muram_base(fm_eth->fm_index);
 
 	/* enable global mode- snooping data buffers and BDs */
-	pram->mode = PRAM_MODE_GLOBAL;
+	out_be32(&pram->mode, PRAM_MODE_GLOBAL);
 
 	/* init the Tx queue descriptor pionter */
-	pram->txqd_ptr = pram_page_offset + 0x40;
+	out_be32(&pram->txqd_ptr, pram_page_offset + 0x40);
 
 	/* alloc Tx buffer descriptors from main memory */
 	tx_bd_ring_base = malloc(sizeof(struct fm_port_bd)
 			* TX_BD_RING_SIZE);
 	if (!tx_bd_ring_base)
-		return 0;
+		return -ENOMEM;
+
 	memset(tx_bd_ring_base, 0, sizeof(struct fm_port_bd)
 			* TX_BD_RING_SIZE);
 	/* save it to fm_eth */
@@ -304,16 +354,19 @@ static int fm_eth_tx_port_parameter_init(struct fm_eth *fm_eth)
 	/* init Tx BDs ring */
 	txbd = (struct fm_port_bd *)tx_bd_ring_base;
 	for (i = 0; i < TX_BD_RING_SIZE; i++) {
-		txbd->status = TxBD_LAST;
-		txbd->len = 0;
-		txbd->buf_ptr_hi = 0;
-		txbd->buf_ptr_lo = 0;
+		muram_writew(&txbd->status, TxBD_LAST);
+		muram_writew(&txbd->len, 0);
+		muram_writew(&txbd->buf_ptr_hi, 0);
+		out_be32(&txbd->buf_ptr_lo, 0);
+		txbd++;
 	}
 
 	/* set the Tx queue decriptor */
 	txqd = &pram->txqd;
-	muram_writew(&txqd->bd_ring_base_hi, 0);
-	txqd->bd_ring_base_lo = (u32)tx_bd_ring_base;
+	bd_ring_base_hi = upper_32_bits(virt_to_phys(tx_bd_ring_base));
+	bd_ring_base_lo = lower_32_bits(virt_to_phys(tx_bd_ring_base));
+	muram_writew(&txqd->bd_ring_base_hi, (u16)bd_ring_base_hi);
+	out_be32(&txqd->bd_ring_base_lo, bd_ring_base_lo);
 	muram_writew(&txqd->bd_ring_size, sizeof(struct fm_port_bd)
 			* TX_BD_RING_SIZE);
 	muram_writew(&txqd->offset_in, 0);
@@ -322,34 +375,41 @@ static int fm_eth_tx_port_parameter_init(struct fm_eth *fm_eth)
 	/* set IM parameter ram pointer to Tx Confirmation Frame Queue ID */
 	out_be32(&bmi_tx_port->fmbm_tcfqid, pram_page_offset);
 
-	return 1;
+	return 0;
 }
 
 static int fm_eth_init(struct fm_eth *fm_eth)
 {
+	int ret;
 
-	if (!fm_eth_rx_port_parameter_init(fm_eth))
-		return 0;
+	ret = fm_eth_rx_port_parameter_init(fm_eth);
+	if (ret)
+		return ret;
 
-	if (!fm_eth_tx_port_parameter_init(fm_eth))
-		return 0;
+	ret = fm_eth_tx_port_parameter_init(fm_eth);
+	if (ret)
+		return ret;
 
-	return 1;
+	return 0;
 }
 
 static int fm_eth_startup(struct fm_eth *fm_eth)
 {
 	struct fsl_enet_mac *mac;
+	int ret;
+
 	mac = fm_eth->mac;
 
 	/* Rx/TxBDs, Rx/TxQDs, Rx buff and parameter ram init */
-	if (!fm_eth_init(fm_eth))
-		return 0;
+	ret = fm_eth_init(fm_eth);
+	if (ret)
+		return ret;
 	/* setup the MAC controller */
 	mac->init_mac(mac);
 
 	/* For some reason we need to set SPEED_100 */
 	if (((fm_eth->enet_if == PHY_INTERFACE_MODE_SGMII) ||
+	     (fm_eth->enet_if == PHY_INTERFACE_MODE_2500BASEX) ||
 	     (fm_eth->enet_if == PHY_INTERFACE_MODE_QSGMII)) &&
 	      mac->set_if_mode)
 		mac->set_if_mode(mac, fm_eth->enet_if, SPEED_100);
@@ -359,7 +419,7 @@ static int fm_eth_startup(struct fm_eth *fm_eth)
 	/* init bmi tx port, IM mode and disable */
 	bmi_tx_port_init(fm_eth->tx_port);
 
-	return 1;
+	return 0;
 }
 
 static void fmc_tx_port_graceful_stop_enable(struct fm_eth *fm_eth)
@@ -368,7 +428,7 @@ static void fmc_tx_port_graceful_stop_enable(struct fm_eth *fm_eth)
 
 	pram = fm_eth->tx_pram;
 	/* graceful stop transmission of frames */
-	pram->mode |= PRAM_MODE_GRACEFUL_STOP;
+	setbits_be32(&pram->mode, PRAM_MODE_GRACEFUL_STOP);
 	sync();
 }
 
@@ -378,27 +438,31 @@ static void fmc_tx_port_graceful_stop_disable(struct fm_eth *fm_eth)
 
 	pram = fm_eth->tx_pram;
 	/* re-enable transmission of frames */
-	pram->mode &= ~PRAM_MODE_GRACEFUL_STOP;
+	clrbits_be32(&pram->mode, PRAM_MODE_GRACEFUL_STOP);
 	sync();
 }
 
-static int fm_eth_open(struct eth_device *dev, bd_t *bd)
+static int fm_eth_open(struct udevice *dev)
 {
-	struct fm_eth *fm_eth;
+	struct eth_pdata *pdata = dev_get_plat(dev);
+	struct fm_eth *fm_eth = dev_get_priv(dev);
+	unsigned char *enetaddr;
 	struct fsl_enet_mac *mac;
 #ifdef CONFIG_PHYLIB
 	int ret;
 #endif
 
-	fm_eth = (struct fm_eth *)dev->priv;
 	mac = fm_eth->mac;
 
+	enetaddr = pdata->enetaddr;
+
 	/* setup the MAC address */
-	if (dev->enetaddr[0] & 0x01) {
-		printf("%s: MacAddress is multcast address\n",	__func__);
-		return 1;
+	if (enetaddr[0] & 0x01) {
+		printf("%s: MacAddress is multicast address\n",	__func__);
+		enetaddr[0] = 0;
+		enetaddr[5] = fm_eth->num;
 	}
-	mac->set_mac_addr(mac, dev->enetaddr);
+	mac->set_mac_addr(mac, enetaddr);
 
 	/* enable bmi Rx port */
 	setbits_be32(&fm_eth->rx_port->fmbm_rcfg, FMBM_RCFG_EN);
@@ -413,8 +477,7 @@ static int fm_eth_open(struct eth_device *dev, bd_t *bd)
 	if (fm_eth->phydev) {
 		ret = phy_startup(fm_eth->phydev);
 		if (ret) {
-			printf("%s: Could not initialize\n",
-			       fm_eth->phydev->dev->name);
+			printf("%s: Could not initialize\n", dev->name);
 			return ret;
 		}
 	} else {
@@ -428,6 +491,8 @@ static int fm_eth_open(struct eth_device *dev, bd_t *bd)
 
 	/* set the MAC-PHY mode */
 	mac->set_if_mode(mac, fm_eth->enet_if, fm_eth->phydev->speed);
+	debug("MAC IF mode %d, speed %d, link %d\n", fm_eth->enet_if,
+	      fm_eth->phydev->speed, fm_eth->phydev->link);
 
 	if (!fm_eth->phydev->link)
 		printf("%s: No link.\n", fm_eth->phydev->dev->name);
@@ -435,12 +500,12 @@ static int fm_eth_open(struct eth_device *dev, bd_t *bd)
 	return fm_eth->phydev->link ? 0 : -1;
 }
 
-static void fm_eth_halt(struct eth_device *dev)
+static void fm_eth_halt(struct udevice *dev)
 {
 	struct fm_eth *fm_eth;
 	struct fsl_enet_mac *mac;
 
-	fm_eth = (struct fm_eth *)dev->priv;
+	fm_eth = dev_get_priv(dev);
 	mac = fm_eth->mac;
 
 	/* graceful stop the transmission of frames */
@@ -452,11 +517,13 @@ static void fm_eth_halt(struct eth_device *dev)
 	/* disable bmi Rx port */
 	bmi_rx_port_disable(fm_eth->rx_port);
 
+#ifdef CONFIG_PHYLIB
 	if (fm_eth->phydev)
 		phy_shutdown(fm_eth->phydev);
+#endif
 }
 
-static int fm_eth_send(struct eth_device *dev, void *buf, int len)
+static int fm_eth_send(struct udevice *dev, void *buf, int len)
 {
 	struct fm_eth *fm_eth;
 	struct fm_port_global_pram *pram;
@@ -464,24 +531,25 @@ static int fm_eth_send(struct eth_device *dev, void *buf, int len)
 	u16 offset_in;
 	int i;
 
-	fm_eth = (struct fm_eth *)dev->priv;
+	fm_eth = dev_get_priv(dev);
 	pram = fm_eth->tx_pram;
 	txbd = fm_eth->cur_txbd;
 
 	/* find one empty TxBD */
-	for (i = 0; txbd->status & TxBD_READY; i++) {
+	for (i = 0; muram_readw(&txbd->status) & TxBD_READY; i++) {
 		udelay(100);
 		if (i > 0x1000) {
-			printf("%s: Tx buffer not ready\n", dev->name);
+			printf("%s: Tx buffer not ready, txbd->status = 0x%x\n",
+			       dev->name, muram_readw(&txbd->status));
 			return 0;
 		}
 	}
 	/* setup TxBD */
-	txbd->buf_ptr_hi = 0;
-	txbd->buf_ptr_lo = (u32)buf;
-	txbd->len = len;
+	muram_writew(&txbd->buf_ptr_hi, (u16)upper_32_bits(virt_to_phys(buf)));
+	out_be32(&txbd->buf_ptr_lo, lower_32_bits(virt_to_phys(buf)));
+	muram_writew(&txbd->len, len);
 	sync();
-	txbd->status = TxBD_READY | TxBD_LAST;
+	muram_writew(&txbd->status, TxBD_READY | TxBD_LAST);
 	sync();
 
 	/* update TxQD, let RISC to send the packet */
@@ -493,10 +561,11 @@ static int fm_eth_send(struct eth_device *dev, void *buf, int len)
 	sync();
 
 	/* wait for buffer to be transmitted */
-	for (i = 0; txbd->status & TxBD_READY; i++) {
+	for (i = 0; muram_readw(&txbd->status) & TxBD_READY; i++) {
 		udelay(100);
 		if (i > 0x10000) {
-			printf("%s: Tx error\n", dev->name);
+			printf("%s: Tx error, txbd->status = 0x%x\n",
+			       dev->name, muram_readw(&txbd->status));
 			return 0;
 		}
 	}
@@ -512,218 +581,331 @@ static int fm_eth_send(struct eth_device *dev, void *buf, int len)
 	return 1;
 }
 
-static int fm_eth_recv(struct eth_device *dev)
+static struct fm_port_bd *fm_eth_free_one(struct fm_eth *fm_eth,
+					  struct fm_port_bd *rxbd)
 {
-	struct fm_eth *fm_eth;
 	struct fm_port_global_pram *pram;
-	struct fm_port_bd *rxbd, *rxbd_base;
-	u16 status, len;
-	u8 *data;
+	struct fm_port_bd *rxbd_base;
 	u16 offset_out;
 
-	fm_eth = (struct fm_eth *)dev->priv;
 	pram = fm_eth->rx_pram;
+
+	/* clear the RxBDs */
+	muram_writew(&rxbd->status, RxBD_EMPTY);
+	muram_writew(&rxbd->len, 0);
+	sync();
+
+	/* advance RxBD */
+	rxbd++;
+	rxbd_base = (struct fm_port_bd *)fm_eth->rx_bd_ring;
+	if (rxbd >= (rxbd_base + RX_BD_RING_SIZE))
+		rxbd = rxbd_base;
+
+	/* update RxQD */
+	offset_out = muram_readw(&pram->rxqd.offset_out);
+	offset_out += sizeof(struct fm_port_bd);
+	if (offset_out >= muram_readw(&pram->rxqd.bd_ring_size))
+		offset_out = 0;
+	muram_writew(&pram->rxqd.offset_out, offset_out);
+	sync();
+
+	return rxbd;
+}
+
+static int fm_eth_recv(struct udevice *dev, int flags, uchar **packetp)
+{
+	struct fm_eth *fm_eth;
+	struct fm_port_bd *rxbd;
+	u32 buf_lo, buf_hi;
+	u16 status, len;
+	int ret = -EAGAIN;
+	u8 *data;
+
+	fm_eth = dev_get_priv(dev);
 	rxbd = fm_eth->cur_rxbd;
-	status = rxbd->status;
+	status = muram_readw(&rxbd->status);
 
 	while (!(status & RxBD_EMPTY)) {
 		if (!(status & RxBD_ERROR)) {
-			data = (u8 *)rxbd->buf_ptr_lo;
-			len = rxbd->len;
-			net_process_received_packet(data, len);
+			buf_hi = muram_readw(&rxbd->buf_ptr_hi);
+			buf_lo = in_be32(&rxbd->buf_ptr_lo);
+			data = (u8 *)((ulong)(buf_hi << 16) << 16 | buf_lo);
+			len = muram_readw(&rxbd->len);
+			*packetp = data;
+			return len;
 		} else {
 			printf("%s: Rx error\n", dev->name);
-			return 0;
+			ret = 0;
 		}
 
-		/* clear the RxBDs */
-		rxbd->status = RxBD_EMPTY;
-		rxbd->len = 0;
-		sync();
+		/* free current bd, advance to next one */
+		rxbd = fm_eth_free_one(fm_eth, rxbd);
 
-		/* advance RxBD */
-		rxbd++;
-		rxbd_base = (struct fm_port_bd *)fm_eth->rx_bd_ring;
-		if (rxbd >= (rxbd_base + RX_BD_RING_SIZE))
-			rxbd = rxbd_base;
 		/* read next status */
-		status = rxbd->status;
-
-		/* update RxQD */
-		offset_out = muram_readw(&pram->rxqd.offset_out);
-		offset_out += sizeof(struct fm_port_bd);
-		if (offset_out >= muram_readw(&pram->rxqd.bd_ring_size))
-			offset_out = 0;
-		muram_writew(&pram->rxqd.offset_out, offset_out);
-		sync();
+		status = muram_readw(&rxbd->status);
 	}
 	fm_eth->cur_rxbd = (void *)rxbd;
 
-	return 1;
+	return ret;
 }
 
-static int fm_eth_init_mac(struct fm_eth *fm_eth, struct ccsr_fman *reg)
+static int fm_eth_free_pkt(struct udevice *dev, uchar *packet, int length)
 {
-	struct fsl_enet_mac *mac;
-	int num;
-	void *base, *phyregs = NULL;
+	struct fm_eth *fm_eth = (struct fm_eth *)dev_get_priv(dev);
 
-	num = fm_eth->num;
-
-#ifdef CONFIG_SYS_FMAN_V3
-#ifndef CONFIG_FSL_FM_10GEC_REGULAR_NOTATION
-	if (fm_eth->type == FM_ETH_10G_E) {
-		/* 10GEC1/10GEC2 use mEMAC9/mEMAC10 on T2080/T4240.
-		 * 10GEC3/10GEC4 use mEMAC1/mEMAC2 on T2080.
-		 * 10GEC1 uses mEMAC1 on T1024.
-		 * so it needs to change the num.
-		 */
-		if (fm_eth->num >= 2)
-			num -= 2;
-		else
-			num += 8;
-	}
-#endif
-	base = &reg->memac[num].fm_memac;
-	phyregs = &reg->memac[num].fm_memac_mdio;
-#else
-	/* Get the mac registers base address */
-	if (fm_eth->type == FM_ETH_1G_E) {
-		base = &reg->mac_1g[num].fm_dtesc;
-		phyregs = &reg->mac_1g[num].fm_mdio.miimcfg;
-	} else {
-		base = &reg->mac_10g[num].fm_10gec;
-		phyregs = &reg->mac_10g[num].fm_10gec_mdio;
-	}
-#endif
-
-	/* alloc mac controller */
-	mac = malloc(sizeof(struct fsl_enet_mac));
-	if (!mac)
-		return 0;
-	memset(mac, 0, sizeof(struct fsl_enet_mac));
-
-	/* save the mac to fm_eth struct */
-	fm_eth->mac = mac;
-
-#ifdef CONFIG_SYS_FMAN_V3
-	init_memac(mac, base, phyregs, MAX_RXBUF_LEN);
-#else
-	if (fm_eth->type == FM_ETH_1G_E)
-		init_dtsec(mac, base, phyregs, MAX_RXBUF_LEN);
-	else
-		init_tgec(mac, base, phyregs, MAX_RXBUF_LEN);
-#endif
-
-	return 1;
-}
-
-static int init_phy(struct eth_device *dev)
-{
-	struct fm_eth *fm_eth = dev->priv;
-	struct phy_device *phydev = NULL;
-	u32 supported;
-
-#ifdef CONFIG_PHYLIB
-	if (fm_eth->type == FM_ETH_1G_E)
-		dtsec_init_phy(dev);
-
-	if (fm_eth->bus) {
-		phydev = phy_connect(fm_eth->bus, fm_eth->phyaddr, dev,
-					fm_eth->enet_if);
-		if (!phydev) {
-			printf("Failed to connect\n");
-			return -1;
-		}
-	} else {
-		return 0;
-	}
-
-	if (fm_eth->type == FM_ETH_1G_E) {
-		supported = (SUPPORTED_10baseT_Half |
-				SUPPORTED_10baseT_Full |
-				SUPPORTED_100baseT_Half |
-				SUPPORTED_100baseT_Full |
-				SUPPORTED_1000baseT_Full);
-	} else {
-		supported = SUPPORTED_10000baseT_Full;
-
-		if (tgec_is_fibre(dev))
-			phydev->port = PORT_FIBRE;
-	}
-
-	phydev->supported &= supported;
-	phydev->advertising = phydev->supported;
-
-	fm_eth->phydev = phydev;
-
-	phy_config(phydev);
-#endif
+	fm_eth->cur_rxbd = fm_eth_free_one(fm_eth, fm_eth->cur_rxbd);
 
 	return 0;
 }
 
-int fm_eth_initialize(struct ccsr_fman *reg, struct fm_eth_info *info)
+static int fm_eth_init_mac(struct fm_eth *fm_eth, void *reg)
 {
-	struct eth_device *dev;
-	struct fm_eth *fm_eth;
-	int i, num = info->num;
+#ifndef CONFIG_SYS_FMAN_V3
+	void *mdio;
+#endif
 
-	/* alloc eth device */
-	dev = (struct eth_device *)malloc(sizeof(struct eth_device));
+	fm_eth->mac = kzalloc(sizeof(*fm_eth->mac), GFP_KERNEL);
+	if (!fm_eth->mac)
+		return -ENOMEM;
+
+#ifndef CONFIG_SYS_FMAN_V3
+	mdio = fman_mdio(fm_eth->dev->parent, fm_eth->mac_type, fm_eth->num);
+	debug("MDIO %d @ %p\n", fm_eth->num, mdio);
+#endif
+
+	switch (fm_eth->mac_type) {
+#ifdef CONFIG_SYS_FMAN_V3
+	case FM_MEMAC:
+		init_memac(fm_eth->mac, reg, NULL, MAX_RXBUF_LEN);
+		break;
+#else
+	case FM_DTSEC:
+		init_dtsec(fm_eth->mac, reg, mdio, MAX_RXBUF_LEN);
+		break;
+	case FM_TGEC:
+		init_tgec(fm_eth->mac, reg, mdio, MAX_RXBUF_LEN);
+		break;
+#endif
+	}
+
+	return 0;
+}
+
+static int init_phy(struct fm_eth *fm_eth)
+{
+#ifdef CONFIG_PHYLIB
+	u32 supported = PHY_GBIT_FEATURES;
+
+	if (fm_eth->type == FM_ETH_10G_E)
+		supported = PHY_10G_FEATURES;
+	if (fm_eth->enet_if == PHY_INTERFACE_MODE_2500BASEX)
+		supported |= SUPPORTED_2500baseX_Full;
+#endif
+
+#if (CONFIG_IS_ENABLED(MII) || CONFIG_IS_ENABLED(CMD_MII)) && \
+	!CONFIG_IS_ENABLED(BITBANGMII)
+	if (fm_eth->type == FM_ETH_1G_E)
+		dtsec_init_phy(fm_eth);
+#endif
+
+#ifdef CONFIG_PHYLIB
+#ifdef CONFIG_DM_MDIO
+	fm_eth->phydev = dm_eth_phy_connect(fm_eth->dev);
+	if (!fm_eth->phydev)
+		return -ENODEV;
+#endif
+	fm_eth->phydev->advertising &= supported;
+	fm_eth->phydev->supported &= supported;
+
+	phy_config(fm_eth->phydev);
+#endif
+	return 0;
+}
+
+static int fm_eth_bind(struct udevice *dev)
+{
+	char mac_name[11];
+	u32 fm, num;
+
 	if (!dev)
+		return -EINVAL;
+
+	if (ofnode_read_u32(ofnode_get_parent(dev_ofnode(dev)), "cell-index", &fm)) {
+		printf("FMan node property cell-index missing\n");
+		return -EINVAL;
+	}
+
+	if (dev_read_u32(dev, "cell-index", &num)) {
+		printf("FMan MAC node property cell-index missing\n");
+		return -EINVAL;
+	}
+
+	sprintf(mac_name, "fm%d-mac%d", fm + 1, num + 1);
+	device_set_name(dev, mac_name);
+
+	debug("%s - binding %s\n", __func__, mac_name);
+
+	return 0;
+}
+
+static struct udevice *fm_get_internal_mdio(struct udevice *dev)
+{
+	struct ofnode_phandle_args phandle = {.node = ofnode_null()};
+	struct udevice *mdiodev;
+
+	if (dev_read_phandle_with_args(dev, "pcsphy-handle", NULL,
+				       0, 0, &phandle) ||
+	    !ofnode_valid(phandle.node)) {
+		if (dev_read_phandle_with_args(dev, "tbi-handle", NULL,
+					       0, 0, &phandle) ||
+		    !ofnode_valid(phandle.node)) {
+			printf("Issue reading pcsphy-handle/tbi-handle for MAC %s\n",
+			       dev->name);
+			return NULL;
+		}
+	}
+
+	if (uclass_get_device_by_ofnode(UCLASS_MDIO,
+					ofnode_get_parent(phandle.node),
+					&mdiodev)) {
+		printf("can't find MDIO bus for node %s\n",
+		       ofnode_get_name(ofnode_get_parent(phandle.node)));
+		return NULL;
+	}
+	debug("Found internal MDIO bus %p\n", mdiodev);
+
+	return mdiodev;
+}
+
+static int fm_eth_probe(struct udevice *dev)
+{
+	struct fm_eth *fm_eth = (struct fm_eth *)dev_get_priv(dev);
+	struct ofnode_phandle_args args;
+	void *reg;
+	int ret, index;
+
+	debug("%s enter for dev %p fm_eth %p - %s\n", __func__, dev, fm_eth,
+	      (dev) ? dev->name : "-");
+
+	if (fm_eth->dev) {
+		printf("%s already probed, exit\n", (dev) ? dev->name : "-");
 		return 0;
-	memset(dev, 0, sizeof(struct eth_device));
+	}
 
-	/* alloc the FMan ethernet private struct */
-	fm_eth = (struct fm_eth *)malloc(sizeof(struct fm_eth));
-	if (!fm_eth)
-		return 0;
-	memset(fm_eth, 0, sizeof(struct fm_eth));
+	fm_eth->dev = dev;
+	fm_eth->fm_index = fman_id(dev->parent);
+	reg = (void *)(uintptr_t)dev_read_addr(dev);
+	fm_eth->mac_type = dev_get_driver_data(dev);
+#ifdef CONFIG_PHYLIB
+	fm_eth->enet_if = dev_read_phy_mode(dev);
+#else
+	fm_eth->enet_if = PHY_INTERFACE_MODE_SGMII;
+	printf("%s: warning - unable to determine interface type\n", __func__);
+#endif
+	switch (fm_eth->mac_type) {
+#ifndef CONFIG_SYS_FMAN_V3
+	case FM_TGEC:
+		fm_eth->type = FM_ETH_10G_E;
+		break;
+	case FM_DTSEC:
+#else
+	case FM_MEMAC:
+		/* default to 1G, 10G is indicated by port property in dts */
+#endif
+		fm_eth->type = FM_ETH_1G_E;
+		break;
+	}
 
-	/* save off some things we need from the info struct */
-	fm_eth->fm_index = info->index - 1; /* keep as 0 based for muram */
-	fm_eth->num = num;
-	fm_eth->type = info->type;
+	if (dev_read_u32(dev, "cell-index", &fm_eth->num)) {
+		printf("FMan MAC node property cell-index missing\n");
+		return -EINVAL;
+	}
 
-	fm_eth->rx_port = (void *)&reg->port[info->rx_port_id - 1].fm_bmi;
-	fm_eth->tx_port = (void *)&reg->port[info->tx_port_id - 1].fm_bmi;
+	if (dev_read_phandle_with_args(dev, "fsl,fman-ports", NULL,
+				       0, 0, &args))
+		goto ports_ref_failure;
+	index = ofnode_read_u32_default(args.node, "cell-index", 0);
+	if (index <= 0)
+		goto ports_ref_failure;
+	fm_eth->rx_port = fman_port(dev->parent, index);
+
+	if (ofnode_read_bool(args.node, "fsl,fman-10g-port"))
+		fm_eth->type = FM_ETH_10G_E;
+
+	if (dev_read_phandle_with_args(dev, "fsl,fman-ports", NULL,
+				       0, 1, &args))
+		goto ports_ref_failure;
+	index = ofnode_read_u32_default(args.node, "cell-index", 0);
+	if (index <= 0)
+		goto ports_ref_failure;
+	fm_eth->tx_port = fman_port(dev->parent, index);
 
 	/* set the ethernet max receive length */
 	fm_eth->max_rx_len = MAX_RXBUF_LEN;
 
+	switch (fm_eth->enet_if) {
+	case PHY_INTERFACE_MODE_QSGMII:
+		/* all PCS blocks are accessed on one controller */
+		if (fm_eth->num != 0)
+			break;
+	case PHY_INTERFACE_MODE_SGMII:
+	case PHY_INTERFACE_MODE_2500BASEX:
+		fm_eth->pcs_mdio = fm_get_internal_mdio(dev);
+		break;
+	default:
+		break;
+	}
+
 	/* init global mac structure */
-	if (!fm_eth_init_mac(fm_eth, reg))
-		return 0;
-
-	/* keep same as the manual, we call FMAN1, FMAN2, DTSEC1, DTSEC2, etc */
-	if (fm_eth->type == FM_ETH_1G_E)
-		sprintf(dev->name, "FM%d@DTSEC%d", info->index, num + 1);
-	else
-		sprintf(dev->name, "FM%d@TGEC%d", info->index, num + 1);
-
-	devlist[num_controllers++] = dev;
-	dev->iobase = 0;
-	dev->priv = (void *)fm_eth;
-	dev->init = fm_eth_open;
-	dev->halt = fm_eth_halt;
-	dev->send = fm_eth_send;
-	dev->recv = fm_eth_recv;
-	fm_eth->dev = dev;
-	fm_eth->bus = info->bus;
-	fm_eth->phyaddr = info->phy_addr;
-	fm_eth->enet_if = info->enet_if;
+	ret = fm_eth_init_mac(fm_eth, reg);
+	if (ret)
+		return ret;
 
 	/* startup the FM im */
-	if (!fm_eth_startup(fm_eth))
-		return 0;
+	ret = fm_eth_startup(fm_eth);
 
-	init_phy(dev);
+	if (!ret)
+		ret = init_phy(fm_eth);
 
-	/* clear the ethernet address */
-	for (i = 0; i < 6; i++)
-		dev->enetaddr[i] = 0;
-	eth_register(dev);
+	return ret;
 
-	return 1;
+ports_ref_failure:
+	printf("Issue reading fsl,fman-ports for MAC %s\n", dev->name);
+	return -ENOENT;
 }
+
+static int fm_eth_remove(struct udevice *dev)
+{
+	return 0;
+}
+
+static const struct eth_ops fm_eth_ops = {
+	.start = fm_eth_open,
+	.send = fm_eth_send,
+	.recv = fm_eth_recv,
+	.free_pkt = fm_eth_free_pkt,
+	.stop = fm_eth_halt,
+};
+
+static const struct udevice_id fm_eth_ids[] = {
+#ifdef CONFIG_SYS_FMAN_V3
+	{ .compatible = "fsl,fman-memac", .data = FM_MEMAC },
+#else
+	{ .compatible = "fsl,fman-dtsec", .data = FM_DTSEC },
+	{ .compatible = "fsl,fman-xgec", .data = FM_TGEC },
+#endif
+	{}
+};
+
+U_BOOT_DRIVER(eth_fman) = {
+	.name = "eth_fman",
+	.id = UCLASS_ETH,
+	.of_match = fm_eth_ids,
+	.bind = fm_eth_bind,
+	.probe = fm_eth_probe,
+	.remove = fm_eth_remove,
+	.ops = &fm_eth_ops,
+	.priv_auto	= sizeof(struct fm_eth),
+	.plat_auto	= sizeof(struct eth_pdata),
+	.flags = DM_FLAG_ALLOC_PRIV_DMA,
+};

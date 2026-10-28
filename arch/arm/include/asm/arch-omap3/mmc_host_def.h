@@ -51,6 +51,7 @@ typedef struct t2 {
 #define PBIASLITEPWRDNZ0		(1 << 1)
 #define PBIASSPEEDCTRL0			(1 << 2)
 #define PBIASLITEPWRDNZ1		(1 << 9)
+#define PBIASLITEVMODE1			(1 << 8)
 #define PBIASLITEVMODE0			(1 << 0)
 
 #define CTLPROGIO1SPEEDCTRL		(1 << 20)
@@ -61,6 +62,5 @@ typedef struct t2 {
 #define OMAP_HSMMC1_BASE	0x4809C000
 #define OMAP_HSMMC2_BASE	0x480B4000
 #define OMAP_HSMMC3_BASE	0x480AD000
-
 
 #endif /* MMC_HOST_DEF_H */

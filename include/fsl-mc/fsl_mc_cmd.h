@@ -1,6 +1,6 @@
-/* Copyright 2013-2015 Freescale Semiconductor Inc.
- *
- * SPDX-License-Identifier:	GPL-2.0+
+/* SPDX-License-Identifier: GPL-2.0+ */
+/* Copyright 2013-2016 Freescale Semiconductor, Inc.
+ * Copyright 2017 NXP
  */
 #ifndef __FSL_MC_CMD_H
 #define __FSL_MC_CMD_H
@@ -10,18 +10,36 @@
 #define MAKE_UMASK64(_width) \
 	((uint64_t)((_width) < 64 ? ((uint64_t)1 << (_width)) - 1 : -1))
 
-static inline uint64_t u64_enc(int lsoffset, int width, uint64_t val)
+static inline uint64_t mc_enc(int lsoffset, int width, uint64_t val)
 {
 	return (uint64_t)(((uint64_t)val & MAKE_UMASK64(width)) << lsoffset);
 }
-static inline uint64_t u64_dec(uint64_t val, int lsoffset, int width)
+static inline uint64_t mc_dec(uint64_t val, int lsoffset, int width)
 {
 	return (uint64_t)((val >> lsoffset) & MAKE_UMASK64(width));
 }
 
+struct mc_cmd_header {
+	u8 src_id;
+	u8 flags_hw;
+	u8 status;
+	u8 flags_sw;
+	__le16 token;
+	__le16 cmd_id;
+};
+
 struct mc_command {
 	uint64_t header;
 	uint64_t params[MC_CMD_NUM_OF_PARAMS];
+};
+
+struct mc_rsp_create {
+	__le32 object_id;
+};
+
+struct mc_rsp_api_ver {
+	__le16 major_ver;
+	__le16 minor_ver;
 };
 
 enum mc_cmd_status {
@@ -39,44 +57,42 @@ enum mc_cmd_status {
 	MC_CMD_STATUS_INVALID_STATE = 0xC /*!< Invalid state */
 };
 
-#define MC_CMD_HDR_CMDID_O	52	/* Command ID field offset */
-#define MC_CMD_HDR_CMDID_S	12	/* Command ID field size */
+/*
+ * MC command flags
+ */
+
+/* High priority flag */
+#define MC_CMD_FLAG_PRI		0x00008000
+/* No flags */
+#define MC_CMD_NO_FLAGS		0x00000000
+/* Command completion flag */
+#define MC_CMD_FLAG_INTR_DIS	0x01000000
+
+#define MC_CMD_HDR_CMDID_O	48	/* Command ID field offset */
+#define MC_CMD_HDR_CMDID_S	16	/* Command ID field size */
 #define MC_CMD_HDR_STATUS_O	16	/* Status field offset */
-#define MC_CMD_HDR_TOKEN_O	38	/* Token field offset */
-#define MC_CMD_HDR_TOKEN_S	10	/* Token field size */
+#define MC_CMD_HDR_TOKEN_O	32	/* Token field offset */
+#define MC_CMD_HDR_TOKEN_S	16	/* Token field size */
 #define MC_CMD_HDR_STATUS_S	8	/* Status field size*/
-#define MC_CMD_HDR_PRI_O	15	/* Priority field offset */
-#define MC_CMD_HDR_PRI_S	1	/* Priority field size */
+#define MC_CMD_HDR_FLAGS_O	0	/* Flags field offset */
+#define MC_CMD_HDR_FLAGS_S	32	/* Flags field size*/
+#define MC_CMD_HDR_FLAGS_MASK	0x0000FFFF /* Command flags mask */
 
 #define MC_CMD_HDR_READ_STATUS(_hdr) \
-	((enum mc_cmd_status)u64_dec((_hdr), \
+	((enum mc_cmd_status)mc_dec((_hdr), \
 		MC_CMD_HDR_STATUS_O, MC_CMD_HDR_STATUS_S))
 
-#define MC_CMD_HDR_READ_TOKEN(_hdr) \
-	((uint16_t)u64_dec((_hdr), MC_CMD_HDR_TOKEN_O, MC_CMD_HDR_TOKEN_S))
-
-#define MC_CMD_PRI_LOW		0 /*!< Low Priority command indication */
-#define MC_CMD_PRI_HIGH		1 /*!< High Priority command indication */
-
-#define MC_EXT_OP(_ext, _param, _offset, _width, _type, _arg) \
-	((_ext)[_param] |= u64_enc((_offset), (_width), _arg))
-
-#define MC_CMD_OP(_cmd, _param, _offset, _width, _type, _arg) \
-	((_cmd).params[_param] |= u64_enc((_offset), (_width), _arg))
-
-#define MC_RSP_OP(_cmd, _param, _offset, _width, _type, _arg) \
-	(_arg = (_type)u64_dec(_cmd.params[_param], (_offset), (_width)))
-
 static inline uint64_t mc_encode_cmd_header(uint16_t cmd_id,
-					    uint8_t priority,
+					    uint32_t cmd_flags,
 					    uint16_t token)
 {
-	uint64_t hdr;
+	uint64_t hdr = 0;
 
-	hdr = u64_enc(MC_CMD_HDR_CMDID_O, MC_CMD_HDR_CMDID_S, cmd_id);
-	hdr |= u64_enc(MC_CMD_HDR_TOKEN_O, MC_CMD_HDR_TOKEN_S, token);
-	hdr |= u64_enc(MC_CMD_HDR_PRI_O, MC_CMD_HDR_PRI_S, priority);
-	hdr |= u64_enc(MC_CMD_HDR_STATUS_O, MC_CMD_HDR_STATUS_S,
+	hdr = mc_enc(MC_CMD_HDR_CMDID_O, MC_CMD_HDR_CMDID_S, cmd_id);
+	hdr |= mc_enc(MC_CMD_HDR_FLAGS_O, MC_CMD_HDR_FLAGS_S,
+		       (cmd_flags & MC_CMD_HDR_FLAGS_MASK));
+	hdr |= mc_enc(MC_CMD_HDR_TOKEN_O, MC_CMD_HDR_TOKEN_S, token);
+	hdr |= mc_enc(MC_CMD_HDR_STATUS_O, MC_CMD_HDR_STATUS_S,
 		       MC_CMD_STATUS_READY);
 
 	return hdr;
@@ -130,6 +146,37 @@ static inline enum mc_cmd_status mc_read_response(
 	return status;
 }
 
-int mc_send_command(struct fsl_mc_io *mc_io, struct mc_command *cmd);
+/**
+ * mc_read_version - read version of the given cmd
+ *
+ * @cmd: pointer to a filled command
+ * @major_version: major version value for the given cmd
+ * @minor_version: minor version value for the given cmd
+ */
+static inline void mc_cmd_read_api_version(struct mc_command *cmd,
+					   u16 *major_ver,
+					   u16 *minor_ver)
+{
+	struct mc_rsp_api_ver *rsp_params;
 
+	rsp_params = (struct mc_rsp_api_ver *)cmd->params;
+	*major_ver = le16_to_cpu(rsp_params->major_ver);
+	*minor_ver = le16_to_cpu(rsp_params->minor_ver);
+}
+
+static inline uint16_t mc_cmd_hdr_read_token(struct mc_command *cmd)
+{
+	struct mc_cmd_header *hdr = (struct mc_cmd_header *)&cmd->header;
+	u16 token = le16_to_cpu(hdr->token);
+
+	return token;
+}
+
+static inline uint32_t mc_cmd_read_object_id(struct mc_command *cmd)
+{
+	struct mc_rsp_create *rsp_params;
+
+	rsp_params = (struct mc_rsp_create *)cmd->params;
+	return le32_to_cpu(rsp_params->object_id);
+}
 #endif /* __FSL_MC_CMD_H */

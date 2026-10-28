@@ -1,15 +1,21 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * sun4i, sun5i and sun7i clock register definitions
  *
  * (C) Copyright 2007-2011
  * Allwinner Technology Co., Ltd. <www.allwinnertech.com>
  * Tom Cubie <tangliang@allwinnertech.com>
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
 #ifndef _SUNXI_CLOCK_SUN4I_H
 #define _SUNXI_CLOCK_SUN4I_H
+
+#define CCU_AHB_GATE0		0x60
+#define CCU_NAND0_CLK_CFG	0x80
+#define CCU_MMC0_CLK_CFG	0x88
+#define CCU_MMC1_CLK_CFG	0x8c
+#define CCU_MMC2_CLK_CFG	0x90
+#define CCU_MMC3_CLK_CFG	0x94
 
 struct sunxi_ccm_reg {
 	u32 pll1_cfg;		/* 0x00 pll1 control */
@@ -208,6 +214,8 @@ struct sunxi_ccm_reg {
 #define CCM_AHB_GATE_DLL (0x1 << 15)
 #define CCM_AHB_GATE_ACE (0x1 << 16)
 
+#define CCM_PLL3_CTRL_M_SHIFT		0
+#define CCM_PLL3_CTRL_M_MASK		(0x7f << CCM_PLL3_CTRL_M_SHIFT)
 #define CCM_PLL3_CTRL_M(n)		(((n) & 0x7f) << 0)
 #define CCM_PLL3_CTRL_INTEGER_MODE	(0x1 << 15)
 #define CCM_PLL3_CTRL_EN		(0x1 << 31)
@@ -267,6 +275,13 @@ struct sunxi_ccm_reg {
 #define CCM_MBUS_CTRL_CLK_SRC_PLL5 0x2
 #define CCM_MBUS_CTRL_GATE (0x1 << 31)
 
+#define CCM_NAND_CTRL_M(x)		((x) - 1)
+#define CCM_NAND_CTRL_N(x)		((x) << 16)
+#define CCM_NAND_CTRL_OSCM24		(0x0 << 24)
+#define CCM_NAND_CTRL_PLL6		(0x1 << 24)
+#define CCM_NAND_CTRL_PLL5		(0x2 << 24)
+#define CCM_NAND_CTRL_ENABLE		(0x1 << 31)
+
 #define CCM_MMC_CTRL_M(x)		((x) - 1)
 #define CCM_MMC_CTRL_OCLK_DLY(x)	((x) << 8)
 #define CCM_MMC_CTRL_N(x)		((x) << 16)
@@ -285,11 +300,17 @@ struct sunxi_ccm_reg {
 #define CCM_LCD_CH0_CTRL_PLL7		(1 << 24)
 #define CCM_LCD_CH0_CTRL_PLL3_2X	(2 << 24)
 #define CCM_LCD_CH0_CTRL_PLL7_2X	(3 << 24)
+#define CCM_LCD_CH0_CTRL_MIPI_PLL	0 /* No mipi pll on sun4i/5i/7i */
+#ifdef CONFIG_MACH_SUN5I
+#define CCM_LCD_CH0_CTRL_TVE_RST	(0x1 << 29)
+#else
+#define CCM_LCD_CH0_CTRL_TVE_RST	0 /* No separate tve-rst on sun4i/7i */
+#endif
 #define CCM_LCD_CH0_CTRL_RST		(0x1 << 30)
 #define CCM_LCD_CH0_CTRL_GATE		(0x1 << 31)
 
 #define CCM_LCD_CH1_CTRL_M(n)		((((n) - 1) & 0xf) << 0)
-/* We leave bit 11 set to 0, so sclk1 == sclk2 */
+#define CCM_LCD_CH1_CTRL_HALF_SCLK1	(1 << 11)
 #define CCM_LCD_CH1_CTRL_PLL3		(0 << 24)
 #define CCM_LCD_CH1_CTRL_PLL7		(1 << 24)
 #define CCM_LCD_CH1_CTRL_PLL3_2X	(2 << 24)
@@ -340,6 +361,7 @@ struct sunxi_ccm_reg {
 #ifndef __ASSEMBLY__
 void clock_set_pll1(unsigned int hz);
 void clock_set_pll3(unsigned int hz);
+unsigned int clock_get_pll3(void);
 unsigned int clock_get_pll5p(void);
 unsigned int clock_get_pll6(void);
 #endif

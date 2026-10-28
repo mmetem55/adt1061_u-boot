@@ -1,79 +1,140 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Copyright (c) 2013 Google, Inc
- *
- * SPDX-License-Identifier:	GPL-2.0+
  */
 
-#include <common.h>
+#include <dm.h>
 #include <fdtdec.h>
-#include <lcd.h>
-#include <malloc.h>
+#include <log.h>
+#include <video.h>
 #include <asm/sdl.h>
+#include <asm/state.h>
 #include <asm/u-boot-sandbox.h>
-
-DECLARE_GLOBAL_DATA_PTR;
+#include <dm/device-internal.h>
+#include <dm/test.h>
 
 enum {
-	/* Maximum LCD size we support */
+	/* Default LCD size we support */
 	LCD_MAX_WIDTH		= 1366,
 	LCD_MAX_HEIGHT		= 768,
-	LCD_MAX_LOG2_BPP	= 4,		/* 2^4 = 16 bpp */
 };
 
-vidinfo_t panel_info;
-
-void lcd_setcolreg(ushort regno, ushort red, ushort green, ushort blue)
+static int sandbox_sdl_probe(struct udevice *dev)
 {
+	struct video_uc_plat *uc_plat = dev_get_uclass_plat(dev);
+	struct sandbox_sdl_plat *plat = dev_get_plat(dev);
+	struct video_priv *uc_priv = dev_get_uclass_priv(dev);
+	struct sandbox_state *state = state_get_current();
+	int ret;
+
+	ret = sandbox_sdl_init_display(plat->xres, plat->yres, plat->bpix,
+				       state->double_lcd);
+	if (ret) {
+		puts("LCD init failed\n");
+		return ret;
+	}
+	uc_priv->xsize = plat->xres;
+	uc_priv->ysize = plat->yres;
+	uc_priv->bpix = plat->bpix;
+	uc_priv->rot = plat->rot;
+	uc_priv->vidconsole_drv_name = plat->vidconsole_drv_name;
+	uc_priv->font_size = plat->font_size;
+	if (IS_ENABLED(CONFIG_VIDEO_COPY))
+		uc_plat->copy_base = uc_plat->base + uc_plat->size / 2;
+
+	return 0;
 }
 
-void lcd_ctrl_init(void *lcdbase)
+static void set_bpp(struct udevice *dev, enum video_log2_bpp l2bpp)
+{
+	struct video_uc_plat *uc_plat = dev_get_uclass_plat(dev);
+	struct sandbox_sdl_plat *plat = dev_get_plat(dev);
+
+	plat->bpix = l2bpp;
+
+	uc_plat->size = plat->xres * plat->yres * VNBYTES(plat->bpix);
+
+	/*
+	 * Set up to the maximum size we'll ever need. This is a strange case.
+	 * The video memory is allocated by video_post_bind() called from
+	 * board_init_r(). If a test changes the reoslution so it needs more
+	 * memory later (with sandbox_sdl_set_bpp()), it is too late to make
+	 * the frame buffer larger.
+	 *
+	 * So use a maximum size here.
+	 */
+	uc_plat->size = max(uc_plat->size, 1920U * 1080 * VNBYTES(VIDEO_BPP32));
+
+	/* Allow space for two buffers, the lower one being the copy buffer */
+	log_debug("Frame buffer size %x\n", uc_plat->size);
+
+	/*
+	 * If a copy framebuffer is used, double the size and use the last half
+	 * as the copy, with the first half as the normal frame buffer.
+	 */
+	if (IS_ENABLED(CONFIG_VIDEO_COPY))
+		uc_plat->size *= 2;
+}
+
+int sandbox_sdl_set_bpp(struct udevice *dev, enum video_log2_bpp l2bpp)
+{
+	struct video_uc_plat *uc_plat = dev_get_uclass_plat(dev);
+	int ret;
+
+	if (device_active(dev))
+		return -EINVAL;
+	sandbox_sdl_remove_display();
+
+	uc_plat->hide_logo = true;
+	set_bpp(dev, l2bpp);
+
+	ret = device_probe(dev);
+	if (ret)
+		return ret;
+
+	return 0;
+}
+
+static int sandbox_sdl_remove(struct udevice *dev)
 {
 	/*
-	 * Allocate memory to keep BMP color conversion map. This is required
-	 * for 8 bit BMPs only (hence 256 colors). If malloc fails - keep
-	 * going, it is not even clear if displyaing the bitmap will be
-	 * required on the way up.
+	 * Removing the display it a bit annoying when running unit tests, since
+	 * they remove all devices. It is nice to be able to see what the test
+	 * wrote onto the display. So this comment is just here to show how to
+	 * do it, if we want to make it optional one day.
+	 *
+	 * sandbox_sdl_remove_display();
 	 */
-	panel_info.cmap = malloc(256 * NBITS(panel_info.vl_bpix) / 8);
+	return 0;
 }
 
-void lcd_enable(void)
+static int sandbox_sdl_bind(struct udevice *dev)
 {
-	if (sandbox_sdl_init_display(panel_info.vl_col, panel_info.vl_row,
-				     panel_info.vl_bpix))
-		puts("LCD init failed\n");
-}
-
-int sandbox_lcd_sdl_early_init(void)
-{
-	const void *blob = gd->fdt_blob;
-	int xres = LCD_MAX_WIDTH, yres = LCD_MAX_HEIGHT;
-	int node;
+	struct sandbox_sdl_plat *plat = dev_get_plat(dev);
+	enum video_log2_bpp l2bpp;
 	int ret = 0;
 
-	/*
-	 * The code in common/lcd.c does not cope with not being able to
-	 * set up a frame buffer. It will just happily keep writing to
-	 * invalid memory. So here we make sure that at least some buffer
-	 * is available even if it actually won't be displayed.
-	 */
-	node = fdtdec_next_compatible(blob, 0, COMPAT_SANDBOX_LCD_SDL);
-	if (node >= 0) {
-		xres = fdtdec_get_int(blob, node, "xres", LCD_MAX_WIDTH);
-		yres = fdtdec_get_int(blob, node, "yres", LCD_MAX_HEIGHT);
-		if (xres < 0 || xres > LCD_MAX_WIDTH) {
-			xres = LCD_MAX_WIDTH;
-			ret = -EINVAL;
-		}
-		if (yres < 0 || yres > LCD_MAX_HEIGHT) {
-			yres = LCD_MAX_HEIGHT;
-			ret = -EINVAL;
-		}
-	}
+	plat->xres = dev_read_u32_default(dev, "xres", LCD_MAX_WIDTH);
+	plat->yres = dev_read_u32_default(dev, "yres", LCD_MAX_HEIGHT);
+	l2bpp = dev_read_u32_default(dev, "log2-depth", VIDEO_BPP16);
+	plat->rot = dev_read_u32_default(dev, "rotate", 0);
 
-	panel_info.vl_col = xres;
-	panel_info.vl_row = yres;
-	panel_info.vl_bpix = LCD_COLOR16;
+	set_bpp(dev, l2bpp);
 
 	return ret;
 }
+
+static const struct udevice_id sandbox_sdl_ids[] = {
+	{ .compatible = "sandbox,lcd-sdl" },
+	{ }
+};
+
+U_BOOT_DRIVER(sandbox_lcd_sdl) = {
+	.name	= "sandbox_lcd_sdl",
+	.id	= UCLASS_VIDEO,
+	.of_match = sandbox_sdl_ids,
+	.bind	= sandbox_sdl_bind,
+	.probe	= sandbox_sdl_probe,
+	.remove	= sandbox_sdl_remove,
+	.plat_auto	= sizeof(struct sandbox_sdl_plat),
+};

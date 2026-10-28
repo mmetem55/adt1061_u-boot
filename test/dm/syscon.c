@@ -3,34 +3,15 @@
  * Copyright (C) 2015 Google, Inc
  */
 
-#include <common.h>
 #include <dm.h>
+#include <log.h>
 #include <syscon.h>
 #include <regmap.h>
-//#include <asm/test.h>
+#include <asm/test.h>
 #include <dm/test.h>
+#include <linux/err.h>
+#include <test/test.h>
 #include <test/ut.h>
-
-/* System controller driver data */
-enum {
-	SYSCON0		= 32,
-	SYSCON1,
-
-	SYSCON_COUNT
-};
-
-
-static const struct udevice_id sandbox_syscon_ids[] = {
-	{ .compatible = "sandbox,syscon0", .data = SYSCON0 },
-	{ .compatible = "sandbox,syscon1", .data = SYSCON1 },
-	{ }
-};
-
-U_BOOT_DRIVER(sandbox_syscon) = {
-	.name	= "sandbox_syscon",
-	.id	= UCLASS_SYSCON,
-	.of_match = sandbox_syscon_ids,
-};
 
 /* Base test of system controllers */
 static int dm_test_syscon_base(struct unit_test_state *uts)
@@ -47,7 +28,7 @@ static int dm_test_syscon_base(struct unit_test_state *uts)
 
 	return 0;
 }
-DM_TEST(dm_test_syscon_base, DM_TESTF_SCAN_PDATA | DM_TESTF_SCAN_FDT);
+DM_TEST(dm_test_syscon_base, UTF_SCAN_PDATA | UTF_SCAN_FDT);
 
 /* Test system controller finding */
 static int dm_test_syscon_by_driver_data(struct unit_test_state *uts)
@@ -64,7 +45,7 @@ static int dm_test_syscon_by_driver_data(struct unit_test_state *uts)
 
 	return 0;
 }
-DM_TEST(dm_test_syscon_by_driver_data, DM_TESTF_SCAN_PDATA | DM_TESTF_SCAN_FDT);
+DM_TEST(dm_test_syscon_by_driver_data, UTF_SCAN_PDATA | UTF_SCAN_FDT);
 
 /* Test system controller by phandle */
 static int dm_test_syscon_by_phandle(struct unit_test_state *uts)
@@ -99,4 +80,4 @@ static int dm_test_syscon_by_phandle(struct unit_test_state *uts)
 
 	return 0;
 }
-DM_TEST(dm_test_syscon_by_phandle, DM_TESTF_SCAN_PDATA | DM_TESTF_SCAN_FDT);
+DM_TEST(dm_test_syscon_by_phandle, UTF_SCAN_PDATA | UTF_SCAN_FDT);
